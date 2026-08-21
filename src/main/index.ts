@@ -17,6 +17,14 @@ const READY_TIMEOUT_MS = 60_000
 let window: BrowserWindow | undefined
 let server: ServerHandle | undefined
 let status: ServerStatus = 'starting'
+/**
+ * Stops the harness child while it is still booting, i.e. after `spawn()` but
+ * before `startServer()` resolves into `server`. Without this, quitting during
+ * that window leaves a detached child (and its node-pty grandchildren) behind:
+ * `before-quit` only knows to stop `server`, which is still `undefined`.
+ */
+let pendingStop: (() => Promise<void>) | undefined
+let quitting = false
 
 async function boot(): Promise<void> {
   if (window === undefined) return
@@ -41,6 +49,9 @@ async function boot(): Promise<void> {
     server = await startServer({
       spec: dshWebCommand(config, PATCH_PATH),
       timeoutMs: READY_TIMEOUT_MS,
+      onSpawned: (stop) => {
+        pendingStop = stop
+      },
       onExit: (code, tail) => {
         status = 'failed'
         server = undefined
@@ -51,10 +62,12 @@ async function boot(): Promise<void> {
     })
   } catch (error) {
     status = 'failed'
+    pendingStop = undefined
     showError(window, 'The harness failed to start', (error as Error).message)
     return
   }
 
+  pendingStop = undefined
   status = 'running'
   void window.loadURL(server.url)
 }
@@ -77,11 +90,14 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => app.quit())
 
   app.on('before-quit', async (event) => {
-    if (server === undefined) return
+    if (quitting) return
+    const stop = server?.stop ?? pendingStop
+    if (stop === undefined) return
+    quitting = true
     event.preventDefault()
-    const stopping = server
     server = undefined
-    await stopping.stop()
+    pendingStop = undefined
+    await stop()
     app.quit()
   })
 }

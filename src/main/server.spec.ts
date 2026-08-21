@@ -116,6 +116,41 @@ describe('stop', () => {
     expect(isAlive(grandchildPid)).toBe(false)
   })
 
+  it('onSpawned fires before readiness resolves, and its stop reaps the grandchild', async () => {
+    let grandchildPid = 0
+    let earlyStop: (() => Promise<void>) | undefined
+
+    const startPromise = startServer({
+      spec: fakeSpec('grandchild'),
+      timeoutMs: 10_000,
+      onSpawned: (stop) => {
+        earlyStop = stop
+      },
+      onStdoutLine: (line) => {
+        const match = /^grandchild: (\d+)$/.exec(line.trim())
+        if (match !== null) grandchildPid = Number(match[1])
+      },
+    })
+
+    // The child's readiness line can only arrive through the stdout pipe,
+    // which needs at least one async tick after spawn(). So if onSpawned has
+    // already fired by this synchronous point, it necessarily fired before
+    // startPromise can possibly resolve.
+    expect(earlyStop).toBeDefined()
+
+    const handle = await startPromise
+    running = handle
+
+    expect(grandchildPid).toBeGreaterThan(0)
+    expect(isAlive(grandchildPid)).toBe(true)
+
+    await earlyStop?.()
+    running = undefined
+    await new Promise((r) => setTimeout(r, 1000))
+
+    expect(isAlive(grandchildPid)).toBe(false)
+  })
+
   it('is safe to call twice', async () => {
     const handle = await startServer({ spec: fakeSpec('ready'), timeoutMs: 10_000 })
     running = handle

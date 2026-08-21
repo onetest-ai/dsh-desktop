@@ -22,6 +22,8 @@ export interface StartOptions {
   onExit?: (code: number | null, stderrTail: string) => void
   /** Receives every stdout line, including lines before readiness. Used for logging and tests. */
   onStdoutLine?: (line: string) => void
+  /** Invoked synchronously once the child exists, before readiness, so a caller quitting mid-boot can still reap it. */
+  onSpawned?: (stop: () => Promise<void>) => void
 }
 
 /** The harness prints this once the webserver is listening. */
@@ -91,6 +93,7 @@ export function startServer(options: StartOptions): Promise<ServerHandle> {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
+    options.onSpawned?.(() => stopGroup(child))
 
     let ready = false
     let stdoutBuffer = ''
