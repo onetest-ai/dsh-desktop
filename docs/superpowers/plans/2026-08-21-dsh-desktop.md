@@ -1528,34 +1528,52 @@ In `src/main/index.ts`, inside the `else` branch before `whenReady`:
 
 Extend the existing `second-instance` handler to cover a link arriving while the app runs — it already focuses the window, so no change is needed beyond confirming it.
 
-- [ ] **Step 2: Create the app icon**
+- [ ] **Step 2: Create the app icon from the DeepSeek mark**
+
+The dock icon is the DeepSeek whale, taken from the harness's own favicon. That file is a single `<path>` with `fill="#000"` plus a `<style>` block that flips the fill to white under `prefers-color-scheme: dark` — so rendering it directly gives you either a black-on-transparent or white-on-transparent whale depending on the renderer's mode, neither of which is a usable dock icon.
+
+Build a self-contained icon SVG instead: extract the path data, drop the media query, force a white fill, and compose it over a rounded square in DeepSeek blue (`#4D6BFE`). This recipe has been verified to produce a correct icon.
 
 ```bash
 mkdir -p build assets
-python3 - <<'PY'
-# Minimal 512x512 solid-rounded-square PNG; replace with real art whenever you like.
-import struct, zlib
-size = 512
-def px(x, y):
-    inset, r = 40, 96
-    if x < inset or y < inset or x > size - inset or y > size - inset: return (0, 0, 0, 0)
-    cx = min(max(x, inset + r), size - inset - r); cy = min(max(y, inset + r), size - inset - r)
-    if (x - cx) ** 2 + (y - cy) ** 2 > r * r: return (0, 0, 0, 0)
-    return (32, 96, 220, 255)
-rows = [b'\x00' + b''.join(bytes(px(x, y)) for x in range(size)) for y in range(size)]
-def chunk(tag, payload):
-    return struct.pack('>I', len(payload)) + tag + payload + struct.pack('>I', zlib.crc32(tag + payload) & 0xffffffff)
-open('assets/icon.png', 'wb').write(
-    b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 6, 0, 0, 0))
-    + chunk(b'IDAT', zlib.compress(b''.join(rows))) + chunk(b'IEND', b''))
-PY
+python3 - <<'ICON'
+import re
+SRC = '/Users/arozumenko/Development/deepseek-harness/apps/web/public/favicon.svg'
+src = open(SRC).read()
+match = re.search(r'<path[^>]*\sd="([^"]+)"', src)
+if match is None:
+    raise SystemExit('favicon.svg no longer has a single path — re-check the source asset')
+d = match.group(1)
+
+# The source artwork is drawn in a 0 0 50 50 viewBox; centre it in a 1024 icon.
+SIZE, PAD = 1024, 196
+scale = (SIZE - 2 * PAD) / 50.0
+open('assets/icon.svg', 'w').write(
+    f'<svg xmlns="http://www.w3.org/2000/svg" width="{SIZE}" height="{SIZE}" '
+    f'viewBox="0 0 {SIZE} {SIZE}">\n'
+    f'  <rect width="{SIZE}" height="{SIZE}" rx="230" ry="230" fill="#4D6BFE"/>\n'
+    f'  <g transform="translate({PAD},{PAD}) scale({scale})">\n'
+    f'    <path d="{d}" fill="#FFFFFF"/>\n'
+    f'  </g>\n'
+    f'</svg>\n')
+ICON
+
+# qlmanage is the system SVG renderer; it writes <name>.png into the output dir.
+qlmanage -t -s 1024 -o assets assets/icon.svg >/dev/null 2>&1
+mv assets/icon.svg.png assets/icon.png
+
 mkdir -p /tmp/dsh.iconset
 for s in 16 32 128 256 512; do
   sips -z $s $s assets/icon.png --out /tmp/dsh.iconset/icon_${s}x${s}.png > /dev/null
   sips -z $((s*2)) $((s*2)) assets/icon.png --out /tmp/dsh.iconset/icon_${s}x${s}@2x.png > /dev/null
 done
 iconutil -c icns /tmp/dsh.iconset -o assets/icon.icns
+rm -rf /tmp/dsh.iconset
 ```
+
+Confirm `assets/icon.png` is a white whale on a blue rounded square — not a blank or all-white image. A blank result means the media query was not stripped and the whale rendered white on transparent.
+
+Commit `assets/icon.svg`, `assets/icon.png`, and `assets/icon.icns`, since the harness checkout is not a build-time dependency of this project and the icon must survive it moving.
 
 - [ ] **Step 3: Add the entitlements file**
 
