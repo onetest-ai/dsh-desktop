@@ -50,7 +50,7 @@ describe('dshWebCommand', () => {
     )
     expect(spec.command).toBe('/usr/local/bin/npx')
     expect(spec.args).toEqual([
-      '-y', '@deepseek-ai/dsh@latest', '--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open',
+      '-y', '@deepseek-ai/dsh@latest', '--', '--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open',
     ])
     expect(spec.cwd).toBe('/tmp/ws')
   })
