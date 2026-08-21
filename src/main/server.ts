@@ -1,18 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { DesktopConfig } from './config'
+import { spawnFor, type SpawnSpec } from './harness-source'
+
+export type { SpawnSpec } from './harness-source'
 
 /** A running harness server and the URL its window should load. */
 export interface ServerHandle {
   url: string
   stop(): Promise<void>
-}
-
-/** Everything needed to launch the server child. */
-export interface SpawnSpec {
-  command: string
-  args: string[]
-  cwd: string
-  env?: NodeJS.ProcessEnv
 }
 
 export interface StartOptions {
@@ -36,42 +31,44 @@ const STDERR_TAIL_LIMIT = 4000
 const KILL_GRACE_MS = 3000
 
 /**
- * Decide which pnpm binary to spawn.
+ * Decide which binary to spawn for a launcher.
  *
  * A packaged macOS app launched from Finder inherits a minimal PATH that has
- * no Homebrew or Corepack shim, so a bare `pnpm` fails with ENOENT. An
- * explicit `pnpmPath` always wins; otherwise a bare `pnpm` is used only when
- * PATH carries entries beyond the system defaults.
- * @param config - the desktop settings.
+ * no Homebrew or Corepack shim, so a bare binary name fails with ENOENT. An
+ * explicit configured path always wins; otherwise the bare name is used only
+ * when PATH carries entries beyond the system defaults.
+ * @param configured - the explicit path from `desktop.json`, if set.
+ * @param name - the binary name, used both as the PATH-relative fallback and in the error message.
  * @param env - the environment the app was launched with.
  * @returns the command to spawn.
  */
-export function resolvePnpm(config: DesktopConfig, env: NodeJS.ProcessEnv): string {
-  if (config.pnpmPath !== undefined) return config.pnpmPath
+export function resolveBinary(configured: string | undefined, name: string, env: NodeJS.ProcessEnv): string {
+  if (configured !== undefined) return configured
   const path = env.PATH ?? ''
   const systemOnly = new Set(['/usr/bin', '/bin', '/usr/sbin', '/sbin', ''])
   const hasUserPath = path.split(':').some((entry) => !systemOnly.has(entry))
-  if (hasUserPath) return 'pnpm'
+  if (hasUserPath) return name
   throw new Error(
-    'dsh-desktop: pnpm is not on PATH (a Finder launch inherits a minimal PATH). ' +
-      'Set "pnpmPath" in config.json to the absolute path from `which pnpm`.',
+    `dsh-desktop: ${name} is not on PATH (a Finder launch inherits a minimal PATH). ` +
+      `Set "${name}Path" in desktop.json to the absolute path from \`which ${name}\`.`,
   )
 }
 
 /**
- * Build the spawn specification for `dsh web` against the configured checkout.
+ * Build the spawn specification for the configured harness source.
  * @param config - the desktop settings.
  * @param patchFile - absolute path to this project's cordis patch overlay.
  * @returns the command, arguments, and working directory.
  */
 export function dshWebCommand(config: DesktopConfig, patchFile: string): SpawnSpec {
-  return {
-    command: resolvePnpm(config, process.env),
-    // `--patch` is a `dsh` launcher option; the `web` subcommand alias forbids
-    // combining it with any parent flag, so this uses `--profile web` instead.
-    args: ['dsh', '--profile', 'web', '--patch', patchFile, '--no-open'],
-    cwd: config.harnessRepo,
-  }
+  return spawnFor(
+    config.harness,
+    {
+      pnpm: resolveBinary(config.pnpmPath, 'pnpm', process.env),
+      npx: resolveBinary(config.npxPath, 'npx', process.env),
+    },
+    patchFile,
+  )
 }
 
 /**

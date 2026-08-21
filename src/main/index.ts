@@ -1,6 +1,7 @@
 import { app, BrowserWindow, globalShortcut, Notification } from 'electron'
 import { join } from 'node:path'
 import { loadConfig, type DesktopConfig } from './config'
+import { configPath } from './harness-source'
 import { startNotifyListener, type NotifyServer } from './notify'
 import { preflight } from './preflight'
 import { dshWebCommand, startServer, type ServerHandle } from './server'
@@ -9,10 +10,12 @@ import { createTray, type TrayController } from './tray'
 import { createWindow, installMenu, showError } from './window'
 import type { ServerStatus } from './status'
 
-/** Config and patch overlay sit beside the app, not inside the harness checkout. */
+/** The patch overlay ships with the app; the config lives under `$DSH_HOME` (see `configPath`). */
 const PROJECT_ROOT = join(__dirname, '..', '..')
-const CONFIG_PATH = join(PROJECT_ROOT, 'config.json')
+const CONFIG_PATH = configPath(process.env)
 const PATCH_PATH = join(PROJECT_ROOT, 'desktop.patch.yml')
+/** Preferred local checkout when seeding a first-run config; falls back to npx when absent. */
+const CANDIDATE_REPO = '/Users/arozumenko/Development/deepseek-harness'
 
 /** How long the harness may take to report its URL. */
 const READY_TIMEOUT_MS = 60_000
@@ -45,14 +48,14 @@ async function boot(): Promise<void> {
 
   let config: DesktopConfig
   try {
-    config = loadConfig(CONFIG_PATH)
+    config = loadConfig(CONFIG_PATH, CANDIDATE_REPO)
   } catch (error) {
     setStatus('failed')
     showError(window, 'Configuration problem', (error as Error).message)
     return
   }
 
-  const check = preflight(config.harnessRepo)
+  const check = preflight(config.harness)
   if (!check.ok) {
     setStatus('failed')
     showError(window, 'The harness checkout is not ready', check.message)
@@ -128,7 +131,7 @@ function onTurnEnd(): void {
  */
 function safeHotkey(): string | undefined {
   try {
-    return loadConfig(CONFIG_PATH).hotkey
+    return loadConfig(CONFIG_PATH, CANDIDATE_REPO).hotkey
   } catch {
     // boot() reports config failures in the window; the hotkey just goes unbound.
     return undefined
@@ -158,7 +161,7 @@ if (!app.requestSingleInstanceLock()) {
     const hotkey = safeHotkey()
     if (hotkey !== undefined) globalShortcut.register(hotkey, toggleWindow)
     try {
-      notifier = await startNotifyListener(loadConfig(CONFIG_PATH).notifyPort, onTurnEnd)
+      notifier = await startNotifyListener(loadConfig(CONFIG_PATH, CANDIDATE_REPO).notifyPort, onTurnEnd)
     } catch (error) {
       console.warn((error as Error).message)
     }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { join } from 'node:path'
-import { dshWebCommand, resolvePnpm, startServer, type ServerHandle } from './server'
+import { dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
 
 const FIXTURE = join(__dirname, '..', '..', 'tests', 'fixtures', 'fake-server.mjs')
 
@@ -21,9 +21,14 @@ afterEach(async () => {
 })
 
 describe('dshWebCommand', () => {
-  it('runs dsh web with the patch overlay and no browser handoff', () => {
+  it('runs dsh web with the patch overlay and no browser handoff, for a local source', () => {
     const spec = dshWebCommand(
-      { harnessRepo: '/tmp/harness', notifyPort: 1, hotkey: 'x', pnpmPath: '/usr/local/bin/pnpm' },
+      {
+        harness: { kind: 'local', repo: '/tmp/harness' },
+        notifyPort: 1,
+        hotkey: 'x',
+        pnpmPath: '/usr/local/bin/pnpm',
+      },
       '/tmp/desktop.patch.yml',
     )
     expect(spec.command).toBe('/usr/local/bin/pnpm')
@@ -32,23 +37,43 @@ describe('dshWebCommand', () => {
     expect(spec.args).toEqual(['dsh', '--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open'])
     expect(spec.cwd).toBe('/tmp/harness')
   })
+
+  it('runs npx against the published package for an npx source', () => {
+    const spec = dshWebCommand(
+      {
+        harness: { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+        notifyPort: 1,
+        hotkey: 'x',
+        npxPath: '/usr/local/bin/npx',
+      },
+      '/tmp/desktop.patch.yml',
+    )
+    expect(spec.command).toBe('/usr/local/bin/npx')
+    expect(spec.args).toEqual([
+      '-y', '@deepseek-ai/dsh@latest', '--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open',
+    ])
+    expect(spec.cwd).toBe('/tmp/ws')
+  })
 })
 
-describe('resolvePnpm', () => {
-  it('prefers an explicit pnpmPath', () => {
-    const config = { harnessRepo: '/tmp/h', notifyPort: 1, hotkey: 'x', pnpmPath: '/opt/pnpm' }
-    expect(resolvePnpm(config, {})).toBe('/opt/pnpm')
+describe('resolveBinary', () => {
+  it('prefers an explicit configured path', () => {
+    expect(resolveBinary('/opt/pnpm', 'pnpm', {})).toBe('/opt/pnpm')
   })
 
-  it('falls back to a bare pnpm when PATH looks like a real login environment', () => {
-    const config = { harnessRepo: '/tmp/h', notifyPort: 1, hotkey: 'x' }
-    expect(resolvePnpm(config, { PATH: '/opt/homebrew/bin:/usr/bin:/bin' })).toBe('pnpm')
+  it('falls back to the bare name when PATH looks like a real login environment', () => {
+    expect(resolveBinary(undefined, 'pnpm', { PATH: '/opt/homebrew/bin:/usr/bin:/bin' })).toBe('pnpm')
   })
 
   it('throws when PATH carries only system directories', () => {
-    const config = { harnessRepo: '/tmp/h', notifyPort: 1, hotkey: 'x' }
-    expect(() => resolvePnpm(config, { PATH: '/usr/bin:/bin:/usr/sbin:/sbin' })).toThrow(
+    expect(() => resolveBinary(undefined, 'pnpm', { PATH: '/usr/bin:/bin:/usr/sbin:/sbin' })).toThrow(
       /pnpm is not on PATH/,
+    )
+  })
+
+  it('names the right binary and config key for npx', () => {
+    expect(() => resolveBinary(undefined, 'npx', { PATH: '/usr/bin:/bin' })).toThrow(
+      /npx is not on PATH.*"npxPath"/s,
     )
   })
 })

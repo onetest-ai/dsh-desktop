@@ -5,15 +5,15 @@ import { join } from 'node:path'
 import { preflight } from './preflight'
 
 describe('preflight', () => {
-  it('fails and names the path when the repo is absent', () => {
-    const result = preflight('/definitely/not/here')
+  it('fails and names the path when a local repo is absent', () => {
+    const result = preflight({ kind: 'local', repo: '/definitely/not/here' })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.message).toContain('/definitely/not/here')
   })
 
   it('fails naming the build command when apps/web/dist is absent', () => {
     const repo = mkdtempSync(join(tmpdir(), 'dsh-desktop-repo-'))
-    const result = preflight(repo)
+    const result = preflight({ kind: 'local', repo })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.message).toContain('pnpm run build:web')
   })
@@ -21,6 +21,12 @@ describe('preflight', () => {
   it('passes when the repo and the built frontend both exist', () => {
     const repo = mkdtempSync(join(tmpdir(), 'dsh-desktop-repo-'))
     mkdirSync(join(repo, 'apps', 'web', 'dist'), { recursive: true })
-    expect(preflight(repo)).toEqual({ ok: true })
+    expect(preflight({ kind: 'local', repo })).toEqual({ ok: true })
+  })
+
+  it('passes an npx source without touching the filesystem', () => {
+    expect(
+      preflight({ kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/definitely/not/here' }),
+    ).toEqual({ ok: true })
   })
 })
