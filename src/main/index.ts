@@ -1,6 +1,7 @@
-import { app, BrowserWindow, globalShortcut } from 'electron'
+import { app, BrowserWindow, globalShortcut, Notification } from 'electron'
 import { join } from 'node:path'
 import { loadConfig, type DesktopConfig } from './config'
+import { startNotifyListener, type NotifyServer } from './notify'
 import { preflight } from './preflight'
 import { dshWebCommand, startServer, type ServerHandle } from './server'
 import { singleFlight } from './single-flight'
@@ -28,6 +29,7 @@ let status: ServerStatus = 'starting'
 let pendingStop: (() => Promise<void>) | undefined
 let quitting = false
 let tray: TrayController | undefined
+let notifier: NotifyServer | undefined
 
 /**
  * Record the server status and mirror it into the tray.
@@ -112,6 +114,12 @@ function toggleWindow(): void {
   window.focus()
 }
 
+/** Raise a turn-complete notification, but only when the user is looking elsewhere. */
+function onTurnEnd(): void {
+  if (window?.isFocused() === true) return
+  new Notification({ title: 'DeepSeek Harness', body: 'The agent finished its turn.' }).show()
+}
+
 /**
  * Read the configured hotkey, tolerating a broken config.
  * @returns the accelerator, or undefined when unavailable.
@@ -147,6 +155,11 @@ if (!app.requestSingleInstanceLock()) {
     })
     const hotkey = safeHotkey()
     if (hotkey !== undefined) globalShortcut.register(hotkey, toggleWindow)
+    try {
+      notifier = await startNotifyListener(loadConfig(CONFIG_PATH).notifyPort, onTurnEnd)
+    } catch (error) {
+      console.warn((error as Error).message)
+    }
     await boot()
   })
 
@@ -167,5 +180,6 @@ if (!app.requestSingleInstanceLock()) {
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
     tray?.destroy()
+    void notifier?.close()
   })
 }

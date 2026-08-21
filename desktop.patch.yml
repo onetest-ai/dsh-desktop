@@ -2,3 +2,9 @@
   config:
     host: 127.0.0.1
     port: 0
+
+- insert:
+    - id: hooks-claude-code
+      name: '@deepseek-ai/dsh-hooks-claude-code'
+      config:
+        configPath: /Users/arozumenko/Development/dsh-desktop/hooks.json
