@@ -65,7 +65,9 @@ export function resolvePnpm(config: DesktopConfig, env: NodeJS.ProcessEnv): stri
 export function dshWebCommand(config: DesktopConfig, patchFile: string): SpawnSpec {
   return {
     command: resolvePnpm(config, process.env),
-    args: ['dsh', 'web', '--no-open', '--patch', patchFile],
+    // `--patch` is a `dsh` launcher option; the `web` subcommand alias forbids
+    // combining it with any parent flag, so this uses `--profile web` instead.
+    args: ['dsh', '--profile', 'web', '--patch', patchFile, '--no-open'],
     cwd: config.harnessRepo,
   }
 }

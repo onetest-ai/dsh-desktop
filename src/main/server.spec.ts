@@ -27,7 +27,9 @@ describe('dshWebCommand', () => {
       '/tmp/desktop.patch.yml',
     )
     expect(spec.command).toBe('/usr/local/bin/pnpm')
-    expect(spec.args).toEqual(['dsh', 'web', '--no-open', '--patch', '/tmp/desktop.patch.yml'])
+    // `dsh web` is a subcommand alias that rejects any parent-level flag, `--patch`
+    // included, so the real CLI invocation goes through `--profile web` instead.
+    expect(spec.args).toEqual(['dsh', '--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open'])
     expect(spec.cwd).toBe('/tmp/harness')
   })
 })
