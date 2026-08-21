@@ -122,10 +122,14 @@ release/
 }
 ```
 
-`desktop.patch.yml` — the harness `--patch` overlay. Port 0 means OS-assigned:
+`desktop.patch.yml` — the harness `--patch` overlay. This is a **patch list**, not a plugin tree: each row targets an existing entry by `id`. Port 0 means OS-assigned.
+
+`host` must be repeated even though only the port changes: a patch assigns the row's whole `config` (`vendor/include/src/index.ts` `applyEntryPatches`), and the webserver schema marks both `host` and `port` required.
 
 ```yaml
-- dsh-host-webserver:
+- id: webserver
+  config:
+    host: 127.0.0.1
     port: 0
 ```
 
@@ -991,22 +995,33 @@ if (!app.requestSingleInstanceLock()) {
 }
 ```
 
-- [ ] **Step 5: Build and launch the app for real**
+- [ ] **Step 5: Verify the patch overlay actually applies**
+
+An unmatched patch `id` only logs a warning and is skipped (`vendor/include/src/index.ts`), so a broken overlay is silent — the server just keeps the default port 3080. Confirm the overlay lands before trusting the app:
+
+```bash
+cd /Users/arozumenko/Development/deepseek-harness
+pnpm dsh --profile web --patch /Users/arozumenko/Development/dsh-desktop/desktop.patch.yml --dump-config | grep -A3 "id: webserver"
+```
+
+Expected: the dumped `webserver` row shows `port: 0`. If it shows `3080`, or the command warns `patch: entry webserver not found`, the overlay is wrong — fix it before continuing.
+
+- [ ] **Step 6: Build and launch the app for real**
 
 Run: `npm run start`
-Expected: a window opens showing the harness Web UI. If the frontend is not built, the error pane names `pnpm run build:web` instead.
+Expected: a window opens showing the harness Web UI, and the URL is a random high port, NOT 3080. If the frontend is not built, the error pane names `pnpm run build:web` instead.
 
-- [ ] **Step 6: Verify the zero-touch constraint holds**
+- [ ] **Step 7: Verify the zero-touch constraint holds**
 
 Run: `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain`
 Expected: empty output. Any output is a bug in this task — stop and fix it.
 
-- [ ] **Step 7: Verify no orphans survive a quit**
+- [ ] **Step 8: Verify no orphans survive a quit**
 
 Quit the app, then run: `pgrep -fl "dsh web" ; pgrep -fl node-pty`
 Expected: no processes matching the harness server.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add -A
@@ -1402,13 +1417,19 @@ Expected: PASS, 3 tests.
 Replace `desktop.patch.yml` with:
 
 ```yaml
-- dsh-host-webserver:
+- id: webserver
+  config:
+    host: 127.0.0.1
     port: 0
-- dsh-hooks-claude-code:
-    configPath: /Users/arozumenko/Development/dsh-desktop/hooks.json
+
+- insert:
+    - id: hooks-claude-code
+      name: '@deepseek-ai/dsh-hooks-claude-code'
+      config:
+        configPath: /Users/arozumenko/Development/dsh-desktop/hooks.json
 ```
 
-`configPath` is process-level and resolved against the launch cwd at load, so it is given as an absolute path.
+The bridge is not in the web profile, so it is **inserted** rather than patched; an `insert` row is an ordinary entry and carries its own `config`. `configPath` is process-level and resolved against the launch cwd at load, so it is given as an absolute path.
 
 - [ ] **Step 7: Install the hook bridge into the web profile**
 
