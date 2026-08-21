@@ -1,8 +1,9 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, globalShortcut } from 'electron'
 import { join } from 'node:path'
 import { loadConfig, type DesktopConfig } from './config'
 import { preflight } from './preflight'
 import { dshWebCommand, startServer, type ServerHandle } from './server'
+import { createTray, type TrayController } from './tray'
 import { createWindow, installMenu, showError } from './window'
 import type { ServerStatus } from './status'
 
@@ -25,6 +26,16 @@ let status: ServerStatus = 'starting'
  */
 let pendingStop: (() => Promise<void>) | undefined
 let quitting = false
+let tray: TrayController | undefined
+
+/**
+ * Record the server status and mirror it into the tray.
+ * @param next - the new status.
+ */
+function setStatus(next: ServerStatus): void {
+  status = next
+  tray?.setStatus(next)
+}
 
 async function boot(): Promise<void> {
   if (window === undefined) return
@@ -33,14 +44,14 @@ async function boot(): Promise<void> {
   try {
     config = loadConfig(CONFIG_PATH)
   } catch (error) {
-    status = 'failed'
+    setStatus('failed')
     showError(window, 'Configuration problem', (error as Error).message)
     return
   }
 
   const check = preflight(config.harnessRepo)
   if (!check.ok) {
-    status = 'failed'
+    setStatus('failed')
     showError(window, 'The harness checkout is not ready', check.message)
     return
   }
@@ -53,7 +64,7 @@ async function boot(): Promise<void> {
         pendingStop = stop
       },
       onExit: (code, tail) => {
-        status = 'failed'
+        setStatus('failed')
         server = undefined
         if (window !== undefined) {
           showError(window, `The harness exited (code ${String(code)})`, tail || 'No output captured.')
@@ -61,15 +72,48 @@ async function boot(): Promise<void> {
       },
     })
   } catch (error) {
-    status = 'failed'
+    setStatus('failed')
     pendingStop = undefined
     showError(window, 'The harness failed to start', (error as Error).message)
     return
   }
 
   pendingStop = undefined
-  status = 'running'
+  setStatus('running')
   void window.loadURL(server.url)
+}
+
+/** Stop the current server (if any) and boot a fresh one. */
+async function restart(): Promise<void> {
+  const stopping = server
+  server = undefined
+  await stopping?.stop()
+  setStatus('starting')
+  await boot()
+}
+
+/** Show the window if hidden or unfocused, otherwise hide it. */
+function toggleWindow(): void {
+  if (window === undefined) return
+  if (window.isVisible() && window.isFocused()) {
+    window.hide()
+    return
+  }
+  window.show()
+  window.focus()
+}
+
+/**
+ * Read the configured hotkey, tolerating a broken config.
+ * @returns the accelerator, or undefined when unavailable.
+ */
+function safeHotkey(): string | undefined {
+  try {
+    return loadConfig(CONFIG_PATH).hotkey
+  } catch {
+    // boot() reports config failures in the window; the hotkey just goes unbound.
+    return undefined
+  }
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -84,6 +128,13 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(async () => {
     installMenu()
     window = createWindow()
+    tray = createTray({
+      toggleWindow,
+      restart: () => void restart(),
+      quit: () => app.quit(),
+    })
+    const hotkey = safeHotkey()
+    if (hotkey !== undefined) globalShortcut.register(hotkey, toggleWindow)
     await boot()
   })
 
@@ -99,5 +150,10 @@ if (!app.requestSingleInstanceLock()) {
     pendingStop = undefined
     await stop()
     app.quit()
+  })
+
+  app.on('will-quit', () => {
+    globalShortcut.unregisterAll()
+    tray?.destroy()
   })
 }
