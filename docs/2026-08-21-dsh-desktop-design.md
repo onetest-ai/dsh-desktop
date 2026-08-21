@@ -51,8 +51,10 @@ One Electron main process owns one child server process and one window.
 Spawn, with `cwd` set to `harnessRepo`:
 
 ```
-pnpm dsh web --no-open --patch <sidecar>/desktop.patch.yml
+pnpm dsh --profile web --patch <sidecar>/desktop.patch.yml --no-open
 ```
+
+Flag order is load-bearing: `dsh web` is an alias for `--profile web`, and the launcher's own flags must precede it — the first token the launcher does not recognize begins the *inner* arguments handed to the web app. `dsh web --patch <file>` fails with `unknown option '--patch'`.
 
 `desktop.patch.yml` sets `webServer.port: 0`. The webserver schema treats port `0` as "OS-assigned" (`packages/host/webserver/src/index.ts`), so the app never collides with a `pnpm dsh web` run by hand in a terminal.
 

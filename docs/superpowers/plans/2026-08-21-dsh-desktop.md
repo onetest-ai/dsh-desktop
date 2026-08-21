@@ -428,7 +428,7 @@ describe('dshWebCommand', () => {
       '/tmp/desktop.patch.yml',
     )
     expect(spec.command).toBe('/usr/local/bin/pnpm')
-    expect(spec.args).toEqual(['dsh', 'web', '--no-open', '--patch', '/tmp/desktop.patch.yml'])
+    expect(spec.args).toEqual(['dsh', '--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open'])
     expect(spec.cwd).toBe('/tmp/harness')
   })
 })
@@ -547,7 +547,7 @@ export function resolvePnpm(config: DesktopConfig, env: NodeJS.ProcessEnv): stri
 export function dshWebCommand(config: DesktopConfig, patchFile: string): SpawnSpec {
   return {
     command: resolvePnpm(config, process.env),
-    args: ['dsh', 'web', '--no-open', '--patch', patchFile],
+    args: ['dsh', '--profile', 'web', '--patch', patchFile, '--no-open'],
     cwd: config.harnessRepo,
   }
 }
