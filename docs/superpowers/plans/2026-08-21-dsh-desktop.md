@@ -1679,11 +1679,378 @@ git commit -m "feat: dsh:// registration and macOS packaging"
 
 ---
 
+---
+
+### Task 8: Harness source selection — local checkout or npx, configured under `~/.dsh/`
+
+**Files:**
+- Create: `src/main/harness-source.ts`, `src/main/harness-source.spec.ts`
+- Modify: `src/main/config.ts`, `src/main/config.spec.ts`, `src/main/preflight.ts`, `src/main/preflight.spec.ts`, `src/main/server.ts`, `src/main/server.spec.ts`, `src/main/index.ts`
+- Delete: `config.json` (moves to `$DSH_HOME/desktop.json`)
+
+**Interfaces:**
+- Consumes: everything from Tasks 1-6.
+- Produces:
+  - `type HarnessSource = { kind: 'local'; repo: string } | { kind: 'npx'; package: string; version: string; workspace: string }`
+  - `interface DesktopConfig { harness: HarnessSource; notifyPort: number; hotkey: string; pnpmPath?: string; npxPath?: string }`
+  - `function configPath(env: NodeJS.ProcessEnv): string`
+  - `function loadConfig(filePath: string): DesktopConfig` (same name, new schema)
+  - `function preflight(source: HarnessSource): PreflightResult`
+  - `function dshWebCommand(config: DesktopConfig, patchFile: string): SpawnSpec` (same name, now source-aware)
+
+This task exists because a packaged `.app` in `/Applications` must not depend on a developer checkout. It also moves configuration out of the app bundle, where a packaged app cannot sensibly edit it, into `$DSH_HOME`.
+
+**Design decisions, already made — implement these, do not re-litigate:**
+- Config lives at `$DSH_HOME/desktop.json`, where `DSH_HOME` falls back to `~/.dsh`. This mirrors the harness's own convention (`packages/util/home-paths/src/index.ts`: `DSH_HOME_ENV = 'DSH_HOME'`, `DSH_HOME_DIR_NAME = '.dsh'`).
+- No compatibility shim for the old `<app>/config.json`. This app has one user and the harness's own pre-release stance is foundation over shims.
+- On first run, if the config file is absent, write a default one and use it. Default to `local` pointing at `/Users/arozumenko/Development/deepseek-harness` when that path exists, otherwise `npx`.
+- For `npx`, `cwd` is the configured `workspace` (default: the user's home directory), because there is no checkout to run inside.
+- Launcher flag order is load-bearing in BOTH modes: the launcher's own flags precede the profile. `dsh web --patch F` fails with `unknown option '--patch'`.
+
+- [ ] **Step 1: Write the failing harness-source tests**
+
+`src/main/harness-source.spec.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { configPath, defaultSource, spawnFor } from './harness-source'
+
+describe('configPath', () => {
+  it('uses $DSH_HOME when set', () => {
+    expect(configPath({ DSH_HOME: '/custom/home' })).toBe('/custom/home/desktop.json')
+  })
+
+  it('falls back to ~/.dsh', () => {
+    expect(configPath({})).toBe(join(homedir(), '.dsh', 'desktop.json'))
+  })
+
+  it('treats a blank DSH_HOME as unset', () => {
+    expect(configPath({ DSH_HOME: '   ' })).toBe(join(homedir(), '.dsh', 'desktop.json'))
+  })
+})
+
+describe('defaultSource', () => {
+  it('prefers a local checkout when the path exists', () => {
+    expect(defaultSource(process.cwd())).toEqual({ kind: 'local', repo: process.cwd() })
+  })
+
+  it('falls back to npx when the checkout is absent', () => {
+    const source = defaultSource('/definitely/not/here')
+    expect(source.kind).toBe('npx')
+  })
+})
+
+describe('spawnFor', () => {
+  const patch = '/tmp/desktop.patch.yml'
+
+  it('runs pnpm dsh inside the checkout for a local source', () => {
+    const spec = spawnFor(
+      { kind: 'local', repo: '/tmp/harness' },
+      { pnpm: '/usr/local/bin/pnpm', npx: 'npx' },
+      patch,
+    )
+    expect(spec.command).toBe('/usr/local/bin/pnpm')
+    expect(spec.args).toEqual(['dsh', '--profile', 'web', '--patch', patch, '--no-open'])
+    expect(spec.cwd).toBe('/tmp/harness')
+  })
+
+  it('runs npx against the published package for an npx source', () => {
+    const spec = spawnFor(
+      { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+      { pnpm: 'pnpm', npx: '/usr/local/bin/npx' },
+      patch,
+    )
+    expect(spec.command).toBe('/usr/local/bin/npx')
+    expect(spec.args).toEqual([
+      '-y', '@deepseek-ai/dsh@latest', '--profile', 'web', '--patch', patch, '--no-open',
+    ])
+    expect(spec.cwd).toBe('/tmp/ws')
+  })
+
+  it('pins an exact version when one is configured', () => {
+    const spec = spawnFor(
+      { kind: 'npx', package: '@deepseek-ai/dsh', version: '0.1.1-rc.2', workspace: '/tmp/ws' },
+      { pnpm: 'pnpm', npx: 'npx' },
+      patch,
+    )
+    expect(spec.args[1]).toBe('@deepseek-ai/dsh@0.1.1-rc.2')
+  })
+
+  it('puts launcher flags before the profile in both modes', () => {
+    for (const spec of [
+      spawnFor({ kind: 'local', repo: '/r' }, { pnpm: 'pnpm', npx: 'npx' }, patch),
+      spawnFor({ kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/w' }, { pnpm: 'pnpm', npx: 'npx' }, patch),
+    ]) {
+      // `dsh web --patch F` fails with "unknown option '--patch'"; the launcher's
+      // own flags must precede the profile.
+      expect(spec.args).not.toContain('web')
+      expect(spec.args.indexOf('--patch')).toBeLessThan(spec.args.indexOf('--no-open'))
+    }
+  })
+})
+```
+
+- [ ] **Step 2: Run to make sure it fails**
+
+Run: `npx vitest run src/main/harness-source.spec.ts`
+Expected: FAIL — cannot find module `./harness-source`.
+
+- [ ] **Step 3: Implement the module**
+
+`src/main/harness-source.ts`:
+
+```ts
+import { statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
+/** Where the harness runtime comes from. */
+export type HarnessSource =
+  | { kind: 'local'; repo: string }
+  | { kind: 'npx'; package: string; version: string; workspace: string }
+
+/** Resolved binaries used to launch each source kind. */
+export interface Launchers {
+  pnpm: string
+  npx: string
+}
+
+/** Spawn specification shared with `server.ts`. */
+export interface SpawnSpec {
+  command: string
+  args: string[]
+  cwd: string
+  env?: NodeJS.ProcessEnv
+}
+
+/** The harness home directory name, mirroring `dsh`'s own convention. */
+const HOME_DIR_NAME = '.dsh'
+/** Published package used when no local checkout is configured. */
+const DEFAULT_PACKAGE = '@deepseek-ai/dsh'
+
+/**
+ * Absolute path of the desktop config file.
+ * Lives under `$DSH_HOME` so a packaged app — which cannot edit its own
+ * bundle — reads the same location the harness itself uses.
+ * @param env - environment to read `DSH_HOME` from.
+ * @returns the config file path.
+ */
+export function configPath(env: NodeJS.ProcessEnv): string {
+  const configured = env.DSH_HOME?.trim()
+  const home = configured === undefined || configured === '' ? join(homedir(), HOME_DIR_NAME) : configured
+  return join(home, 'desktop.json')
+}
+
+/**
+ * Pick a source for a machine with no config yet.
+ * @param candidateRepo - checkout path to prefer when it exists.
+ * @returns the local source if the checkout is present, otherwise npx.
+ */
+export function defaultSource(candidateRepo: string): HarnessSource {
+  let isRepo = false
+  try {
+    isRepo = statSync(candidateRepo).isDirectory()
+  } catch {
+    // ENOENT: no checkout at that path, so npx is the answer.
+    isRepo = false
+  }
+  return isRepo
+    ? { kind: 'local', repo: candidateRepo }
+    : { kind: 'npx', package: DEFAULT_PACKAGE, version: 'latest', workspace: homedir() }
+}
+
+/**
+ * Build the spawn specification for a source.
+ *
+ * The launcher's own flags precede the profile in both modes: `dsh` treats the
+ * first token it does not recognize as the start of the inner arguments, so
+ * `dsh web --patch F` fails with `unknown option '--patch'`.
+ * @param source - configured harness source.
+ * @param launchers - resolved pnpm and npx binaries.
+ * @param patchFile - absolute path to the cordis patch overlay.
+ * @returns command, arguments, and working directory.
+ */
+export function spawnFor(source: HarnessSource, launchers: Launchers, patchFile: string): SpawnSpec {
+  const profileArgs = ['--profile', 'web', '--patch', patchFile, '--no-open']
+  if (source.kind === 'local') {
+    return { command: launchers.pnpm, args: ['dsh', ...profileArgs], cwd: source.repo }
+  }
+  return {
+    command: launchers.npx,
+    args: ['-y', `${source.package}@${source.version}`, ...profileArgs],
+    cwd: source.workspace,
+  }
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `npx vitest run src/main/harness-source.spec.ts`
+Expected: PASS, 9 tests.
+
+- [ ] **Step 5: Commit the new module**
+
+```bash
+git add src/main/harness-source.ts src/main/harness-source.spec.ts
+git commit -m "feat: harness source selection for local checkout or npx"
+```
+
+- [ ] **Step 6: Rewrite the config schema and its tests**
+
+`src/main/config.ts` now returns `harness: HarnessSource` instead of `harnessRepo`, adds `npxPath`, and writes a default file when none exists. Replace `loadConfig` with:
+
+```ts
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { defaultSource, type HarnessSource } from './harness-source'
+
+/** Resolved desktop settings. `pnpmPath`/`npxPath` pin binaries when PATH cannot find them. */
+export interface DesktopConfig {
+  harness: HarnessSource
+  notifyPort: number
+  hotkey: string
+  pnpmPath?: string
+  npxPath?: string
+}
+
+const DEFAULT_NOTIFY_PORT = 43117
+const DEFAULT_HOTKEY = 'CommandOrControl+Shift+D'
+
+/**
+ * Read the desktop config, creating it with defaults on first run.
+ * @param filePath - absolute path to `desktop.json`.
+ * @param candidateRepo - checkout to prefer when writing a first-run default.
+ * @returns the resolved settings.
+ */
+export function loadConfig(filePath: string, candidateRepo: string): DesktopConfig {
+  let raw: string
+  try {
+    raw = readFileSync(filePath, 'utf8')
+  } catch {
+    // ENOENT on first run: seed a config rather than failing to launch.
+    const seeded: DesktopConfig = {
+      harness: defaultSource(candidateRepo),
+      notifyPort: DEFAULT_NOTIFY_PORT,
+      hotkey: DEFAULT_HOTKEY,
+    }
+    mkdirSync(dirname(filePath), { recursive: true })
+    writeFileSync(filePath, `${JSON.stringify(seeded, undefined, 2)}\n`)
+    return seeded
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (cause) {
+    throw new Error(`dsh-desktop: ${filePath} is not valid JSON`, { cause })
+  }
+
+  const record = parsed as Partial<DesktopConfig>
+  const harness = record.harness
+  if (harness === undefined) {
+    throw new Error(`dsh-desktop: ${filePath} must set "harness" to a local or npx source`)
+  }
+  if (harness.kind === 'local') {
+    if (typeof harness.repo !== 'string' || harness.repo === '') {
+      throw new Error(`dsh-desktop: ${filePath} local harness must set a non-empty "repo"`)
+    }
+  } else if (harness.kind === 'npx') {
+    if (typeof harness.package !== 'string' || harness.package === '') {
+      throw new Error(`dsh-desktop: ${filePath} npx harness must set a non-empty "package"`)
+    }
+  } else {
+    throw new Error(`dsh-desktop: ${filePath} harness.kind must be "local" or "npx"`)
+  }
+
+  return {
+    harness,
+    notifyPort: record.notifyPort ?? DEFAULT_NOTIFY_PORT,
+    hotkey: record.hotkey ?? DEFAULT_HOTKEY,
+    ...(record.pnpmPath === undefined ? {} : { pnpmPath: record.pnpmPath }),
+    ...(record.npxPath === undefined ? {} : { npxPath: record.npxPath }),
+  }
+}
+```
+
+Update `src/main/config.spec.ts` to match: the existing `harnessRepo` cases become `harness` cases, plus new tests for a first-run seed (absent file creates one and returns it), a malformed `harness.kind`, an empty `repo`, and an empty `package`. Write real assertions — do not leave the old tests half-converted.
+
+- [ ] **Step 7: Make preflight source-aware**
+
+`src/main/preflight.ts` takes a `HarnessSource`:
+
+```ts
+export function preflight(source: HarnessSource): PreflightResult {
+  if (source.kind === 'npx') {
+    // The published package ships its own built frontend, so there is no
+    // checkout to validate. npx availability is reported by the spawn failure.
+    return { ok: true }
+  }
+  if (!isDirectory(source.repo)) {
+    return { ok: false, message: `Harness checkout not found at ${source.repo}. Fix "harness.repo" in desktop.json.` }
+  }
+  if (!isDirectory(join(source.repo, 'apps', 'web', 'dist'))) {
+    return { ok: false, message: `The harness frontend is not built. Run "pnpm run build:web" in ${source.repo}.` }
+  }
+  return { ok: true }
+}
+```
+
+Update `src/main/preflight.spec.ts`: the three existing cases become `{ kind: 'local', repo }` cases, plus a new one asserting an npx source passes without touching the filesystem.
+
+- [ ] **Step 8: Route `server.ts` through `spawnFor`**
+
+`dshWebCommand` keeps its name and delegates. Replace its body with a call to `spawnFor`, resolving both launchers:
+
+```ts
+export function dshWebCommand(config: DesktopConfig, patchFile: string): SpawnSpec {
+  return spawnFor(config.harness, {
+    pnpm: resolveBinary(config.pnpmPath, 'pnpm', process.env),
+    npx: resolveBinary(config.npxPath, 'npx', process.env),
+  }, patchFile)
+}
+```
+
+Generalise the existing `resolvePnpm` into `resolveBinary(configured, name, env)` with the same semantics — an explicit path wins; otherwise a bare name is used only when PATH carries entries beyond the system defaults; otherwise it throws naming the binary and the config key to set. Keep `SpawnSpec` exported from `server.ts` as a re-export of the one in `harness-source.ts` so there is a single definition, not two. Update `server.spec.ts`'s `dshWebCommand` and `resolvePnpm` tests to the new shape, keeping the throw-path coverage.
+
+- [ ] **Step 9: Update `index.ts`**
+
+`CONFIG_PATH` becomes `configPath(process.env)`; `loadConfig` takes the candidate repo (`/Users/arozumenko/Development/deepseek-harness`); `preflight` takes `config.harness`. Do not disturb `pendingStop`, `quitting`, `before-quit`, `restartOnce`, the `closed` handler, or the `onTurnEnd` guard.
+
+- [ ] **Step 10: Delete the old config file**
+
+```bash
+git rm config.json
+```
+
+Remove `config.json` from the `files` list in `package.json`'s `build` block if Task 7 has already added it.
+
+- [ ] **Step 11: Run everything**
+
+Run: `npm run build && npx vitest run`
+Expected: build clean; all tests pass. Report the count.
+
+- [ ] **Step 12: Verify both modes actually launch**
+
+Local mode: ensure `~/.dsh/desktop.json` has `{"harness":{"kind":"local","repo":"/Users/arozumenko/Development/deepseek-harness"}}`, start the app backgrounded, confirm it loads a `127.0.0.1` URL that is not 3080, then quit and confirm no orphan.
+
+npx mode: set `harness` to `{"kind":"npx","package":"@deepseek-ai/dsh","version":"latest","workspace":"<your home>"}`, start the app, and report what happens. A network fetch of the published package may be slow or may fail if the package is unpublished or the network is unavailable — if it fails, capture the exact error and report it rather than treating it as success. Restore the local config afterwards.
+
+- [ ] **Step 13: Commit**
+
+```bash
+git add -A
+git commit -m "feat: read desktop config from \$DSH_HOME and support an npx harness source"
+```
+
 ## Verification checklist
 
 Run before calling this done:
 
 - [ ] `npx vitest run` — all unit tests pass
+- [ ] Both harness sources launch: local checkout AND npx
+- [ ] `~/.dsh/desktop.json` is the only place configuration lives
 - [ ] `npm run test:smoke` — packaged smoke passes
 - [ ] `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain` — empty
 - [ ] Quit the app, then `pgrep -fl "dsh web"` — empty
