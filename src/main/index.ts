@@ -20,7 +20,6 @@ const CANDIDATE_REPO = '/Users/arozumenko/Development/deepseek-harness'
 const READY_TIMEOUT_MS = 60_000
 
 let window: BrowserWindow | undefined
-let status: ServerStatus = 'starting'
 let quitting = false
 let tray: TrayController | undefined
 let notifier: NotifyServer | undefined
@@ -76,11 +75,10 @@ function enqueue(step: () => Promise<void>): Promise<void> {
 }
 
 /**
- * Record the server status and mirror it into the tray.
+ * Report the server status through the tray.
  * @param next - the new status.
  */
 function setStatus(next: ServerStatus): void {
-  status = next
   tray?.setStatus(next)
 }
 
