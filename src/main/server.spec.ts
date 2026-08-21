@@ -103,6 +103,7 @@ describe('stop', () => {
         if (match !== null) grandchildPid = Number(match[1])
       },
     })
+    running = handle
 
     expect(grandchildPid).toBeGreaterThan(0)
     expect(isAlive(grandchildPid)).toBe(true)
@@ -115,6 +116,7 @@ describe('stop', () => {
 
   it('is safe to call twice', async () => {
     const handle = await startServer({ spec: fakeSpec('ready'), timeoutMs: 10_000 })
+    running = handle
     await handle.stop()
     await expect(handle.stop()).resolves.toBeUndefined()
   })
@@ -126,6 +128,7 @@ describe('stop', () => {
       timeoutMs: 10_000,
       onExit: (code, tail) => exits.push({ code, tail }),
     })
+    running = handle
     await handle.stop()
     await new Promise((r) => setTimeout(r, 500))
     expect(exits.length).toBe(1)
