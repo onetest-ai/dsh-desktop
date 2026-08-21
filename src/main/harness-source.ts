@@ -1,0 +1,81 @@
+import { statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
+/** Where the harness runtime comes from. */
+export type HarnessSource =
+  | { kind: 'local'; repo: string }
+  | { kind: 'npx'; package: string; version: string; workspace: string }
+
+/** Resolved binaries used to launch each source kind. */
+export interface Launchers {
+  pnpm: string
+  npx: string
+}
+
+/** Spawn specification shared with `server.ts`. */
+export interface SpawnSpec {
+  command: string
+  args: string[]
+  cwd: string
+  env?: NodeJS.ProcessEnv
+}
+
+/** The harness home directory name, mirroring `dsh`'s own convention. */
+const HOME_DIR_NAME = '.dsh'
+/** Published package used when no local checkout is configured. */
+const DEFAULT_PACKAGE = '@deepseek-ai/dsh'
+
+/**
+ * Absolute path of the desktop config file.
+ * Lives under `$DSH_HOME` so a packaged app — which cannot edit its own
+ * bundle — reads the same location the harness itself uses.
+ * @param env - environment to read `DSH_HOME` from.
+ * @returns the config file path.
+ */
+export function configPath(env: NodeJS.ProcessEnv): string {
+  const configured = env.DSH_HOME?.trim()
+  const home = configured === undefined || configured === '' ? join(homedir(), HOME_DIR_NAME) : configured
+  return join(home, 'desktop.json')
+}
+
+/**
+ * Pick a source for a machine with no config yet.
+ * @param candidateRepo - checkout path to prefer when it exists.
+ * @returns the local source if the checkout is present, otherwise npx.
+ */
+export function defaultSource(candidateRepo: string): HarnessSource {
+  let isRepo = false
+  try {
+    isRepo = statSync(candidateRepo).isDirectory()
+  } catch {
+    // ENOENT: no checkout at that path, so npx is the answer.
+    isRepo = false
+  }
+  return isRepo
+    ? { kind: 'local', repo: candidateRepo }
+    : { kind: 'npx', package: DEFAULT_PACKAGE, version: 'latest', workspace: homedir() }
+}
+
+/**
+ * Build the spawn specification for a source.
+ *
+ * The launcher's own flags precede the profile in both modes: `dsh` treats the
+ * first token it does not recognize as the start of the inner arguments, so
+ * `dsh web --patch F` fails with `unknown option '--patch'`.
+ * @param source - configured harness source.
+ * @param launchers - resolved pnpm and npx binaries.
+ * @param patchFile - absolute path to the cordis patch overlay.
+ * @returns command, arguments, and working directory.
+ */
+export function spawnFor(source: HarnessSource, launchers: Launchers, patchFile: string): SpawnSpec {
+  const profileArgs = ['--profile', 'web', '--patch', patchFile, '--no-open']
+  if (source.kind === 'local') {
+    return { command: launchers.pnpm, args: ['dsh', ...profileArgs], cwd: source.repo }
+  }
+  return {
+    command: launchers.npx,
+    args: ['-y', `${source.package}@${source.version}`, ...profileArgs],
+    cwd: source.workspace,
+  }
+}
