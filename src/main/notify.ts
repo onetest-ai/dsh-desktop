@@ -9,9 +9,10 @@ export interface NotifyServer {
 /**
  * Listen on loopback for turn-end pings from the harness Stop hook.
  *
- * The port is fixed rather than OS-assigned because `hooks.json` is a static
- * file the harness reads at load: the hook command cannot discover a port
- * chosen at runtime.
+ * The port is the configured one rather than OS-assigned because the harness
+ * reads its hook config once at load: the `curl` in the Stop hook command is
+ * generated with this port baked in (see `runtime-files`) and cannot discover
+ * one chosen after the fact.
  * @param port - the configured port; 0 is used by tests for an ephemeral port.
  * @param onTurnEnd - invoked once per POST to `/turn-end`.
  * @returns the listening server.

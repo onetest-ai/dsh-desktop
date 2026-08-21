@@ -28,12 +28,9 @@
       "buildResources": "build"
     },
     "asar": true,
-    "asarUnpack": ["desktop.patch.yml", "hooks.json"],
     "files": [
       "dist/**/*",
-      "assets/**/*",
-      "desktop.patch.yml",
-      "hooks.json"
+      "assets/**/*"
     ],
     "extraMetadata": {
       "main": "dist/main/index.js"

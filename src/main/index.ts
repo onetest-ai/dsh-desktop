@@ -4,24 +4,15 @@ import { loadConfig, type DesktopConfig } from './config'
 import { configPath } from './harness-source'
 import { startNotifyListener, type NotifyServer } from './notify'
 import { preflight } from './preflight'
-import { dshWebCommand, startServer, type ServerHandle } from './server'
+import { writeRuntimeFiles } from './runtime-files'
+import { dshWebCommand, startServer } from './server'
 import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
 import { createWindow, installMenu, showError } from './window'
 import type { ServerStatus } from './status'
 
-/** The patch overlay ships with the app; the config lives under `$DSH_HOME` (see `configPath`). */
-const PROJECT_ROOT = join(__dirname, '..', '..')
+/** The config lives under `$DSH_HOME` (see `configPath`), beside the harness's own state. */
 const CONFIG_PATH = configPath(process.env)
-/**
- * `desktop.patch.yml` is read by the spawned harness child, a plain Node
- * process with no asar virtual-filesystem support — so it must resolve to a
- * real file, not a path inside `app.asar`. electron-builder's `asarUnpack`
- * places its real copy in a sibling `app.asar.unpacked` tree; substituting
- * that directory name is a no-op outside a packaged app, where `PROJECT_ROOT`
- * never contains `app.asar`.
- */
-const PATCH_PATH = join(PROJECT_ROOT.replace('app.asar', 'app.asar.unpacked'), 'desktop.patch.yml')
 /** Preferred local checkout when seeding a first-run config; falls back to npx when absent. */
 const CANDIDATE_REPO = '/Users/arozumenko/Development/deepseek-harness'
 
@@ -29,18 +20,60 @@ const CANDIDATE_REPO = '/Users/arozumenko/Development/deepseek-harness'
 const READY_TIMEOUT_MS = 60_000
 
 let window: BrowserWindow | undefined
-let server: ServerHandle | undefined
 let status: ServerStatus = 'starting'
-/**
- * Stops the harness child while it is still booting, i.e. after `spawn()` but
- * before `startServer()` resolves into `server`. Without this, quitting during
- * that window leaves a detached child (and its node-pty grandchildren) behind:
- * `before-quit` only knows to stop `server`, which is still `undefined`.
- */
-let pendingStop: (() => Promise<void>) | undefined
 let quitting = false
 let tray: TrayController | undefined
 let notifier: NotifyServer | undefined
+/** A deep link that arrived before the window existed; see the `open-url` handler. */
+let deepLinkPending = false
+
+/**
+ * The harness child this app owns, from `spawn()` until it is stopped.
+ *
+ * It is set the moment the child exists — before readiness — so the quit path
+ * can always reap it; without that, quitting mid-boot leaves a detached child
+ * (and its node-pty grandchildren) behind.
+ */
+interface Child {
+  /** Which `boot` produced this child; see `generation`. */
+  generation: number
+  stop(): Promise<void>
+}
+let child: Child | undefined
+
+/**
+ * Incremented for every child the app starts and every stop it performs.
+ *
+ * A child's `'exit'` can arrive after its replacement is already running, so
+ * every callback checks its own generation against this counter and does
+ * nothing when it has been superseded. Without that check a dead child's
+ * `onExit` overwrites the live child's state, which both misreports the UI and
+ * hides the live child from the quit path — orphaning its process group.
+ */
+let generation = 0
+
+/**
+ * Tail of the serialized lifecycle chain.
+ *
+ * Every async transition (boot, restart, the final stop) runs through
+ * `enqueue`, so transitions never interleave and `before-quit` can make itself
+ * the last link: a quit is therefore always ordered after whatever transition
+ * is in flight, instead of racing an `await` that leaves the app looking idle.
+ */
+let transition: Promise<void> = Promise.resolve()
+
+/**
+ * Append a lifecycle step to the serialized chain.
+ * @param step - the transition to run once the chain is free.
+ * @returns a promise that settles when this step is done; it never rejects.
+ */
+function enqueue(step: () => Promise<void>): Promise<void> {
+  const next = transition.then(step).catch((error: unknown) => {
+    console.error('dsh-desktop: lifecycle step failed', error)
+  })
+  transition = next
+  return next
+}
 
 /**
  * Record the server status and mirror it into the tray.
@@ -51,64 +84,133 @@ function setStatus(next: ServerStatus): void {
   tray?.setStatus(next)
 }
 
-async function boot(): Promise<void> {
+/**
+ * Report a failure in the window, if one is still there to report it in.
+ * @param title - short failure summary.
+ * @param detail - remedy text or captured stderr.
+ */
+function fail(title: string, detail: string): void {
+  setStatus('failed')
+  if (window !== undefined && !window.isDestroyed()) showError(window, title, detail)
+}
+
+/** Bring the window to the front. */
+function revealWindow(): void {
+  if (window === undefined || window.isDestroyed()) return
+  window.show()
+  window.focus()
+}
+
+/** Where the generated patch overlay and hook config are written. */
+function runtimeDirectory(): string {
+  return join(app.getPath('userData'), 'runtime')
+}
+
+/**
+ * Stop the child this app currently owns and retire its generation.
+ * @returns a promise that settles once the child's process group is gone.
+ */
+async function stopCurrent(): Promise<void> {
+  const stopping = child
+  child = undefined
+  generation += 1
+  await stopping?.stop()
+}
+
+/**
+ * Start the harness and point the window at it.
+ * Runs only inside `enqueue`, so it can assume no other transition is active.
+ */
+async function bootNow(): Promise<void> {
+  if (quitting) return
   if (window === undefined || window.isDestroyed()) return
 
   let config: DesktopConfig
   try {
     config = loadConfig(CONFIG_PATH, CANDIDATE_REPO)
   } catch (error) {
-    setStatus('failed')
-    showError(window, 'Configuration problem', (error as Error).message)
+    fail('Configuration problem', (error as Error).message)
     return
   }
 
   const check = preflight(config.harness)
   if (!check.ok) {
-    setStatus('failed')
-    showError(window, 'The harness checkout is not ready', check.message)
+    fail('The harness checkout is not ready', check.message)
+    return
+  }
+
+  const mine = (generation += 1)
+
+  let patchPath: string
+  try {
+    patchPath = writeRuntimeFiles(runtimeDirectory(), config.notifyPort).patchPath
+  } catch (error) {
+    fail('The harness launch files could not be written', (error as Error).message)
     return
   }
 
   try {
-    server = await startServer({
-      spec: dshWebCommand(config, PATCH_PATH),
+    const handle = await startServer({
+      spec: dshWebCommand(config, patchPath),
       timeoutMs: READY_TIMEOUT_MS,
       onSpawned: (stop) => {
-        pendingStop = stop
+        child = { generation: mine, stop }
       },
       onExit: (code, tail) => {
-        setStatus('failed')
-        server = undefined
-        if (window !== undefined && !window.isDestroyed()) {
-          showError(window, `The harness exited (code ${String(code)})`, tail || 'No output captured.')
-        }
+        if (mine !== generation) return
+        child = undefined
+        fail(`The harness exited (code ${String(code)})`, tail || 'No output captured.')
       },
     })
+    if (mine !== generation) {
+      // A stop overtook this boot; the child is already being reaped elsewhere.
+      return
+    }
+    setStatus('running')
+    if (window !== undefined && !window.isDestroyed()) void window.loadURL(handle.url)
   } catch (error) {
-    setStatus('failed')
-    pendingStop = undefined
-    showError(window, 'The harness failed to start', (error as Error).message)
-    return
+    if (mine !== generation) return
+    // The rejection paths (readiness timeout, early exit) can leave a child
+    // mid-death, so it is reaped here rather than merely forgotten.
+    await stopCurrent()
+    fail('The harness failed to start', (error as Error).message)
   }
-
-  pendingStop = undefined
-  setStatus('running')
-  if (window !== undefined && !window.isDestroyed()) void window.loadURL(server.url)
 }
 
 /**
  * Stop the current server (if any) and boot a fresh one.
- * Wrapped in `singleFlight` at its call site: two "Restart harness" clicks in
- * quick succession must not race on the shared `server`/`pendingStop` state
- * and spawn two harness children, one of which `before-quit` could not find.
+ *
+ * The whole stop-then-boot sequence is one link in the lifecycle chain, so a
+ * quit arriving inside the stop window is ordered after it instead of finding
+ * no child to reap and letting the queued boot spawn one behind its back.
  */
 async function restart(): Promise<void> {
-  const stopping = server
-  server = undefined
-  await stopping?.stop()
-  setStatus('starting')
-  await boot()
+  await enqueue(async () => {
+    await stopCurrent()
+    setStatus('starting')
+    await bootNow()
+  })
+}
+
+/**
+ * Reap the harness and let every in-flight transition unwind, before quitting.
+ *
+ * `quitting` is set first and synchronously, so a transition still queued
+ * behind this one cannot spawn anything the quit would not know about. The
+ * child is then stopped directly rather than through `enqueue`: a boot waits
+ * on its child's readiness, so queuing the reap behind it would make the quit
+ * wait out the readiness timeout instead of cutting the boot short. Stopping
+ * the child is what lets that boot unwind — its `startServer` rejects once the
+ * child is gone — which is why the chain is only awaited afterwards.
+ * @returns a promise that settles once nothing of this app's is left running.
+ */
+async function shutdown(): Promise<void> {
+  quitting = true
+  await stopCurrent()
+  await transition
+  // A transition that was mid-flight may have registered a child of its own
+  // between the stop above and its own quitting check.
+  await stopCurrent()
 }
 
 /** Serialized entry point for the tray's "Restart harness" action; see `restart`. */
@@ -121,8 +223,7 @@ function toggleWindow(): void {
     window.hide()
     return
   }
-  window.show()
-  window.focus()
+  revealWindow()
 }
 
 /** Raise a turn-complete notification, but only when the user is looking elsewhere. */
@@ -150,7 +251,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (window === undefined) return
+    if (window === undefined || window.isDestroyed()) return
     if (window.isMinimized()) window.restore()
     window.focus()
   })
@@ -160,14 +261,25 @@ if (!app.requestSingleInstanceLock()) {
   // macOS delivers deep links through open-url, not argv.
   app.on('open-url', (event) => {
     event.preventDefault()
-    if (window === undefined) return
-    window.show()
-    window.focus()
+    if (window === undefined || window.isDestroyed()) {
+      // A cold-start link arrives before whenReady, so there is nothing to
+      // raise yet; the window applies it once it exists.
+      deepLinkPending = true
+      return
+    }
+    revealWindow()
   })
 
   void app.whenReady().then(async () => {
     installMenu()
     window = createWindow()
+    window.on('close', (event) => {
+      // Closing the window leaves the app running in the tray; only a quit,
+      // which sets `quitting` first, may actually destroy it.
+      if (quitting) return
+      event.preventDefault()
+      if (window !== undefined && !window.isDestroyed()) window.hide()
+    })
     window.on('closed', () => {
       window = undefined
     })
@@ -177,26 +289,31 @@ if (!app.requestSingleInstanceLock()) {
       quit: () => app.quit(),
     })
     const hotkey = safeHotkey()
-    if (hotkey !== undefined) globalShortcut.register(hotkey, toggleWindow)
+    if (hotkey !== undefined && !globalShortcut.register(hotkey, toggleWindow)) {
+      console.warn(`dsh-desktop: the hotkey ${hotkey} could not be registered; another app already owns it.`)
+    }
     try {
       notifier = await startNotifyListener(loadConfig(CONFIG_PATH, CANDIDATE_REPO).notifyPort, onTurnEnd)
     } catch (error) {
       console.warn((error as Error).message)
     }
-    await boot()
+    if (deepLinkPending) {
+      deepLinkPending = false
+      revealWindow()
+    }
+    await enqueue(bootNow)
   })
 
-  app.on('window-all-closed', () => app.quit())
+  // The window is hidden rather than closed, so this only fires on the way out;
+  // the app stays in the tray instead of quitting with its last window.
+  app.on('window-all-closed', () => {})
+
+  app.on('activate', () => revealWindow())
 
   app.on('before-quit', async (event) => {
     if (quitting) return
-    const stop = server?.stop ?? pendingStop
-    if (stop === undefined) return
-    quitting = true
     event.preventDefault()
-    server = undefined
-    pendingStop = undefined
-    await stop()
+    await shutdown()
     app.quit()
   })
 
