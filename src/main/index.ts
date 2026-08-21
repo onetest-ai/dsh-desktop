@@ -147,6 +147,16 @@ if (!app.requestSingleInstanceLock()) {
     window.focus()
   })
 
+  app.setAsDefaultProtocolClient('dsh')
+
+  // macOS delivers deep links through open-url, not argv.
+  app.on('open-url', (event) => {
+    event.preventDefault()
+    if (window === undefined) return
+    window.show()
+    window.focus()
+  })
+
   void app.whenReady().then(async () => {
     installMenu()
     window = createWindow()
