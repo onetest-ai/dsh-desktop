@@ -13,7 +13,15 @@ import type { ServerStatus } from './status'
 /** The patch overlay ships with the app; the config lives under `$DSH_HOME` (see `configPath`). */
 const PROJECT_ROOT = join(__dirname, '..', '..')
 const CONFIG_PATH = configPath(process.env)
-const PATCH_PATH = join(PROJECT_ROOT, 'desktop.patch.yml')
+/**
+ * `desktop.patch.yml` is read by the spawned harness child, a plain Node
+ * process with no asar virtual-filesystem support — so it must resolve to a
+ * real file, not a path inside `app.asar`. electron-builder's `asarUnpack`
+ * places its real copy in a sibling `app.asar.unpacked` tree; substituting
+ * that directory name is a no-op outside a packaged app, where `PROJECT_ROOT`
+ * never contains `app.asar`.
+ */
+const PATCH_PATH = join(PROJECT_ROOT.replace('app.asar', 'app.asar.unpacked'), 'desktop.patch.yml')
 /** Preferred local checkout when seeding a first-run config; falls back to npx when absent. */
 const CANDIDATE_REPO = '/Users/arozumenko/Development/deepseek-harness'
 

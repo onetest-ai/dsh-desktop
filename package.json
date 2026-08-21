@@ -27,7 +27,8 @@
       "output": "release",
       "buildResources": "build"
     },
-    "asar": false,
+    "asar": true,
+    "asarUnpack": ["desktop.patch.yml", "hooks.json"],
     "files": [
       "dist/**/*",
       "assets/**/*",
