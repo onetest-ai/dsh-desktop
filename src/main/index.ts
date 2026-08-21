@@ -116,7 +116,9 @@ function toggleWindow(): void {
 
 /** Raise a turn-complete notification, but only when the user is looking elsewhere. */
 function onTurnEnd(): void {
-  if (window?.isFocused() === true) return
+  console.log(`[notify] turn-end ping received at ${new Date().toISOString()}`)
+  if (window === undefined || window.isDestroyed()) return
+  if (window.isFocused()) return
   new Notification({ title: 'DeepSeek Harness', body: 'The agent finished its turn.' }).show()
 }
 
