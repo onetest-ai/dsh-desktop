@@ -57,6 +57,11 @@ describe('startServer', () => {
     expect(running.url).toBe('http://127.0.0.1:61234')
   })
 
+  it('resolves with the full URL when the ready line arrives split across chunks', async () => {
+    running = await startServer({ spec: fakeSpec('split', '61235'), timeoutMs: 10_000 })
+    expect(running.url).toBe('http://127.0.0.1:61235')
+  })
+
   it('ignores stdout noise that precedes the ready line', async () => {
     running = await startServer({ spec: fakeSpec('ready'), timeoutMs: 10_000 })
     expect(running.url).toBe('http://127.0.0.1:54321')
