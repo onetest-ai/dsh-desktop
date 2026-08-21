@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadConfig } from './config'
@@ -124,5 +124,20 @@ describe('loadConfig', () => {
 
     expect(existsSync(file)).toBe(true)
     expect(config.harness).toEqual({ kind: 'local', repo: process.cwd() })
+  })
+
+  it('throws instead of seeding when the read failure is not ENOENT, and does not write', () => {
+    // A directory sitting where the file should be fails with EISDIR, not
+    // ENOENT: a deterministic, chmod-independent way to produce a real,
+    // non-absence read error. Seeding over this would destroy whatever the
+    // directory represents instead of reporting the real problem.
+    const dir = tempDir()
+    const file = join(dir, 'desktop.json')
+    mkdirSync(file)
+
+    expect(() => loadConfig(file, process.cwd())).toThrow(/cannot read/)
+    expect(() => loadConfig(file, process.cwd())).toThrow(file)
+    // Still a directory: no seed write ever landed on top of it.
+    expect(statSync(file).isDirectory()).toBe(true)
   })
 })

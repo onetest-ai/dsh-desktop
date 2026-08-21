@@ -15,6 +15,14 @@ describe('configPath', () => {
   it('treats a blank DSH_HOME as unset', () => {
     expect(configPath({ DSH_HOME: '   ' })).toBe(join(homedir(), '.dsh', 'desktop.json'))
   })
+
+  it('uses the untrimmed value of a whitespace-padded DSH_HOME, matching resolveDshHome', () => {
+    // packages/util/home-paths's resolveDshHome trims only to decide whether
+    // DSH_HOME counts as set; the value it then uses is the original,
+    // untrimmed string. configPath must agree, or the two config systems
+    // resolve different paths for the same env var.
+    expect(configPath({ DSH_HOME: '  /custom/home  ' })).toBe('  /custom/home  /desktop.json')
+  })
 })
 
 describe('defaultSource', () => {

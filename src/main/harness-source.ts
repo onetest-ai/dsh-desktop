@@ -34,8 +34,12 @@ const DEFAULT_PACKAGE = '@deepseek-ai/dsh'
  * @returns the config file path.
  */
 export function configPath(env: NodeJS.ProcessEnv): string {
-  const configured = env.DSH_HOME?.trim()
-  const home = configured === undefined || configured === '' ? join(homedir(), HOME_DIR_NAME) : configured
+  const raw = env.DSH_HOME
+  // Matches the harness's own `resolveDshHome` (packages/util/home-paths):
+  // trimming only decides whether the value counts as set; the value used is
+  // the original, untrimmed string.
+  const isSet = raw !== undefined && raw.trim().length > 0
+  const home = isSet ? raw : join(homedir(), HOME_DIR_NAME)
   return join(home, 'desktop.json')
 }
 
@@ -48,8 +52,14 @@ export function defaultSource(candidateRepo: string): HarnessSource {
   let isRepo = false
   try {
     isRepo = statSync(candidateRepo).isDirectory()
-  } catch {
-    // ENOENT: no checkout at that path, so npx is the answer.
+  } catch (error) {
+    // Only ENOENT means "nothing at that path, so npx is the answer": any
+    // other error (e.g. EACCES on an ancestor) means the presence of a
+    // checkout is genuinely unknown, not that it is absent, so it is
+    // rethrown rather than silently steered into a wrong default.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(`dsh-desktop: cannot check ${candidateRepo} for a harness checkout`, { cause: error })
+    }
     isRepo = false
   }
   return isRepo

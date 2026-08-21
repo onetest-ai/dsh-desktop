@@ -24,8 +24,16 @@ export function loadConfig(filePath: string, candidateRepo: string): DesktopConf
   let raw: string
   try {
     raw = readFileSync(filePath, 'utf8')
-  } catch {
-    // ENOENT on first run: seed a config rather than failing to launch.
+  } catch (error) {
+    // Only ENOENT (first run: nothing at filePath yet) is safe to treat as
+    // "seed a default config". Anything else — EACCES, EISDIR from a
+    // directory sitting where the file should be, etc. — means a real config
+    // may already exist and is merely unreadable right now; seeding over it
+    // would silently destroy the user's settings, so it is rethrown loud
+    // instead.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(`dsh-desktop: cannot read ${filePath}`, { cause: error })
+    }
     const seeded: DesktopConfig = {
       harness: defaultSource(candidateRepo),
       notifyPort: DEFAULT_NOTIFY_PORT,
