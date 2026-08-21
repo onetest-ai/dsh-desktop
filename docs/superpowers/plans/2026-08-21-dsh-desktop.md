@@ -109,6 +109,7 @@ export default defineConfig({
 node_modules/
 dist/
 release/
+.superpowers/
 ```
 
 `config.json`:
@@ -656,7 +657,7 @@ function stopGroup(child: ChildProcess): Promise<void> {
 - [ ] **Step 5: Run the server tests to verify they pass**
 
 Run: `npx vitest run src/main/server.spec.ts`
-Expected: PASS, 6 tests.
+Expected: PASS, 7 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -748,7 +749,7 @@ Expected: FAIL — the grandchild is still alive. This proves the test detects t
 Revert `stopGroup` to the `process.kill(-pid, ...)` implementation from Task 2.
 
 Run: `npx vitest run src/main/server.spec.ts`
-Expected: PASS, 9 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 4: Commit**
 
@@ -921,11 +922,6 @@ let window: BrowserWindow | undefined
 let server: ServerHandle | undefined
 let status: ServerStatus = 'starting'
 
-/** The current server status, for the tray. */
-export function serverStatus(): ServerStatus {
-  return status
-}
-
 async function boot(): Promise<void> {
   if (window === undefined) return
 
@@ -1043,7 +1039,6 @@ python3 - <<'PY'
 import struct, zlib, os
 
 def png(path, rgba, size=32):
-    raw = b''.join(b'\x00' + bytes(rgba(x, y) for x in range(size) for _ in range(0)) for y in range(0))
     rows = []
     for y in range(size):
         row = b'\x00'
@@ -1380,7 +1375,9 @@ Expected: PASS, 3 tests.
 
 - [ ] **Step 5: Create the hook config**
 
-`hooks.json` — note the `|| true`, which guarantees exit 0 even when the app is not listening:
+`hooks.json` — note the `|| true`, which guarantees exit 0 even when the app is not listening.
+
+**The port appears in two files.** `config.json`'s `notifyPort` and the URL below are the same value, and nothing enforces that. The harness reads `hooks.json` directly, so this app cannot generate it without adding a build step for one integer. If you ever change `notifyPort`, change this URL in the same edit.
 
 ```json
 {
