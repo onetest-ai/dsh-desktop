@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { loadConfig, type DesktopConfig } from './config'
 import { preflight } from './preflight'
 import { dshWebCommand, startServer, type ServerHandle } from './server'
+import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
 import { createWindow, installMenu, showError } from './window'
 import type { ServerStatus } from './status'
@@ -38,7 +39,7 @@ function setStatus(next: ServerStatus): void {
 }
 
 async function boot(): Promise<void> {
-  if (window === undefined) return
+  if (window === undefined || window.isDestroyed()) return
 
   let config: DesktopConfig
   try {
@@ -66,7 +67,7 @@ async function boot(): Promise<void> {
       onExit: (code, tail) => {
         setStatus('failed')
         server = undefined
-        if (window !== undefined) {
+        if (window !== undefined && !window.isDestroyed()) {
           showError(window, `The harness exited (code ${String(code)})`, tail || 'No output captured.')
         }
       },
@@ -80,10 +81,15 @@ async function boot(): Promise<void> {
 
   pendingStop = undefined
   setStatus('running')
-  void window.loadURL(server.url)
+  if (window !== undefined && !window.isDestroyed()) void window.loadURL(server.url)
 }
 
-/** Stop the current server (if any) and boot a fresh one. */
+/**
+ * Stop the current server (if any) and boot a fresh one.
+ * Wrapped in `singleFlight` at its call site: two "Restart harness" clicks in
+ * quick succession must not race on the shared `server`/`pendingStop` state
+ * and spawn two harness children, one of which `before-quit` could not find.
+ */
 async function restart(): Promise<void> {
   const stopping = server
   server = undefined
@@ -92,9 +98,12 @@ async function restart(): Promise<void> {
   await boot()
 }
 
+/** Serialized entry point for the tray's "Restart harness" action; see `restart`. */
+const restartOnce = singleFlight(restart)
+
 /** Show the window if hidden or unfocused, otherwise hide it. */
 function toggleWindow(): void {
-  if (window === undefined) return
+  if (window === undefined || window.isDestroyed()) return
   if (window.isVisible() && window.isFocused()) {
     window.hide()
     return
@@ -128,9 +137,12 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(async () => {
     installMenu()
     window = createWindow()
+    window.on('closed', () => {
+      window = undefined
+    })
     tray = createTray({
       toggleWindow,
-      restart: () => void restart(),
+      restart: () => void restartOnce(),
       quit: () => app.quit(),
     })
     const hotkey = safeHotkey()
