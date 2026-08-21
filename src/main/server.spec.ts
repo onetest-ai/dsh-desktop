@@ -176,6 +176,49 @@ describe('stop', () => {
     expect(isAlive(grandchildPid)).toBe(false)
   })
 
+  it('resolves only after the child is really gone, even when SIGTERM is ignored', async () => {
+    const exits: number[] = []
+    const handle = await startServer({
+      spec: fakeSpec('stubborn'),
+      timeoutMs: 10_000,
+      onExit: (code) => exits.push(code ?? -1),
+    })
+    running = handle
+
+    await handle.stop()
+    running = undefined
+
+    // A stop that resolved at the SIGKILL rather than at the exit would let this
+    // child's onExit land later, on top of whatever replaced it.
+    expect(exits.length).toBe(1)
+  })
+
+  it('reaps grandchildren even when the direct child has already exited', async () => {
+    let grandchildPid = 0
+    const exited = { done: false }
+    const handle = await startServer({
+      spec: fakeSpec('exiting'),
+      timeoutMs: 10_000,
+      onExit: () => {
+        exited.done = true
+      },
+      onStdoutLine: (line) => {
+        const match = /^grandchild: (\d+)$/.exec(line.trim())
+        if (match !== null) grandchildPid = Number(match[1])
+      },
+    })
+    running = handle
+
+    while (!exited.done) await new Promise((r) => setTimeout(r, 50))
+    expect(isAlive(grandchildPid)).toBe(true)
+
+    await handle.stop()
+    running = undefined
+    await new Promise((r) => setTimeout(r, 500))
+
+    expect(isAlive(grandchildPid)).toBe(false)
+  })
+
   it('is safe to call twice', async () => {
     const handle = await startServer({ spec: fakeSpec('ready'), timeoutMs: 10_000 })
     running = handle

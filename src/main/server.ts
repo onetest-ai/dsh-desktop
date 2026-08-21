@@ -31,6 +31,13 @@ const STDERR_TAIL_LIMIT = 4000
 const KILL_GRACE_MS = 3000
 
 /**
+ * How long `stopGroup` waits for the exit event after SIGKILL. SIGKILL cannot
+ * be caught, so the event is imminent; the bound exists only so the quit path
+ * can never hang on a pathological child.
+ */
+const REAP_TIMEOUT_MS = 1000
+
+/**
  * Decide which binary to spawn for a launcher.
  *
  * A packaged macOS app launched from Finder inherits a minimal PATH that has
@@ -142,37 +149,61 @@ export function startServer(options: StartOptions): Promise<ServerHandle> {
 }
 
 /**
- * Terminate the child's entire process group, escalating to SIGKILL.
+ * Signal an entire process group, tolerating a group that has already gone.
+ * @param pid - the group leader's pid, signalled as `-pid`.
+ * @param signal - the signal to deliver.
+ */
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal)
+  } catch {
+    // ESRCH: the group is already gone, which is the outcome the caller wanted.
+  }
+}
+
+/**
+ * Terminate the child's entire process group, escalating to SIGKILL, and
+ * resolve only once the direct child has actually exited.
+ *
+ * Resolving at the signal rather than at the exit would let a caller treat the
+ * child as gone while its `'exit'` (and therefore `onExit`) is still pending,
+ * so a stop-then-start sequence could see the outgoing child's exit land after
+ * its replacement was already running.
+ *
+ * When the direct child has already exited, the group is still signalled: the
+ * harness's node-pty grandchildren stay in that group and nothing else reaps
+ * them. SIGKILL is used directly there because no surviving parent remains to
+ * coordinate a graceful stop. The residual risk is the usual one for
+ * group-wide signals — the pid could in principle have been recycled after the
+ * child was reaped — which is why the live path signals before that can happen.
  * @param child - the detached child process.
+ * @returns a promise that settles once the child is gone.
  */
 function stopGroup(child: ChildProcess): Promise<void> {
+  const pid = child.pid
+  if (pid === undefined) return Promise.resolve()
+
+  if (child.exitCode !== null || child.signalCode !== null) {
+    signalGroup(pid, 'SIGKILL')
+    return Promise.resolve()
+  }
+
   return new Promise<void>((resolve) => {
-    const pid = child.pid
-    if (pid === undefined || child.exitCode !== null || child.signalCode !== null) {
-      resolve()
-      return
-    }
+    let escalation: NodeJS.Timeout | undefined
+    let reap: NodeJS.Timeout | undefined
 
     const finish = (): void => {
       clearTimeout(escalation)
+      clearTimeout(reap)
       resolve()
     }
     child.once('exit', finish)
 
-    const escalation = setTimeout(() => {
-      try {
-        process.kill(-pid, 'SIGKILL')
-      } catch {
-        // ESRCH: the group is already gone, which is the outcome we wanted.
-      }
-      resolve()
+    escalation = setTimeout(() => {
+      signalGroup(pid, 'SIGKILL')
+      reap = setTimeout(finish, REAP_TIMEOUT_MS)
     }, KILL_GRACE_MS)
 
-    try {
-      process.kill(-pid, 'SIGTERM')
-    } catch {
-      // ESRCH: the group exited between the liveness check and this signal.
-      finish()
-    }
+    signalGroup(pid, 'SIGTERM')
   })
 }
