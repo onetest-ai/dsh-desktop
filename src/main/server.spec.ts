@@ -79,3 +79,55 @@ describe('startServer', () => {
     )
   })
 })
+
+/** Whether a pid is still alive. Signal 0 performs the existence check only. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    // ESRCH means no such process, which is exactly what the caller is asking about.
+    return false
+  }
+}
+
+describe('stop', () => {
+  it('kills grandchildren, not just the direct child', async () => {
+    let grandchildPid = 0
+
+    const handle = await startServer({
+      spec: fakeSpec('grandchild'),
+      timeoutMs: 10_000,
+      onStdoutLine: (line) => {
+        const match = /^grandchild: (\d+)$/.exec(line.trim())
+        if (match !== null) grandchildPid = Number(match[1])
+      },
+    })
+
+    expect(grandchildPid).toBeGreaterThan(0)
+    expect(isAlive(grandchildPid)).toBe(true)
+
+    await handle.stop()
+    await new Promise((r) => setTimeout(r, 1000))
+
+    expect(isAlive(grandchildPid)).toBe(false)
+  })
+
+  it('is safe to call twice', async () => {
+    const handle = await startServer({ spec: fakeSpec('ready'), timeoutMs: 10_000 })
+    await handle.stop()
+    await expect(handle.stop()).resolves.toBeUndefined()
+  })
+
+  it('reports an exit through onExit once the server was ready', async () => {
+    const exits: Array<{ code: number | null; tail: string }> = []
+    const handle = await startServer({
+      spec: fakeSpec('ready'),
+      timeoutMs: 10_000,
+      onExit: (code, tail) => exits.push({ code, tail }),
+    })
+    await handle.stop()
+    await new Promise((r) => setTimeout(r, 500))
+    expect(exits.length).toBe(1)
+  })
+})
