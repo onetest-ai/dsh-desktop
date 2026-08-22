@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { configPath, managedBin, managedDir, spawnFor } from './harness-source'
 
 describe('configPath', () => {
@@ -53,6 +53,60 @@ describe('managedDir', () => {
     const dir = managedDir(home, '@deepseek-ai/dsh', 'latest')
     expect(dir.startsWith(join(home, 'runtimes'))).toBe(true)
   })
+
+  it('keeps a ".." version strictly inside the runtimes directory rather than collapsing into it', () => {
+    // `path.join`/`path.normalize` treat a literal `..` path *component* as
+    // "go up a directory", collapsing `runtimes/a/..` straight back down to
+    // `runtimes` itself — a real directory, but not a properly nested one, so
+    // a bare equality/`startsWith` check on the prefix alone cannot tell
+    // "collapsed onto runtimes" from "nested under runtimes".
+    const dir = managedDir(home, 'a', '..')
+    const runtimesDir = join(home, 'runtimes')
+    expect(dir).not.toBe(runtimesDir)
+    const rel = relative(runtimesDir, dir)
+    expect(rel.startsWith('..')).toBe(false)
+    expect(rel).not.toBe('')
+  })
+
+  it('gives two distinct package/version pairs that both end in a literal ".." different directories', () => {
+    // A version of exactly `..` cancels out the package segment right before
+    // it (`runtimes/<pkg>/..` normalizes to `runtimes`), so under naive
+    // per-argument `encodeURIComponent` *every* package sharing that version
+    // collides on the same directory regardless of its own name.
+    const a = managedDir(home, 'a', '..')
+    const z = managedDir(home, 'z', '..')
+    expect(a).not.toBe(z)
+  })
+
+  it('does not let a traversal-shaped version collide with a genuine package/version pair', () => {
+    // `encodeURIComponent` does escape an embedded `/`, so this particular
+    // pair does not actually collide even under the naive derivation — kept
+    // as a regression guard for the general shape of the concern, not a
+    // vacuity proof (see the ".." pair above for that).
+    const traversal = managedDir(home, 'a', '../b/1.0.0')
+    const genuine = managedDir(home, 'b', '1.0.0')
+    expect(traversal).not.toBe(genuine)
+  })
+
+  it.each([['..'], ['../x'], ['a/b'], ['%2e%2e'], ['']])(
+    'never produces a "." or ".." segment, or one containing a slash, for hostile input %j used as both package and version',
+    (hostile) => {
+      const dir = managedDir(home, hostile, hostile)
+      const runtimesDir = join(home, 'runtimes')
+      const rel = relative(runtimesDir, dir)
+      // Escaping above `runtimes` shows up as a `..`-led relative path;
+      // collapsing onto `runtimes` itself shows up as an empty one. Neither
+      // is acceptable, and every real segment in between must be an ordinary
+      // component, never `.`, `..`, or something containing a `/`.
+      expect(rel.startsWith('..')).toBe(false)
+      expect(rel).not.toBe('')
+      for (const segment of rel.split('/')) {
+        expect(segment).not.toBe('.')
+        expect(segment).not.toBe('..')
+        expect(segment).not.toContain('/')
+      }
+    },
+  )
 })
 
 describe('managedBin', () => {

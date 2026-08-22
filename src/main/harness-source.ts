@@ -57,24 +57,56 @@ export function configPath(env: NodeJS.ProcessEnv): string {
 }
 
 /**
+ * Percent-encode a string into a single path segment that cannot be `.`,
+ * `..`, empty, or contain a `/`.
+ *
+ * `encodeURIComponent` alone is not enough: it leaves `.` unescaped (an
+ * unreserved character), so an input of `..` (or a version like
+ * `../b/1.0.0`, whose slashes it escapes but whose dots it does not) survives
+ * as a literal `..` segment that `path.join` then resolves as "go up a
+ * directory" — a traversal out of `runtimes/`, and a collision between
+ * distinct inputs that both normalize to the same real directory.
+ *
+ * The extra `.` → `%2E` substitution closes that gap. `encodeURIComponent`
+ * never itself emits the literal substring `%2E` — the only byte whose hex
+ * pair is `2E` is `.`, which is unreserved and therefore left unescaped, so
+ * `%2E` cannot appear in its output for any input — so the substitution
+ * cannot collide with an already-encoded triplet, and the resulting map from
+ * input string to output segment stays injective (reversible by decoding
+ * `%2E` back to `.` and then `decodeURIComponent`ing). After substitution the
+ * segment contains only unreserved characters (`A-Za-z0-9-_~`, `.` never
+ * bare) and `%XX` triplets, so it can never equal `.` or `..`, be empty, or
+ * contain a `/` — for any input, hostile or not. An empty input maps to the
+ * literal string `%00`: not a genuine null byte, just three ordinary
+ * characters that are unreachable from any encoded input (padding the
+ * mapping cleanly rather than colliding it with anything).
+ * @param value - the string to place into one path segment.
+ * @returns a segment safe to `path.join` without traversal or collision risk.
+ */
+function encodeSegment(value: string): string {
+  const encoded = encodeURIComponent(value).replaceAll('.', '%2E')
+  return encoded === '' ? '%00' : encoded
+}
+
+/**
  * Directory holding one installed version of a managed package.
  *
  * The package name contains a slash (`@deepseek-ai/dsh`), which cannot go
  * into a single path segment raw, and a naively substituted separator (e.g.
  * `/` → `-`) could let two distinct package names collide on the same
  * directory (`@a/b` and `@a-b`). Each of `package` and `version` is instead
- * `encodeURIComponent`-escaped into its own path segment: percent-encoding
- * is injective (distinct inputs never produce equal output) and escapes `/`
- * to `%2F`, so no segment can itself contain a path separator. Nesting the
- * two segments (rather than joining them into one with a hand-chosen
- * delimiter) sidesteps needing that delimiter to be unambiguous too.
+ * run through `encodeSegment` into its own path segment — see there for why
+ * that is traversal-safe and injective for any input, including a
+ * dot-segment like `..` or `../b/1.0.0`. Nesting the two segments (rather
+ * than joining them into one with a hand-chosen delimiter) sidesteps needing
+ * that delimiter to be unambiguous too.
  * @param dshHome - the resolved `$DSH_HOME` directory.
  * @param pkg - the package name, e.g. `@deepseek-ai/dsh`.
  * @param version - the installed version or dist-tag.
  * @returns the directory an `npm install --prefix` for this package/version targets.
  */
 export function managedDir(dshHome: string, pkg: string, version: string): string {
-  return join(dshHome, RUNTIMES_DIR_NAME, encodeURIComponent(pkg), encodeURIComponent(version))
+  return join(dshHome, RUNTIMES_DIR_NAME, encodeSegment(pkg), encodeSegment(version))
 }
 
 /**

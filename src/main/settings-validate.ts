@@ -29,6 +29,21 @@ const DEFAULT_PACKAGE = '@deepseek-ai/dsh'
 /** Default dist-tag when no version is given. */
 const DEFAULT_VERSION = 'latest'
 
+/**
+ * Shape of a valid (optionally scoped) npm package name.
+ * Deliberately narrower than npm's full grammar: it exists to keep this
+ * free-text field from reaching `managedDir` as a path-traversal or
+ * multi-segment string, not to validate every legal npm name.
+ */
+const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
+
+/**
+ * Shape of a valid version or dist-tag (e.g. `1.2.3`, `0.1.1-rc.2`, `latest`).
+ * Like `PACKAGE_NAME_PATTERN`, this exists to keep the field from reaching
+ * `managedDir` as a traversal or multi-segment string.
+ */
+const VERSION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.+-]*$/
+
 function isDirectory(path: string): boolean {
   try {
     return statSync(path).isDirectory()
@@ -63,15 +78,23 @@ export function validateSettings(form: SettingsForm): ValidationResult {
   } else {
     const pkg = form.package.trim()
     const workspace = form.workspace.trim()
-    if (pkg === '') errors.package = 'A package name is required.'
+    const version = form.version.trim() === '' ? DEFAULT_VERSION : form.version.trim()
+    if (pkg === '') {
+      errors.package = 'A package name is required.'
+    } else if (!PACKAGE_NAME_PATTERN.test(pkg)) {
+      errors.package = 'That does not look like an npm package name.'
+    }
+    if (!VERSION_PATTERN.test(version)) {
+      errors.version = 'That does not look like a version or dist-tag.'
+    }
     if (workspace !== '' && !isDirectory(workspace)) {
       errors.workspace = 'That path is not a folder on this machine.'
     }
-    if (errors.package === undefined && errors.workspace === undefined) {
+    if (errors.package === undefined && errors.version === undefined && errors.workspace === undefined) {
       harness = {
         kind: 'managed',
         package: pkg,
-        version: form.version.trim() === '' ? DEFAULT_VERSION : form.version.trim(),
+        version,
         workspace: workspace === '' ? homedir() : workspace,
       }
     }

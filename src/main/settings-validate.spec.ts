@@ -98,6 +98,18 @@ describe('validateSettings — managed source', () => {
     const result = validateSettings(form({ kind: 'managed', repo: '/definitely/not/here' }))
     expect(result.ok).toBe(true)
   })
+
+  it('rejects a traversal-shaped version', () => {
+    const result = validateSettings(form({ kind: 'managed', version: '../../etc' }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.version).toMatch(/version|dist-tag/i)
+  })
+
+  it('rejects a traversal-shaped package name', () => {
+    const result = validateSettings(form({ kind: 'managed', package: '../../etc' }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.package).toMatch(/package name/i)
+  })
 })
 
 describe('validateSettings — port and hotkey', () => {

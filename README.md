@@ -10,7 +10,7 @@ It is a **shell, not a fork**: it never modifies the harness. Point it at a chec
 - Node 22 or newer
 - One of:
   - **a local harness checkout** with its frontend built (`pnpm run build:web`), plus `pnpm` on your `PATH`, or
-  - **npx**, to run the published `@deepseek-ai/dsh` package instead
+  - **a managed install**, to run the published `@deepseek-ai/dsh` package instead, once it has been installed under `$DSH_HOME`
 
 ## Running it
 
@@ -40,7 +40,7 @@ The build is **unsigned** (`identity: null`). On first launch macOS may refuse t
 There is no configuration baked into the app, so the first launch opens **Settings** instead of starting a harness. Choose where the harness runs from:
 
 - **A local checkout** — pick the folder containing your `deepseek-harness` clone. Its frontend must already be built; if it is not, the app tells you to run `pnpm run build:web` there.
-- **The published package** — the app runs `@deepseek-ai/dsh` through `npx` instead, with no checkout required. See the caveat below.
+- **The published package** — the app runs `@deepseek-ai/dsh` from a one-time install under `$DSH_HOME` instead, with no checkout required. See the caveat below.
 
 Save, and the harness starts. Closing Settings without saving on a first run quits the app, since there is nothing yet for it to run.
 
@@ -50,7 +50,7 @@ Reopen Settings any time from **File → Settings…** (⌘,), the application m
 
 | Setting | Effect on save |
 |---|---|
-| Harness source, `pnpm`/`npx` path | The harness child is restarted |
+| Harness source, `pnpm`/`npm` path | The harness child is restarted |
 | Notification port | The harness is restarted and the listener rebinds |
 | Show/hide shortcut | Re-registered in place |
 
@@ -66,15 +66,15 @@ Settings are stored at `~/.dsh/desktop.json`, beside the harness's own state. Th
 }
 ```
 
-For npx mode, `harness` takes this form instead:
+For a managed source, `harness` takes this form instead:
 
 ```json
-{ "kind": "npx", "package": "@deepseek-ai/dsh", "version": "latest", "workspace": "/path/to/work/in" }
+{ "kind": "managed", "package": "@deepseek-ai/dsh", "version": "latest", "workspace": "/path/to/work/in" }
 ```
 
-`pnpmPath` and `npxPath` are optional. Set them when a launch from Finder cannot find the binary — a Finder launch inherits a minimal `PATH` with no Homebrew or Corepack shim, so a packaged app often needs the absolute path from `which pnpm`. Running from a terminal usually does not.
+`pnpmPath` and `npmPath` are optional. Set them when a launch from Finder cannot find the binary — a Finder launch inherits a minimal `PATH` with no Homebrew or Corepack shim, so a packaged app often needs the absolute path from `which pnpm` or `which npm`. Running from a terminal usually does not.
 
-Setting the path is enough on its own: under nvm, Homebrew, Volta, and similar layouts, an installed `pnpm`/`npx` is itself a script that needs `node` on `PATH` to run (a `#!/usr/bin/env node` shebang), and a Finder launch has no `node` on `PATH` either. The app handles this for you — when a launcher resolves to an absolute path, it prepends that path's own directory to the *spawned harness's* `PATH` (not the app's), since `node` normally lives right beside `pnpm`/`npx` in the same directory. You do not need to add anything to your own shell `PATH` or otherwise make `node` reachable for this to work.
+Setting the path is enough on its own, but which directory the app derives `node` from differs by source. For a local source, an installed `pnpm` is itself a script that needs `node` on `PATH` to run (a `#!/usr/bin/env node` shebang, common under nvm, Homebrew, Volta, and similar layouts), and `node` normally lives right beside `pnpm` — so the app prepends `pnpm`'s own directory to the *spawned harness's* `PATH` (not the app's). For a managed source the spawned binary lives under `$DSH_HOME/runtimes`, where no `node` was installed, so that trick would find nothing beside it; the app instead prepends the resolved `npm` binary's own directory, since `node` sits beside `npm` in every layout this app supports. Either way, you do not need to add anything to your own shell `PATH` or otherwise make `node` reachable for this to work.
 
 ## Tray, shortcut, and notifications
 
@@ -105,7 +105,7 @@ Design notes and the decisions taken while building this live in [`docs/`](docs/
 
 ## Known limitations
 
-- **npx mode has never successfully booted.** The command is correct and unit-tested, but a cold `npx` install of the harness pulls 62 dependencies including native modules, and it did not finish in testing. Local-checkout mode is the supported path today.
+- **Managed mode has no installer yet.** The spawn path is unit-tested, but nothing yet installs the package under `$DSH_HOME/runtimes` — a prior `npx`-per-launch approach pulled 62 dependencies on every start and never once completed. Local-checkout mode is the supported path today.
 - **`dsh://` links only focus the app.** The harness Web UI has no per-session URLs, so there is no address to deep-link to.
 - **Unsigned and macOS-only.** No Windows or Linux packaging target is configured.
 - The tray icon, menus, and shortcut have not been verified visually by an automated test — only their behavior in code.
