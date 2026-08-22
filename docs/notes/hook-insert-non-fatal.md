@@ -97,3 +97,72 @@ introduced or that alters `profiles/`'s meaning.
 `npm run pack && npm run test:smoke` also passed against the packaged app
 (real `~/.dsh`, bridge loadable), confirming the shipped build still boots
 and leaves no orphaned processes.
+
+## Follow-up: the walk missed peer dependencies
+
+Review caught that the reproduced failure — `Cannot find package
+'@deepseek-ai/dsh-hook-protocol'` — names a package the bridge declares only
+under `peerDependencies`, not `dependencies`. The original walk checked only
+`dependencies`, so it reported the bridge as loadable and inserted it
+unconditionally: inert against its own repro case.
+
+### Fix
+
+`checkPackageLoadable` now also resolves every **non-optional**
+`peerDependencies` entry (skipping any name listed in
+`peerDependenciesMeta[name].optional: true`) from the package's own
+directory, using the same `require.resolve` call as `dependencies`.
+
+**Which peers must resolve, and why that is still the right bar even though
+some peers are host-provided**: a required peer that cannot be found is
+treated as a hard failure, even though several of the bridge's peers (e.g.
+`@deepseek-ai/cordis`) are packages the harness host supplies rather than
+ones the bridge's own install step places directly in its `node_modules`.
+This is still correct because `require.resolve`'s search walks up every
+ancestor `node_modules` starting from the package's own directory — a peer
+the profile's dependency tree hoists to a shared, higher `node_modules`
+(exactly how the profile installs these host-provided packages) still
+resolves through that walk. A peer that fails to resolve by that walk is one
+nothing in the profile provides at any level, which is exactly the break
+this probe exists to catch. An *optional* peer is different in kind: its
+absence is a normal, healthy install, and failing it would silently disable
+notifications on every install that omits it — so it is excluded from the
+required set via `peerDependenciesMeta`.
+
+**Depth**: kept at depth-1 (the bridge's own declared dependencies/peers, not
+their transitive dependencies), documented as a deliberate limit rather than
+extended to a recursive walk. The reproduced failure, and the class of
+failures a hook bridge can introduce on its own, are one hop from its own
+`package.json`. A break two hops down is a mis-published dependency of a
+dependency — outside the bridge's control, and one that would in practice
+also break the harness's own boot more broadly, so it is not the primary
+risk this probe targets. A full transitive walk would also make this
+boot-time check scale with the whole install rather than with the one
+package the overlay is deciding whether to mount.
+
+### Tests
+
+Added `describe('checkPackageLoadable', …)` cases against real,
+constructed `node_modules` fixtures on disk (`buildFixture` in
+`runtime-files.spec.ts`), not the injected stub probe used by the
+`writeRuntimeFiles` tests:
+
+- a required peer absent → not loadable, reason names the peer
+- an optional peer absent → loadable
+- the package plus every declared dependency and required peer present →
+  loadable
+
+**Vacuity check**: the walk was temporarily reverted to `dependencies` only
+(peers dropped). Re-running the suite failed exactly the "reports the
+missing peer by name…" test (`expected undefined to be defined`), with the
+other 11 tests still passing — confirming that test genuinely exercises the
+peer branch. The walk was then restored and the suite reconfirmed green
+(12/12 in this file, 216/216 overall).
+
+### Re-verification
+
+`checkPackageLoadable('@deepseek-ai/dsh-hooks-claude-code', '~/.dsh/profiles/web')`
+against the real, corrected walk still reports `undefined` (loadable) on
+this machine — the peer `@deepseek-ai/dsh-hook-protocol` is present there
+(the earlier pnpm store-linked-layout failure was already resolved
+separately). `grep -rn "/Users/" src/ tests/` returned nothing.

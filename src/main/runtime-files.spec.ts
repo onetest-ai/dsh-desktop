@@ -1,8 +1,51 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checkPackageLoadable, hooksConfig, patchOverlay, writeRuntimeFiles, type LoadabilityProbe } from './runtime-files'
+
+/**
+ * Build a fixture `node_modules` tree on disk so `checkPackageLoadable` can be
+ * exercised against real filesystem resolution rather than a stubbed probe.
+ *
+ * `@fixture/main` always exists, declaring `dependencies` and
+ * `peerDependencies` (with an optional `peerDependenciesMeta`) as given.
+ * Each name in `presentPackages` also gets a real, resolvable package next to
+ * it; a declared dependency or peer left out of that list is absent, exactly
+ * like a broken or partial install.
+ * @param manifestExtra - the `dependencies`/`peerDependencies`/`peerDependenciesMeta` fields for `@fixture/main`.
+ * @param presentPackages - names (besides `@fixture/main` itself) to actually create.
+ * @returns the directory to resolve `@fixture/main` from.
+ */
+function buildFixture(
+  manifestExtra: {
+    dependencies?: Record<string, string>
+    peerDependencies?: Record<string, string>
+    peerDependenciesMeta?: Record<string, { optional?: boolean }>
+  },
+  presentPackages: string[],
+): string {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-desktop-fixture-'))
+  const modules = join(root, 'node_modules', '@fixture')
+  mkdirSync(modules, { recursive: true })
+
+  const mainDir = join(modules, 'main')
+  mkdirSync(join(mainDir, 'lib'), { recursive: true })
+  writeFileSync(
+    join(mainDir, 'package.json'),
+    JSON.stringify({ name: '@fixture/main', main: 'lib/index.js', ...manifestExtra }),
+  )
+  writeFileSync(join(mainDir, 'lib', 'index.js'), 'module.exports = {}\n')
+
+  for (const name of presentPackages) {
+    const dir = join(modules, name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `@fixture/${name}`, main: 'index.js' }))
+    writeFileSync(join(dir, 'index.js'), 'module.exports = {}\n')
+  }
+
+  return root
+}
 
 /** Always reports the bridge as loadable, regardless of `fromDirectory`. */
 const alwaysLoadable: LoadabilityProbe = () => undefined
@@ -53,6 +96,40 @@ describe('checkPackageLoadable', () => {
     const directory = mkdtempSync(join(tmpdir(), 'dsh-desktop-'))
     const reason = checkPackageLoadable('@deepseek-ai/dsh-hooks-claude-code', directory)
     expect(reason).toBeDefined()
+  })
+
+  // Real-filesystem fixtures, not a stubbed probe: this is the reproduced bug
+  // (the hook bridge's `dsh-hook-protocol` dependency is a peer, not a plain
+  // dependency), so the walk over `manifest.dependencies` alone must not be
+  // the thing exercised here.
+
+  it('reports the missing peer by name when a required peer dependency is absent', () => {
+    const root = buildFixture({ peerDependencies: { '@fixture/peer': '*' } }, [])
+    const reason = checkPackageLoadable('@fixture/main', root)
+    expect(reason).toBeDefined()
+    expect(reason).toContain('@fixture/peer')
+  })
+
+  it('is loadable when an optional peer dependency is absent', () => {
+    const root = buildFixture(
+      {
+        peerDependencies: { '@fixture/peer': '*' },
+        peerDependenciesMeta: { '@fixture/peer': { optional: true } },
+      },
+      [],
+    )
+    expect(checkPackageLoadable('@fixture/main', root)).toBeUndefined()
+  })
+
+  it('is loadable when the package and every declared dependency and required peer resolve', () => {
+    const root = buildFixture(
+      {
+        dependencies: { '@fixture/dep': '*' },
+        peerDependencies: { '@fixture/peer': '*' },
+      },
+      ['dep', 'peer'],
+    )
+    expect(checkPackageLoadable('@fixture/main', root)).toBeUndefined()
   })
 })
 

@@ -32,16 +32,50 @@ export const HOOKS_PACKAGE = '@deepseek-ai/dsh-hooks-claude-code'
  */
 export type LoadabilityProbe = (packageName: string, fromDirectory: string) => string | undefined
 
+/** The parts of a `package.json` the loadability walk reads. */
+interface Manifest {
+  dependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
+}
+
 /**
  * Whether a package resolves — together with everything its own `package.json`
- * declares as a runtime dependency — from a directory. Never throws.
+ * declares as a required runtime dependency — from a directory. Never throws.
  *
  * `require.resolve` alone is not enough: it follows the package's own
  * `exports`/`main` field to an entry file, but does not execute that file, so
  * a dependency the entry file imports at runtime — and that turns out to be
- * missing — never surfaces. Each of the package's declared dependencies is
- * therefore resolved too, from the package's own directory, without ever
- * executing the package's code.
+ * missing — never surfaces (this is exactly how the bridge failed in
+ * practice: it imports `@deepseek-ai/dsh-hook-protocol`, declared only as a
+ * peer dependency, not as `dependencies`). Both `dependencies` and
+ * non-optional `peerDependencies` are therefore resolved too, from the
+ * package's own directory, without ever executing the package's code.
+ *
+ * A peer marked `peerDependenciesMeta[name].optional` is skipped: an absent
+ * optional peer is a normal, healthy install, and treating it as a failure
+ * would disable notifications on every install of the bridge that omits it.
+ * A *required* peer that is absent is treated as a hard failure even though
+ * some required peers (e.g. `@deepseek-ai/cordis`) are ones the harness host
+ * itself provides at runtime rather than ones the bridge's own install step
+ * places in its `node_modules`: `require.resolve`'s search walks up through
+ * every ancestor `node_modules` starting at the package's own directory, so a
+ * peer the profile's own dependency tree hoists to a shared, higher
+ * `node_modules` (which is how the profile installs these host-provided
+ * packages) still resolves from there. A peer that cannot be found by that
+ * walk is one nothing in the profile provides, at any level — which is
+ * exactly the class of break this probe exists to catch.
+ *
+ * The walk covers one level: the bridge's own declared dependencies, not
+ * their transitive dependencies. The reproduced failure, and the class of
+ * failures a hook bridge can introduce on its own, are one hop from the
+ * entry point — the bridge's own `package.json`. A break two hops down is a
+ * mis-published dependency of a dependency, which is outside the bridge's
+ * control and would, in practice, also break the harness's own boot far more
+ * broadly, so it is not the primary risk this probe is guarding against; a
+ * full transitive walk would also make this boot-time check's cost scale
+ * with the whole install rather than with the one package this overlay
+ * decides whether to mount.
  * @param packageName - the package to check, e.g. `@deepseek-ai/dsh-hooks-claude-code`.
  * @param fromDirectory - directory to resolve as if importing from a file in it.
  * @returns undefined when loadable, otherwise the reason it is not.
@@ -75,9 +109,12 @@ export function checkPackageLoadable(packageName: string, fromDirectory: string)
       return `${packageName}'s package.json could not be located from its resolved entry ${entry}`
     }
 
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { dependencies?: Record<string, string> }
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Manifest
     const packageDir = dirname(manifestPath)
-    for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+    const requiredPeers = Object.keys(manifest.peerDependencies ?? {}).filter(
+      (name) => manifest.peerDependenciesMeta?.[name]?.optional !== true,
+    )
+    for (const dependency of [...Object.keys(manifest.dependencies ?? {}), ...requiredPeers]) {
       try {
         resolve(dependency, { paths: [packageDir] })
       } catch (error) {
