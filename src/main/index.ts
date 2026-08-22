@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, globalShortcut, Notification } from 'electron'
 import { join } from 'node:path'
 import { loadConfig, writeConfig, type DesktopConfig } from './config'
-import { configPath } from './harness-source'
+import { configPath, type HarnessSource } from './harness-source'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { preflight } from './preflight'
 import { writeRuntimeFiles } from './runtime-files'
@@ -26,11 +26,35 @@ let notifier: NotifyServer | undefined
 /** A deep link that arrived before the window existed; see the `open-url` handler. */
 let deepLinkPending = false
 
+/**
+ * Whether two harness sources differ, compared field by field so a config
+ * file with reordered (but identical) keys never looks like a change.
+ * The `default` branch makes the comparison fail to compile if `HarnessSource`
+ * grows a new kind without a matching case here.
+ */
+function harnessSourceChanged(previous: HarnessSource, next: HarnessSource): boolean {
+  if (previous.kind !== next.kind) return true
+  switch (next.kind) {
+    case 'local': {
+      const prev = previous as Extract<HarnessSource, { kind: 'local' }>
+      return prev.repo !== next.repo
+    }
+    case 'npx': {
+      const prev = previous as Extract<HarnessSource, { kind: 'npx' }>
+      return prev.package !== next.package || prev.version !== next.version || prev.workspace !== next.workspace
+    }
+    default: {
+      const exhaustive: never = next
+      return exhaustive
+    }
+  }
+}
+
 /** Whether two configs differ in a way that requires respawning the harness child. */
 function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig): boolean {
   if (previous === undefined) return true
   return (
-    JSON.stringify(previous.harness) !== JSON.stringify(next.harness) ||
+    harnessSourceChanged(previous.harness, next.harness) ||
     // The notify port is baked into the generated hooks.json at boot, so a
     // changed port only reaches the harness through a respawn.
     previous.notifyPort !== next.notifyPort ||
@@ -72,7 +96,13 @@ export async function applySettings(previous: DesktopConfig | undefined, next: D
   if (previous?.hotkey !== next.hotkey) {
     globalShortcut.unregisterAll()
     if (!globalShortcut.register(next.hotkey, toggleWindow)) {
-      console.warn(`dsh-desktop: the hotkey ${next.hotkey} could not be registered; another app already owns it.`)
+      warnings.push(`The hotkey ${next.hotkey} could not be registered; another app already owns it.`)
+      // unregisterAll() already dropped the previous binding, so without this
+      // the app would silently end up with no hotkey at all; re-arm the one
+      // that was working rather than leave the user with nothing bound.
+      if (previous !== undefined && !globalShortcut.register(previous.hotkey, toggleWindow)) {
+        console.warn(`dsh-desktop: could not re-register the previous hotkey ${previous.hotkey} either.`)
+      }
     }
   }
 

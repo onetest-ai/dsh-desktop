@@ -542,6 +542,33 @@ describe('applySettings', () => {
     expect(startServer).toHaveBeenCalledTimes(1)
   })
 
+  it('restarts when the npx binary path changes, since it is resolved at spawn', async () => {
+    await bootReady()
+    startServer.mockClear()
+    await applySettingsReady(STORED, { ...STORED, npxPath: '/opt/npx' })
+    expect(startServer).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not restart when the harness source has the same values in a different key order', async () => {
+    await bootReady()
+    startServer.mockClear()
+    // Same values as STORED.harness, but constructed with the keys in a
+    // different order; a config file hand-edited or reserialized this way
+    // must not look like a change.
+    const reordered = { repo: STORED.harness.kind === 'local' ? STORED.harness.repo : '', kind: 'local' as const }
+    await applySettings(STORED, { ...STORED, harness: reordered })
+    await settle()
+    expect(startServer).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a warning naming the accelerator when hotkey registration fails, and still reports success', async () => {
+    await bootReady()
+    fake.globalShortcut.register.mockImplementation((accelerator: string) => accelerator !== 'Alt+D')
+    const warnings = await applySettings(STORED, { ...STORED, hotkey: 'Alt+D' })
+    await settle()
+    expect(warnings).toEqual([expect.stringContaining('Alt+D')])
+  })
+
   it('does nothing when nothing changed', async () => {
     await bootReady()
     startServer.mockClear()
