@@ -111,7 +111,7 @@ Design notes and the decisions taken while building this live in [`docs/`](docs/
 
 ## Known limitations
 
-- **Profile plugins installed with pnpm do not resolve under a managed source.** `dsh plugin --profile web add …` forwards to pnpm, which links dependencies through its own store layout. A managed install is a plain `npm` tree, so the harness cannot resolve those plugins' dependencies and the profile fails to boot — the notification hook bridge is the likely one to hit. A local source is unaffected. If you use both, install the profile plugin the same way the runtime you boot with resolves it.
+- **Notifications may be unavailable under a managed source.** `dsh plugin --profile web add …` forwards to pnpm, which links dependencies through its own store; a managed install is a plain `npm` tree and cannot follow those links, so the notification hook bridge may not load. The app checks before it boots and simply leaves the hook out when it cannot load, so the harness still starts and the tray says notifications are off — it is not a failure. To get notifications working under a managed source, install the bridge's missing dependency into the profile with npm: `cd $DSH_HOME/profiles/web && npm install @deepseek-ai/dsh-hook-protocol`. A local source is unaffected.
 - **`dsh://` links only focus the app.** The harness Web UI has no per-session URLs, so there is no address to deep-link to.
 - **Unsigned and macOS-only.** No Windows or Linux packaging target is configured.
 - The tray icon, menus, and shortcut have not been verified visually by an automated test — only their behavior in code.
