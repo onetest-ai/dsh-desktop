@@ -78,7 +78,8 @@ Opening Settings when the window already exists focuses it rather than creating 
 Saving writes `desktop.json` first, then applies. Each field routes to the narrowest re-application that covers it:
 
 - **Harness source changed** (`kind`, `repo`, `package`, `version`, `workspace`) → `enqueue` a stop-then-boot, reusing the same serialized transition the tray's Restart uses. That chain already handles the quit-during-restart race and the stale-`onExit` generation check, and it is already tested. `writeRuntimeFiles` runs as part of that boot, so a changed `notifyPort` reaches the generated `hooks.json` with no extra work.
-- **`notifyPort` changed** → after the restart, close the notify listener and reopen on the new port.
+- **`notifyPort` changed** → also a stop-then-boot, *and* the notify listener is closed and reopened on the new port. The restart is not optional: `writeRuntimeFiles` bakes the port into the generated `hooks.json` at boot, so skipping it would leave the hook posting to the old port and notifications would fail silently.
+- **`pnpmPath` / `npxPath` changed** → stop-then-boot, since both are resolved when the child is spawned.
 - **`hotkey` changed** → `globalShortcut.unregisterAll()`, then re-register, reporting a failed registration the same way the existing unchecked-register fix does.
 
 A save arriving during an in-flight boot is safe: it goes through `enqueue`. A save arriving during quit is refused, because `quitting` is already set.
@@ -103,7 +104,7 @@ Main-process logic is unit-tested with `vi.mock('electron')`, extending the 12 o
 
 - `loadConfig` returns not-configured on ENOENT and still throws on other read errors.
 - Each validation rule rejects its bad input and accepts its good one.
-- `settings:save` routes correctly: a source change enqueues a restart; a port-only change does not restart the harness but does rebind the listener; a hotkey-only change re-registers without restarting.
+- `settings:save` routes correctly: a source change enqueues a restart; a port-only change enqueues a restart *and* rebinds the listener; a hotkey-only change re-registers without restarting.
 - A save during quit is refused.
 - The first-run branch opens Settings and does not boot.
 
