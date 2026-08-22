@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { DesktopConfig } from './config'
+import { ConfigurationError } from './configuration-error'
 import { spawnFor, type SpawnSpec } from './harness-source'
 
 export type { SpawnSpec } from './harness-source'
@@ -55,7 +56,7 @@ export function resolveBinary(configured: string | undefined, name: string, env:
   const systemOnly = new Set(['/usr/bin', '/bin', '/usr/sbin', '/sbin', ''])
   const hasUserPath = path.split(':').some((entry) => !systemOnly.has(entry))
   if (hasUserPath) return name
-  throw new Error(
+  throw new ConfigurationError(
     `dsh-desktop: ${name} is not on PATH (a Finder launch inherits a minimal PATH). ` +
       `Set "${name}Path" in desktop.json to the absolute path from \`which ${name}\`.`,
   )
@@ -63,6 +64,11 @@ export function resolveBinary(configured: string | undefined, name: string, env:
 
 /**
  * Build the spawn specification for the configured harness source.
+ *
+ * Each launcher is passed as a thunk rather than a resolved string, so
+ * `spawnFor` only resolves the binary the chosen source actually needs — a
+ * local source must never fail to start because `npxPath` cannot be
+ * resolved, and vice versa.
  * @param config - the desktop settings.
  * @param patchFile - absolute path to this project's cordis patch overlay.
  * @returns the command, arguments, and working directory.
@@ -71,8 +77,8 @@ export function dshWebCommand(config: DesktopConfig, patchFile: string): SpawnSp
   return spawnFor(
     config.harness,
     {
-      pnpm: resolveBinary(config.pnpmPath, 'pnpm', process.env),
-      npx: resolveBinary(config.npxPath, 'npx', process.env),
+      pnpm: () => resolveBinary(config.pnpmPath, 'pnpm', process.env),
+      npx: () => resolveBinary(config.npxPath, 'npx', process.env),
     },
     patchFile,
   )

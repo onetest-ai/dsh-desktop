@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import { dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
 
@@ -53,6 +53,51 @@ describe('dshWebCommand', () => {
       '-y', '@deepseek-ai/dsh@latest', '--', '--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open',
     ])
     expect(spec.cwd).toBe('/tmp/ws')
+  })
+
+  describe('with a Finder-minimal PATH', () => {
+    // A Finder launch inherits only the system directories; see `resolveBinary`.
+    const MINIMAL_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
+    let originalPath: string | undefined
+
+    beforeEach(() => {
+      originalPath = process.env.PATH
+      process.env.PATH = MINIMAL_PATH
+    })
+
+    afterEach(() => {
+      if (originalPath === undefined) delete process.env.PATH
+      else process.env.PATH = originalPath
+    })
+
+    it('succeeds in local mode when only pnpmPath is set, the exact reported failure', () => {
+      // This is the regression case: before the fix, dshWebCommand resolved
+      // BOTH launchers eagerly, so the unused npx resolution threw even
+      // though local mode never spawns npx.
+      const spec = dshWebCommand(
+        {
+          harness: { kind: 'local', repo: '/tmp/harness' },
+          notifyPort: 1,
+          hotkey: 'x',
+          pnpmPath: '/opt/pnpm',
+        },
+        '/tmp/desktop.patch.yml',
+      )
+      expect(spec.command).toBe('/opt/pnpm')
+    })
+
+    it('succeeds in npx mode when only npxPath is set, the mirror case', () => {
+      const spec = dshWebCommand(
+        {
+          harness: { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+          notifyPort: 1,
+          hotkey: 'x',
+          npxPath: '/opt/npx',
+        },
+        '/tmp/desktop.patch.yml',
+      )
+      expect(spec.command).toBe('/opt/npx')
+    })
   })
 })
 

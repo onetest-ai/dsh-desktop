@@ -177,7 +177,8 @@ function closeSettings(): void {
   settingsOnClosed?.()
 }
 
-vi.mock('./preflight', () => ({ preflight: vi.fn(() => ({ ok: true })) }))
+const preflightMock = vi.fn(() => ({ ok: true }))
+vi.mock('./preflight', () => ({ preflight: (...args: unknown[]) => preflightMock(...(args as [])) }))
 
 vi.mock('./runtime-files', () => ({
   writeRuntimeFiles: vi.fn(() => ({ patchPath: '/tmp/p.yml', hooksPath: '/tmp/h.json' })),
@@ -199,9 +200,10 @@ interface FakeChild {
 
 const children: FakeChild[] = []
 const startServer = vi.fn()
+const dshWebCommandMock = vi.fn(() => ({ command: 'pnpm', args: [], cwd: '/tmp/harness' }))
 vi.mock('./server', () => ({
   startServer: (options: StartOptions) => startServer(options),
-  dshWebCommand: vi.fn(() => ({ command: 'pnpm', args: [], cwd: '/tmp/harness' })),
+  dshWebCommand: (...args: unknown[]) => dshWebCommandMock(...(args as [])),
 }))
 
 /** Whether the next spawned child's `stop()` hangs until `releaseStop()`. */
@@ -319,7 +321,7 @@ describe('boot', () => {
     expect(setTrayStatus).toHaveBeenLastCalledWith('running')
   })
 
-  it('shows the failure pane when the child never becomes ready', async () => {
+  it('shows the failure pane when the child never becomes ready, without opening settings', async () => {
     await loadIndex()
     fake.ready()
     await vi.waitFor(() => expect(children.length).toBe(1))
@@ -327,14 +329,51 @@ describe('boot', () => {
     await settle()
     expect(children[0].stop).toHaveBeenCalled()
     expect(showError).toHaveBeenCalledWith(fake.window, 'The harness failed to start', expect.stringContaining('no URL'))
+    // A correctly configured harness that simply never became ready is not a
+    // configuration mistake: reopening Settings here would be noise over a
+    // problem it cannot fix.
+    expect(openSettingsMock).not.toHaveBeenCalled()
   })
 
-  it("reports the live child's exit in the window", async () => {
+  it("reports the live child's exit in the window, without opening settings", async () => {
     const child = await bootReady()
     child.exit(9, 'stderr tail')
     await settle()
     expect(showError).toHaveBeenCalledWith(fake.window, 'The harness exited (code 9)', 'stderr tail')
     expect(setTrayStatus).toHaveBeenLastCalledWith('failed')
+    expect(openSettingsMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('configuration-class boot failures', () => {
+  it('opens settings when the checkout preflight fails', async () => {
+    preflightMock.mockReturnValueOnce({ ok: false, message: 'checkout missing' })
+    await readyHandler()
+    expect(showError).toHaveBeenCalledWith(fake.window, 'The harness checkout is not ready', 'checkout missing')
+    expect(openSettingsMock).toHaveBeenCalled()
+    expect(startServer).not.toHaveBeenCalled()
+  })
+
+  it('opens settings when the launcher cannot be resolved', async () => {
+    // `vi.resetModules()` (in `beforeEach`) means `loadIndex()` below re-imports
+    // `./configuration-error` as a fresh module instance; importing it here
+    // first, before `loadIndex()`, warms that same cache entry so the class
+    // thrown here is `instanceof`-identical to the one `index.ts` checks
+    // against.
+    const { ConfigurationError: FreshConfigurationError } = await import('./configuration-error')
+    // Mirrors what `dshWebCommand` throws when `resolveBinary` fails: a
+    // ConfigurationError, not a startServer rejection.
+    dshWebCommandMock.mockImplementationOnce(() => {
+      throw new FreshConfigurationError('dsh-desktop: npx is not on PATH')
+    })
+    await readyHandler()
+    expect(showError).toHaveBeenCalledWith(
+      fake.window,
+      'The harness failed to start',
+      expect.stringContaining('npx is not on PATH'),
+    )
+    expect(openSettingsMock).toHaveBeenCalled()
+    expect(startServer).not.toHaveBeenCalled()
   })
 })
 

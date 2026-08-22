@@ -6,10 +6,17 @@ export type HarnessSource =
   | { kind: 'local'; repo: string }
   | { kind: 'npx'; package: string; version: string; workspace: string }
 
-/** Resolved binaries used to launch each source kind. */
+/**
+ * Binary resolvers used to launch each source kind.
+ *
+ * Each is a thunk, not a resolved string, so `spawnFor` can call only the one
+ * its chosen branch needs. Resolution can throw (see `resolveBinary`), and
+ * eagerly resolving both before picking a branch would let the *unused*
+ * launcher's failure veto a source that never needed it.
+ */
 export interface Launchers {
-  pnpm: string
-  npx: string
+  pnpm(): string
+  npx(): string
 }
 
 /** Spawn specification shared with `server.ts`. */
@@ -52,17 +59,17 @@ export function configPath(env: NodeJS.ProcessEnv): string {
  * as its own unrecognized CLI config and never forwards them to `dsh`. `pnpm
  * dsh ...` has no such parser in front of it, so the local branch omits it.
  * @param source - configured harness source.
- * @param launchers - resolved pnpm and npx binaries.
+ * @param launchers - pnpm and npx binary resolvers; only the one the chosen branch needs is called.
  * @param patchFile - absolute path to the cordis patch overlay.
  * @returns command, arguments, and working directory.
  */
 export function spawnFor(source: HarnessSource, launchers: Launchers, patchFile: string): SpawnSpec {
   const profileArgs = ['--profile', 'web', '--patch', patchFile, '--no-open']
   if (source.kind === 'local') {
-    return { command: launchers.pnpm, args: ['dsh', ...profileArgs], cwd: source.repo }
+    return { command: launchers.pnpm(), args: ['dsh', ...profileArgs], cwd: source.repo }
   }
   return {
-    command: launchers.npx,
+    command: launchers.npx(),
     args: ['-y', `${source.package}@${source.version}`, '--', ...profileArgs],
     cwd: source.workspace,
   }

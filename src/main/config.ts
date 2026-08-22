@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { ConfigurationError } from './configuration-error'
 import type { HarnessSource } from './harness-source'
 
 /** Resolved desktop settings. `pnpmPath`/`npxPath` pin binaries when PATH cannot find them. */
@@ -38,7 +39,7 @@ export function loadConfig(filePath: string): ConfigResult {
     // config may exist and merely be unreadable, so it is rethrown loud rather
     // than being mistaken for a first run.
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw new Error(`dsh-desktop: cannot read ${filePath}`, { cause: error })
+      throw new ConfigurationError(`dsh-desktop: cannot read ${filePath}`, { cause: error })
     }
     return { configured: false }
   }
@@ -56,24 +57,24 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
   try {
     parsed = JSON.parse(raw)
   } catch (cause) {
-    throw new Error(`dsh-desktop: ${filePath} is not valid JSON`, { cause })
+    throw new ConfigurationError(`dsh-desktop: ${filePath} is not valid JSON`, { cause })
   }
 
   const record = parsed as Partial<DesktopConfig>
   const harness = record.harness
   if (harness === undefined) {
-    throw new Error(`dsh-desktop: ${filePath} must set "harness" to a local or npx source`)
+    throw new ConfigurationError(`dsh-desktop: ${filePath} must set "harness" to a local or npx source`)
   }
   if (harness.kind === 'local') {
     if (typeof harness.repo !== 'string' || harness.repo === '') {
-      throw new Error(`dsh-desktop: ${filePath} local harness must set a non-empty "repo"`)
+      throw new ConfigurationError(`dsh-desktop: ${filePath} local harness must set a non-empty "repo"`)
     }
   } else if (harness.kind === 'npx') {
     if (typeof harness.package !== 'string' || harness.package === '') {
-      throw new Error(`dsh-desktop: ${filePath} npx harness must set a non-empty "package"`)
+      throw new ConfigurationError(`dsh-desktop: ${filePath} npx harness must set a non-empty "package"`)
     }
   } else {
-    throw new Error(`dsh-desktop: ${filePath} harness.kind must be "local" or "npx"`)
+    throw new ConfigurationError(`dsh-desktop: ${filePath} harness.kind must be "local" or "npx"`)
   }
 
   return {

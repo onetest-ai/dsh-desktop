@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, globalShortcut, Notification } from 'electron'
 import { join } from 'node:path'
 import { loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
+import { ConfigurationError } from './configuration-error'
 import { configPath, type HarnessSource } from './harness-source'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { preflight } from './preflight'
@@ -213,6 +214,24 @@ function fail(title: string, detail: string): void {
   if (window !== undefined && !window.isDestroyed()) showError(window, title, detail)
 }
 
+/**
+ * Report a failure the user can fix in Settings, and open it so the fix is
+ * one step away.
+ *
+ * Reserved for configuration-class failures: an unreadable or invalid config,
+ * a checkout that is missing or unbuilt, or a launcher that cannot be
+ * resolved. A harness that was configured correctly and then crashed or timed
+ * out goes through `fail` alone — reopening Settings there would be noise
+ * over a problem Settings cannot fix, and the existing retry pane (Restart in
+ * the tray) is the right response.
+ * @param title - short failure summary.
+ * @param detail - remedy text.
+ */
+function failConfiguration(title: string, detail: string): void {
+  fail(title, detail)
+  showSettings()
+}
+
 /** Bring the window to the front. */
 function revealWindow(): void {
   if (window === undefined || window.isDestroyed()) return
@@ -255,13 +274,13 @@ async function bootNow(): Promise<void> {
     }
     config = result.config
   } catch (error) {
-    fail('Configuration problem', (error as Error).message)
+    failConfiguration('Configuration problem', (error as Error).message)
     return
   }
 
   const check = preflight(config.harness)
   if (!check.ok) {
-    fail('The harness checkout is not ready', check.message)
+    failConfiguration('The harness checkout is not ready', check.message)
     return
   }
 
@@ -299,7 +318,16 @@ async function bootNow(): Promise<void> {
     // The rejection paths (readiness timeout, early exit) can leave a child
     // mid-death, so it is reaped here rather than merely forgotten.
     await stopCurrent()
-    fail('The harness failed to start', (error as Error).message)
+    // A ConfigurationError here means `dshWebCommand` could not resolve the
+    // configured launcher — a config mistake, fixed in Settings. Every other
+    // rejection (readiness timeout, early exit, spawn ENOENT) means a
+    // correctly configured harness misbehaved after actually being launched,
+    // which Settings cannot fix.
+    if (error instanceof ConfigurationError) {
+      failConfiguration('The harness failed to start', error.message)
+    } else {
+      fail('The harness failed to start', (error as Error).message)
+    }
   }
 }
 
@@ -459,8 +487,7 @@ if (!app.requestSingleInstanceLock()) {
       // Without this the voided whenReady handler would simply reject: no
       // boot, no error pane, no settings window — a hidden window and a tray
       // icon, with no way to reach the form that fixes the config.
-      fail('Configuration problem', (error as Error).message)
-      showSettings()
+      failConfiguration('Configuration problem', (error as Error).message)
       return
     }
     if (!stored.configured) {

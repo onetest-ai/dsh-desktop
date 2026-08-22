@@ -28,10 +28,17 @@ describe('configPath', () => {
 describe('spawnFor', () => {
   const patch = '/tmp/desktop.patch.yml'
 
+  /** A launcher thunk that fails the test if the unused branch ever calls it. */
+  function unused(label: string): () => string {
+    return () => {
+      throw new Error(`spawnFor must not resolve the unused ${label} launcher`)
+    }
+  }
+
   it('runs pnpm dsh inside the checkout for a local source', () => {
     const spec = spawnFor(
       { kind: 'local', repo: '/tmp/harness' },
-      { pnpm: '/usr/local/bin/pnpm', npx: 'npx' },
+      { pnpm: () => '/usr/local/bin/pnpm', npx: unused('npx') },
       patch,
     )
     expect(spec.command).toBe('/usr/local/bin/pnpm')
@@ -42,7 +49,7 @@ describe('spawnFor', () => {
   it('runs npx against the published package for an npx source, with a -- separator', () => {
     const spec = spawnFor(
       { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
-      { pnpm: 'pnpm', npx: '/usr/local/bin/npx' },
+      { pnpm: unused('pnpm'), npx: () => '/usr/local/bin/npx' },
       patch,
     )
     expect(spec.command).toBe('/usr/local/bin/npx')
@@ -58,21 +65,25 @@ describe('spawnFor', () => {
   it('pins an exact version when one is configured', () => {
     const spec = spawnFor(
       { kind: 'npx', package: '@deepseek-ai/dsh', version: '0.1.1-rc.2', workspace: '/tmp/ws' },
-      { pnpm: 'pnpm', npx: 'npx' },
+      { pnpm: unused('pnpm'), npx: () => 'npx' },
       patch,
     )
     expect(spec.args[1]).toBe('@deepseek-ai/dsh@0.1.1-rc.2')
   })
 
   it('does not add a -- separator for a local source, since pnpm dsh needs none', () => {
-    const spec = spawnFor({ kind: 'local', repo: '/r' }, { pnpm: 'pnpm', npx: 'npx' }, patch)
+    const spec = spawnFor({ kind: 'local', repo: '/r' }, { pnpm: () => 'pnpm', npx: unused('npx') }, patch)
     expect(spec.args).not.toContain('--')
   })
 
   it('puts launcher flags before the profile in both modes', () => {
     for (const spec of [
-      spawnFor({ kind: 'local', repo: '/r' }, { pnpm: 'pnpm', npx: 'npx' }, patch),
-      spawnFor({ kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/w' }, { pnpm: 'pnpm', npx: 'npx' }, patch),
+      spawnFor({ kind: 'local', repo: '/r' }, { pnpm: () => 'pnpm', npx: unused('npx') }, patch),
+      spawnFor(
+        { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/w' },
+        { pnpm: unused('pnpm'), npx: () => 'npx' },
+        patch,
+      ),
     ]) {
       // `dsh web --patch F` fails with "unknown option '--patch'"; the launcher's
       // own flags must precede the profile, i.e. `--profile` must sit immediately
@@ -81,5 +92,23 @@ describe('spawnFor', () => {
       expect(spec.args[webIndex - 1]).toBe('--profile')
       expect(spec.args.indexOf('--patch')).toBeLessThan(spec.args.indexOf('--no-open'))
     }
+  })
+
+  it('never calls the unused launcher for a local source, even when it would throw', () => {
+    // The exact reported bug: local mode with only pnpmPath set, and PATH so
+    // minimal that resolving npx would throw. spawnFor must not even try.
+    expect(() =>
+      spawnFor({ kind: 'local', repo: '/r' }, { pnpm: () => '/opt/pnpm', npx: unused('npx') }, patch),
+    ).not.toThrow()
+  })
+
+  it('never calls the unused launcher for an npx source, even when it would throw', () => {
+    expect(() =>
+      spawnFor(
+        { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/w' },
+        { pnpm: unused('pnpm'), npx: () => '/opt/npx' },
+        patch,
+      ),
+    ).not.toThrow()
   })
 })
