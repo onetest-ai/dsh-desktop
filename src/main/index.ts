@@ -228,9 +228,12 @@ function enqueue(step: () => Promise<void>): Promise<void> {
 /**
  * Report the server status through the tray.
  * @param next - the new status.
+ * @param note - a non-blocking condition discovered at boot, shown alongside
+ *   the status; omit when there is none.
  */
-function setStatus(next: ServerStatus): void {
-  tray?.setStatus(next)
+function setStatus(next: ServerStatus, note?: string): void {
+  if (note === undefined) tray?.setStatus(next)
+  else tray?.setStatus(next, note)
 }
 
 /**
@@ -316,8 +319,13 @@ async function bootNow(): Promise<void> {
   const mine = (generation += 1)
 
   let patchPath: string
+  let hooksNote: string | undefined
   try {
-    patchPath = writeRuntimeFiles(runtimeDirectory(), config.notifyPort).patchPath
+    // The harness resolves profile plugins from here; see `spawnFor`'s
+    // hardcoded `--profile web`.
+    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, join(DSH_HOME, 'profiles', 'web'))
+    patchPath = files.patchPath
+    hooksNote = files.hooksOmittedReason
   } catch (error) {
     fail('The harness launch files could not be written', (error as Error).message)
     return
@@ -340,7 +348,10 @@ async function bootNow(): Promise<void> {
       // A stop overtook this boot; the child is already being reaped elsewhere.
       return
     }
-    setStatus('running')
+    setStatus(
+      'running',
+      hooksNote !== undefined ? `notifications unavailable — hook bridge not loaded: ${hooksNote}` : undefined,
+    )
     if (window !== undefined && !window.isDestroyed()) void window.loadURL(handle.url)
   } catch (error) {
     if (mine !== generation) return

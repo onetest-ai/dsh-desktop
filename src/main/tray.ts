@@ -12,7 +12,13 @@ export interface TrayActions {
 
 /** Live handle on the tray icon. */
 export interface TrayController {
-  setStatus(status: ServerStatus): void
+  /**
+   * @param status - the server status to render.
+   * @param note - a non-blocking condition discovered at boot (e.g. the hook
+   *   bridge could not be mounted), appended to the tooltip and shown as a
+   *   disabled menu row; omit when there is none.
+   */
+  setStatus(status: ServerStatus, note?: string): void
   destroy(): void
 }
 
@@ -48,12 +54,13 @@ const ICONS: Record<ServerStatus, { file: string; template: boolean }> = {
 export function createTray(actions: TrayActions): TrayController {
   const tray = new Tray(icon('starting'))
 
-  const render = (status: ServerStatus): void => {
+  const render = (status: ServerStatus, note?: string): void => {
     tray.setImage(icon(status))
-    tray.setToolTip(LABELS[status])
+    tray.setToolTip(note !== undefined ? `${LABELS[status]} — ${note}` : LABELS[status])
     tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: LABELS[status], enabled: false },
+        ...(note !== undefined ? [{ label: note, enabled: false }] : []),
         { type: 'separator' },
         { label: 'Show / Hide', click: () => actions.toggleWindow() },
         { label: 'Restart harness', click: () => actions.restart() },
