@@ -37,6 +37,21 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
   await window.waitForLoadState('domcontentloaded', { timeout: 90_000 })
   expect(window.url()).toMatch(/^http:\/\/127\.0\.0\.1:\d+/)
 
+  // Asked of the Electron main process, whose fs understands app.asar.
+  // getAppPath() already resolves to the app.asar path on this build (verified
+  // by printing it during development), so it is used directly rather than
+  // the dirname(...)/app.asar wrapping the brief describes as a fallback.
+  const shipped = await app.evaluate(({ app: electronApp }) => {
+    const { existsSync } = process.getBuiltinModule('node:fs')
+    const { join } = process.getBuiltinModule('node:path')
+    const dist = join(electronApp.getAppPath(), 'dist')
+    return {
+      preload: existsSync(join(dist, 'preload', 'settings.js')),
+      renderer: existsSync(join(dist, 'renderer', 'settings.html')),
+    }
+  })
+  expect(shipped).toEqual({ preload: true, renderer: true })
+
   await app.close()
   await new Promise((r) => setTimeout(r, 2000))
 
