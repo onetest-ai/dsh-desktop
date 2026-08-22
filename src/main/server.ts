@@ -83,7 +83,7 @@ export function resolveBinary(configured: string | undefined, name: string, env:
  * @param env - the app's own environment; never mutated, only read.
  * @returns a copy of `env` with `command`'s directory prepended to `PATH`, or `undefined` for a bare name.
  */
-function envWithLauncherDir(command: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
+export function envWithLauncherDir(command: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
   const dir = dirname(command)
   if (dir === '.') return undefined
   return { ...env, PATH: `${dir}${delimiter}${env.PATH ?? ''}` }
