@@ -214,8 +214,12 @@ interface Renderer {
   validatePluginCalls: Array<[string, string[]]>
   /** Clicks the tab button for `id`. */
   clickTab(id: string): void
-  /** Fires a `keydown` for `key` on the tab button for `id`, as a real key press would. */
-  pressTabKey(id: string, key: string): void
+  /**
+   * Fires a `keydown` for `key` on the tab button for `id`, as a real key
+   * press would.
+   * @returns whether the handler called `event.preventDefault()`.
+   */
+  pressTabKey(id: string, key: string): boolean
   /** The tab id whose button reports `aria-selected="true"`. */
   activeTab(): string | undefined
   /** Whether the panel for `id` is hidden. */
@@ -224,6 +228,10 @@ interface Renderer {
   tabTabIndex(id: string): number | undefined
   /** Whether the error dot on the tab button for `id` is showing. */
   tabErrorDotVisible(id: string): boolean | undefined
+  /** Fires the Add button's click listener without awaiting it, as two fast real clicks would. */
+  clickAddRaw(): void
+  /** How many times `settings.read` has been called so far (the initial load, plus one per reload). */
+  readCallCount(): number
 }
 
 /** The tab ids declared in `settings.html`'s tab bar, in document order. */
@@ -402,7 +410,7 @@ async function load(
           prevented = true
         },
       })
-      void prevented
+      return prevented
     },
     activeTab: () => declaredTabIds().find((id) => elements.get(`tab-${id}`)?.getAttribute('aria-selected') === 'true'),
     panelHidden: (id) => elements.get(`panel-${id}`)?.hidden,
@@ -411,6 +419,10 @@ async function load(
       const hidden = elements.get(`tab-${id}-error-dot`)?.hidden
       return hidden === undefined ? undefined : !hidden
     },
+    clickAddRaw: () => {
+      elements.get('add-plugin')?.listeners.get('click')?.()
+    },
+    readCallCount: () => settings.read.mock.calls.length,
   }
 }
 
@@ -559,14 +571,46 @@ describe('plugins', () => {
   it('rows survive a reload from config, in the order the config reported them', async () => {
     const renderer = await load(async () => ({ ok: true, warnings: [] }), READ_WITH_PLUGINS)
     const before = renderer.renderedPluginRows()
+    const readsBefore = renderer.readCallCount()
 
-    // A reload — e.g. after a save — re-reads and re-renders from scratch.
+    // A successful save re-reads and re-renders from scratch, so the resolved
+    // versions it just installed reach the rows on screen (see `performSave`).
+    // Asserting the read count actually grew is what makes this test prove a
+    // reload happened, rather than only being consistent with one never
+    // happening at all.
     await renderer.save()
 
+    expect(renderer.readCallCount()).toBeGreaterThan(readsBefore)
     const after = renderer.renderedPluginRows()
     expect(after).toHaveLength(before.length)
     expect(after.some((row) => row.includes(HOOKS))).toBe(true)
     expect(after.some((row) => row.includes(DECK))).toBe(true)
+  })
+
+  it('a row added this session shows its resolved version once the save that installed it succeeds', async () => {
+    // The read the initial `load()` uses, and the read `performSave` triggers
+    // after a successful save, are different responses: the second reports
+    // the version the save just installed, which is what the row must show
+    // afterward instead of still reading "not installed yet".
+    const onRead = vi
+      .fn()
+      .mockResolvedValueOnce({
+        configured: true,
+        form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+        plugins: [],
+      })
+      .mockResolvedValue({
+        configured: true,
+        form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+        plugins: [{ spec: DECK, package: DECK, pinned: false, version: '0.2.0' }],
+      })
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), onRead)
+    await renderer.addPlugin(DECK)
+    expect(renderer.renderedPluginRows()).toEqual([expect.stringContaining('not installed yet')])
+
+    await renderer.save()
+
+    expect(renderer.renderedPluginRows()).toEqual([expect.stringContaining('v0.2.0 installed')])
   })
 
   describe('adding a row', () => {
@@ -635,6 +679,21 @@ describe('plugins', () => {
       expect(renderer.renderedPluginRows()).toEqual([])
       expect(renderer.elements.get('error-plugin-spec')?.textContent).toContain('main is unreachable')
     })
+
+    it('guards a second Add firing before the first settles, adding only one row', async () => {
+      const renderer = await load(async () => ({ ok: true, warnings: [] }))
+      const input = renderer.elements.get('plugin-spec')
+      if (input !== undefined) input.value = DECK
+
+      // Two synchronous clicks, the way two fast real clicks land before
+      // either's `await validatePlugin(...)` has a chance to resolve.
+      renderer.clickAddRaw()
+      renderer.clickAddRaw()
+      for (let tick = 0; tick < 6; tick += 1) await Promise.resolve()
+
+      expect(renderer.renderedPluginRows()).toHaveLength(1)
+      expect(renderer.validatePluginCalls).toHaveLength(1)
+    })
   })
 
   describe('removing a row', () => {
@@ -672,6 +731,21 @@ describe('plugins', () => {
     const hooksRow = rows.find((row) => row.includes(HOOKS))
     expect(hooksRow).toContain('0.2.0')
     expect(rows.find((row) => row.includes(DECK))).not.toContain('0.2.0')
+  })
+
+  it('survives an unrelated save: a save that never touches this plugin keeps its update hint', async () => {
+    // `onPluginUpdateAvailable` pushes at most once per `read`, so a hint this
+    // dropped would be unreachable until Settings is reopened — exactly what
+    // the shared `pluginUpdates` map's own comment says it exists to prevent.
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), READ_WITH_PLUGINS)
+    renderer.pushPluginUpdateAvailable(HOOKS, '0.2.0')
+    expect(renderer.renderedPluginRows().find((row) => row.includes(HOOKS))).toContain('available')
+
+    // Saves something unrelated to plugins (the hotkey field is already blank
+    // in the loaded form; this save simply re-submits it).
+    await renderer.save()
+
+    expect(renderer.renderedPluginRows().find((row) => row.includes(HOOKS))).toContain('available')
   })
 
   it('an update offered for one row does not disturb the others', async () => {
@@ -742,6 +816,34 @@ describe('plugins', () => {
 
       expect(renderer.elements.get('status')?.textContent).toBe('Port 43117 is already in use.')
       expect(renderer.elements.get('status')?.classes.has('status-failed')).toBe(true)
+    })
+
+    it('updates the accepted row to the version just installed, in place', async () => {
+      const renderer = await load(async () => ({ ok: true, warnings: [] }), readOneFloating)
+      renderer.pushPluginUpdateAvailable(HOOKS, '0.2.0')
+
+      await renderer.useLatestPlugin(HOOKS)
+
+      expect(renderer.renderedPluginRows()).toEqual([expect.stringContaining('v0.2.0 installed')])
+    })
+
+    it('never re-reads config: only the accepted row changes, so a row added but not yet saved survives', async () => {
+      const renderer = await load(async () => ({ ok: true, warnings: [] }), readOneFloating)
+      const readsBefore = renderer.readCallCount()
+      await renderer.addPlugin(DECK)
+      renderer.pushPluginUpdateAvailable(HOOKS, '0.2.0')
+
+      await renderer.useLatestPlugin(HOOKS)
+
+      // `readCallCount` unchanged proves this took the in-place update path,
+      // not a `load()` that happens to keep the unsaved row for some other
+      // reason — the vacuity check (see docs/notes/settings-tabs.md) confirms
+      // the row disappears when that path is reverted to a `load()`.
+      expect(renderer.readCallCount()).toBe(readsBefore)
+      const rows = renderer.renderedPluginRows()
+      expect(rows).toHaveLength(2)
+      expect(rows.some((row) => row.includes(DECK) && row.includes('not installed yet'))).toBe(true)
+      expect(rows.find((row) => row.includes(HOOKS))).toContain('v0.2.0 installed')
     })
   })
 })
@@ -816,26 +918,33 @@ describe('tabs', () => {
     expect(renderer.tabTabIndex('notifications')).toBe(-1)
   })
 
-  it('ArrowRight/ArrowLeft move between tabs, wrapping at the ends', async () => {
+  it('ArrowRight/ArrowLeft move between tabs, wrapping at the ends, and suppress the default action', async () => {
     const renderer = await load(async () => ({ ok: true, warnings: [] }))
 
-    renderer.pressTabKey('harness', 'ArrowRight')
+    expect(renderer.pressTabKey('harness', 'ArrowRight')).toBe(true)
     expect(renderer.activeTab()).toBe('plugins')
 
-    renderer.pressTabKey('plugins', 'ArrowLeft')
+    expect(renderer.pressTabKey('plugins', 'ArrowLeft')).toBe(true)
     expect(renderer.activeTab()).toBe('harness')
 
-    renderer.pressTabKey('harness', 'ArrowLeft')
+    expect(renderer.pressTabKey('harness', 'ArrowLeft')).toBe(true)
     expect(renderer.activeTab()).toBe('advanced')
   })
 
-  it('Home and End jump to the first and last tab', async () => {
+  it('Home and End jump to the first and last tab, and suppress the default action', async () => {
     const renderer = await load(async () => ({ ok: true, warnings: [] }))
 
-    renderer.pressTabKey('harness', 'End')
+    expect(renderer.pressTabKey('harness', 'End')).toBe(true)
     expect(renderer.activeTab()).toBe('advanced')
 
-    renderer.pressTabKey('advanced', 'Home')
+    expect(renderer.pressTabKey('advanced', 'Home')).toBe(true)
+    expect(renderer.activeTab()).toBe('harness')
+  })
+
+  it('leaves an unrelated key alone: no tab change, no default action suppressed', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+
+    expect(renderer.pressTabKey('harness', 'a')).toBe(false)
     expect(renderer.activeTab()).toBe('harness')
   })
 
@@ -873,6 +982,37 @@ describe('tabs', () => {
     renderer.clickTab('harness')
     await renderer.save()
     expect(renderer.tabErrorDotVisible('notifications')).toBe(false)
+  })
+
+  it('an accumulated-list plugins error routes to the Plugins tab, its own error node, and a dot', async () => {
+    const renderer = await load(async () => ({ ok: false, errors: { plugins: '@x/y is listed more than once.' } }))
+    expect(renderer.activeTab()).toBe('harness')
+
+    await renderer.save()
+
+    expect(renderer.activeTab()).toBe('plugins')
+    expect(renderer.panelHidden('plugins')).toBe(false)
+    expect(renderer.elements.get('error-plugins')?.textContent).toBe('@x/y is listed more than once.')
+    expect(renderer.tabErrorDotVisible('plugins')).toBe(true)
+  })
+
+  it('a rejected key with no error node of its own still reaches the user, on the status line', async () => {
+    // No field named `mysteryField` exists in the form today; this proves the
+    // fallback for *any* key Save might one day reject without a dedicated
+    // node — the failure mode HIGH 1 was: no text, no dot, no tab switch, and
+    // a blank status that reads exactly like a successful save.
+    const renderer = await load(async () => ({
+      ok: false,
+      errors: { mysteryField: 'Something about mysteryField is wrong.' },
+    }))
+
+    await renderer.save()
+
+    const status = renderer.elements.get('status')
+    expect(status?.textContent).toContain('Something about mysteryField is wrong.')
+    expect(status?.classes.has('status-failed')).toBe(true)
+    // No tab claims this field, so nothing should have moved.
+    expect(renderer.activeTab()).toBe('harness')
   })
 })
 

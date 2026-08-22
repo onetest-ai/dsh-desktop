@@ -4,9 +4,11 @@ const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey
 const el = (id) => document.getElementById(id)
 const kindOf = () => document.querySelector('input[name="kind"]:checked').value
 
-// The tab ids, in tab-bar order, and which panel each field's error belongs
-// to. A field absent here (`plugin-spec`, validated on Add rather than Save)
-// never drives a tab switch.
+// The tab ids, in tab-bar order, and which panel each Save-rejectable key's
+// error belongs to. `plugin-spec` is absent — it is validated on Add, not
+// Save, and never appears in a save result — so an Add error never drives a
+// tab switch; `plugins` names the accumulated-list error Save can still
+// return (see `error-plugins` in the Plugins panel).
 const TABS = ['harness', 'plugins', 'notifications', 'advanced']
 const FIELD_TAB = {
   repo: 'harness',
@@ -17,6 +19,7 @@ const FIELD_TAB = {
   hotkey: 'notifications',
   pnpmPath: 'advanced',
   npmPath: 'advanced',
+  plugins: 'plugins',
 }
 
 let activeTab = 'harness'
@@ -80,7 +83,7 @@ function clearErrors() {
   // fact, so it is tolerated the same way rather than by requiring the page to
   // carry a node per field forever. `kind` is not here: it is reported on the
   // status line, which `clearStatus` clears.
-  for (const name of FIELDS) {
+  for (const name of [...FIELDS, 'plugins']) {
     const target = el(`error-${name}`)
     if (target !== null) target.textContent = ''
   }
@@ -106,10 +109,19 @@ function appendProgress(line) {
   progress.scrollTop = progress.scrollHeight
 }
 
+/**
+ * Hide the harness-source update hint (the one next to the Version field),
+ * shown again only if `onUpdateAvailable` fires again.
+ *
+ * Scoped to that one hint only: it used to also clear every offered plugin
+ * update, so saving anything unrelated — the hotkey, say — silently dropped
+ * every pending plugin update hint before `onPluginUpdateAvailable` (pushed
+ * once per `read`) could ever offer them again. Per-plugin hints are instead
+ * reconciled by `load()`, which drops exactly the ones a fresh read shows as
+ * already applied.
+ */
 function hideUpdateHint() {
   el('update-hint').hidden = true
-  pluginUpdates.clear()
-  renderPluginRows()
 }
 
 function collect() {
@@ -186,31 +198,47 @@ function renderPluginRows() {
   }
 }
 
+// Guards `addPlugin` against a second Add firing while the first's
+// `validatePlugin` call is still in flight. Without it, two fast clicks on
+// the same spec both read `pluginRows` before either has pushed a row, both
+// pass the "not already in the list" check, and both append — a duplicate
+// pair that then hits Save's own duplicate check (routed through
+// `error-plugins`, since neither row is individually invalid).
+let addingPlugin = false
+
 /**
  * Validate the text in the Add input against the current rows and, if
  * accepted, append it as a new row and clear the input. Validation happens
  * here, in main over `settings.validatePlugin`, not deferred to Save.
  */
 async function addPlugin() {
-  const input = el('plugin-spec')
-  const errorNode = el('error-plugin-spec')
-  errorNode.textContent = ''
-  const spec = input.value
-  const existingPackages = pluginRows.map((plugin) => plugin.package)
-  let result
+  if (addingPlugin) return
+  addingPlugin = true
+  el('add-plugin').disabled = true
   try {
-    result = await window.settings.validatePlugin(spec, existingPackages)
-  } catch (error) {
-    errorNode.textContent = messageOf(error)
-    return
+    const input = el('plugin-spec')
+    const errorNode = el('error-plugin-spec')
+    errorNode.textContent = ''
+    const spec = input.value
+    const existingPackages = pluginRows.map((plugin) => plugin.package)
+    let result
+    try {
+      result = await window.settings.validatePlugin(spec, existingPackages)
+    } catch (error) {
+      errorNode.textContent = messageOf(error)
+      return
+    }
+    if (!result.ok) {
+      errorNode.textContent = result.message
+      return
+    }
+    pluginRows.push({ ...result.plugin, version: undefined })
+    input.value = ''
+    renderPluginRows()
+  } finally {
+    addingPlugin = false
+    el('add-plugin').disabled = false
   }
-  if (!result.ok) {
-    errorNode.textContent = result.message
-    return
-  }
-  pluginRows.push({ ...result.plugin, version: undefined })
-  input.value = ''
-  renderPluginRows()
 }
 
 /**
@@ -228,6 +256,13 @@ function removePlugin(pkg) {
  * it, without touching the entry's spec text — that is what keeps it
  * floating rather than silently pinning it the way rewriting the entry to
  * `pkg@version` would.
+ *
+ * Updates that one row's `version` in place rather than re-reading the whole
+ * config: a full `load()` here would replace `pluginRows` wholesale,
+ * silently discarding any row the user added or removed this session but has
+ * not yet saved (a `load()` re-reads *disk*, which still has the old list).
+ * This call only ever changes the one entry named by `pkg`, so it is the only
+ * row that needs to change.
  * @param {string} pkg - the package name.
  * @param {string} version - the version to install and store.
  */
@@ -240,10 +275,12 @@ async function acceptPluginUpdate(pkg, version) {
     const status = el('status')
     if (result.ok) {
       pluginUpdates.delete(pkg)
+      const plugin = pluginRows.find((candidate) => candidate.package === pkg)
+      if (plugin !== undefined) plugin.version = version
       status.textContent =
         result.warnings.length === 0 ? 'Settings saved.' : ['Settings saved.', ...result.warnings].join(' ')
       if (result.warnings.length > 0) status.classList.add('status-warning')
-      await load()
+      renderPluginRows()
     } else {
       status.textContent = result.errors.kind ?? 'The update could not be applied.'
       status.classList.add('status-failed')
@@ -259,6 +296,18 @@ async function acceptPluginUpdate(pkg, version) {
   }
 }
 
+/**
+ * Show the success message for a save whose `warnings` are already known.
+ * Pulled out so it can be applied both before and after the post-save
+ * reload — see the comment at its second call in `performSave`.
+ * @param {string[]} warnings - non-blocking problems the save reported.
+ */
+function showSavedStatus(warnings) {
+  const status = el('status')
+  status.textContent = warnings.length === 0 ? 'Settings saved.' : ['Settings saved.', ...warnings].join(' ')
+  if (warnings.length > 0) status.classList.add('status-warning')
+}
+
 async function performSave() {
   clearErrors()
   clearStatus()
@@ -269,19 +318,29 @@ async function performSave() {
   try {
     const result = await window.settings.save(collect())
     if (result.ok) {
-      const status = el('status')
-      if (result.warnings.length === 0) {
-        status.textContent = 'Settings saved.'
-      } else {
-        status.textContent = ['Settings saved.', ...result.warnings].join(' ')
-        status.classList.add('status-warning')
-      }
+      showSavedStatus(result.warnings)
+      // `save` reports only ok/warnings, never the resolved config — so the
+      // only way the rows on screen learn the versions this save just
+      // installed (turning "not installed yet" into "vX installed") is a
+      // fresh read. Safe here specifically because nothing is pending: this
+      // read reflects exactly the rows that were just submitted.
+      await load()
+      // `load()` touches `status` only on its own failure; a save that just
+      // succeeded must keep saying so regardless, so the success message is
+      // reasserted last rather than trusted to survive the reload untouched.
+      showSavedStatus(result.warnings)
     } else {
       // Every rejected field's tab is marked with a dot, and the tab holding
-      // the first one (in field order) becomes active, so a validation error
-      // on a field whose tab is not currently open is never left undiscoverable
-      // — the whole reason this loop tracks tabs rather than only field names.
+      // the first one (in submission order) becomes active, so an error on a
+      // field whose tab is not currently open is never left undiscoverable —
+      // the whole reason this loop tracks tabs rather than only field names.
+      // A key with no error node of its own (a future field that never grew
+      // one, or `plugins`, whose accumulated-list errors have no single
+      // field to attach to) still lands somewhere visible, on the status
+      // line, rather than being silently dropped.
       const errorTabs = new Set()
+      const unmapped = []
+      let firstErrorTab
       for (const [name, message] of Object.entries(result.errors)) {
         if (name === 'kind') {
           // Not a field the user corrects — the source is a radio pair — and a
@@ -296,16 +355,20 @@ async function performSave() {
         }
         const target = el(`error-${name}`)
         if (target !== null) target.textContent = message
+        else unmapped.push(message)
         const tab = FIELD_TAB[name]
-        if (tab !== undefined) errorTabs.add(tab)
+        if (tab !== undefined) {
+          errorTabs.add(tab)
+          if (firstErrorTab === undefined) firstErrorTab = tab
+        }
+      }
+      if (unmapped.length > 0) {
+        const status = el('status')
+        status.textContent = unmapped.join(' ')
+        status.classList.add('status-failed')
       }
       for (const tab of errorTabs) markTabError(tab, true)
-      if (errorTabs.size > 0 && !errorTabs.has(activeTab)) {
-        const firstErrorField = FIELDS.find(
-          (name) => result.errors[name] !== undefined && errorTabs.has(FIELD_TAB[name]),
-        )
-        if (firstErrorField !== undefined) selectTab(FIELD_TAB[firstErrorField], { focus: false })
-      }
+      if (firstErrorTab !== undefined && !errorTabs.has(activeTab)) selectTab(firstErrorTab, { focus: false })
     }
   } catch (error) {
     // A rejected invoke (the write itself failing with ENOSPC or EACCES, or

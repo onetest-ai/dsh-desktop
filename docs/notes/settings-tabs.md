@@ -116,3 +116,99 @@ inspection (gitignored `dist/`, never committed).
 - `grep -rn "/Users/" src/ tests/` — empty.
 - `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain` —
   empty throughout.
+
+## Review follow-up: renderer state reconciliation
+
+Moving the plugin list into renderer state (`pluginRows`) introduced a bug
+class the old `<textarea>` did not have: the list is authoritative in the
+renderer between reads, and three paths mutate it — Add, Remove, and accept-
+update's former `load()` — without being reconciled against what Save
+actually persists. Six findings, fixed in place on `feat/plugin-rows`.
+
+**HIGH 1 — an unreachable `plugins` save error.** `validateSettings` can
+return `errors.plugins` (e.g. a hand-edited `desktop.json` with a duplicate
+spec — `config.ts` validates shape but never dedupes), but `plugins` had no
+`#error-plugins` node and no `FIELD_TAB` entry: no text, no dot, no tab
+switch, and a blank `status` identical to a successful save. Fixed two ways:
+`settings.html` gained `#error-plugins` in the Plugins panel and `FIELD_TAB`
+now maps `plugins` to it; and `performSave` gained a general fallback — any
+rejected key whose `error-${name}` node does not exist now lands on the
+status line instead of vanishing, so a *future* unmapped field fails the same
+way rather than silently.
+
+**HIGH 2 — rendered rows diverging from what is saved, in both directions.**
+(a) `performSave` never re-read on success, so a row installed by that save
+kept showing "not installed yet". Fixed: a successful save now calls
+`load()`, safe specifically because nothing is pending at that point — the
+read reflects exactly what was just submitted. The success status message is
+reasserted after the reload (via a small `showSavedStatus` helper used both
+before and after) so `load()`'s own error path can never leave a successful
+save looking like "could not be read". (b) `acceptPluginUpdate` called
+`load()` unconditionally, replacing `pluginRows` wholesale from disk and
+silently discarding any row added or removed this session but not yet saved.
+Fixed: it now updates only the one accepted row's `version` in place and
+re-renders — no reload, since accepting one update never changes anything
+else.
+
+**MEDIUM 3 — double-Add race.** Guarded with a module-level `addingPlugin`
+flag, set synchronously before the first `await`, so a second click landing
+before the first's `validatePlugin` round-trip resolves returns immediately
+instead of racing on a stale `existingPackages` snapshot. The Add button is
+also disabled for the duration, mirroring Save's pattern.
+
+**MEDIUM 4 — a save discarding every pending plugin update.**
+`hideUpdateHint()` cleared the whole `pluginUpdates` map unconditionally, so
+saving something unrelated (the hotkey) dropped every offered update before
+`onPluginUpdateAvailable` (pushed once per `read`) could ever re-offer it.
+Fixed: `hideUpdateHint()` now only hides the harness-source version hint;
+per-plugin hints are reconciled solely by `load()`'s existing per-package
+"drop it if this read shows it already applied" logic, which already ran on
+every reload and is the correct place for it.
+
+**LOW 5 — README.** Updated the Settings intro to mention the four tabs, and
+rewrote the Plugins section for the row-based Add/Remove UI (it still
+described "one package per line" and "Removing a line"). Also corrected the
+stale `npm test` unit-test count.
+
+**LOW 6 — two test weaknesses.** `pressTabKey` computed `prevented` but
+discarded it with `void prevented`; it now returns the flag, and the arrow/
+Home/End tests assert it, plus a new test confirms an unrelated key neither
+moves the tab nor calls `preventDefault`. The "rows survive a reload from
+config" test never actually triggered a `read()` before this round (nothing
+called `load()` after save), so it only proved a re-render kept rows, not a
+reload; now that a real reload happens (see HIGH 2a), the test asserts
+`settings.read`'s call count actually grew, so it proves what its name says.
+
+### New tests
+
+Added to `src/renderer/settings.spec.ts`: an unmapped-error-key fallback
+test; a `plugins`-error routes to the Plugins tab/node/dot test; a row
+reflecting its resolved version after a successful save; an unsaved row
+surviving an accepted update elsewhere (plus a `readCallCount` assertion that
+the accept path never reloads); a double-Add-click guard test; and an
+unrelated-save-keeps-plugin-update-hints test.
+
+### Non-vacuity
+
+**HIGH 1**: reverted the unmapped-error fallback (the `else unmapped.push(...)`
+branch and its status-line write) in `performSave`. Ran
+`npx vitest run src/renderer/settings.spec.ts -t "no error node of its own"`:
+failed — `expected '' to contain 'Something about mysteryField is wrong.'`.
+Restored; full suite green again.
+
+**HIGH 2**: reverted `acceptPluginUpdate`'s in-place row update back to an
+unconditional `await load()`. Ran
+`npx vitest run src/renderer/settings.spec.ts -t "never re-reads config"`:
+failed — `expected 2 to be 1` (the read count grew, proving the reload path
+was back and the unsaved row's fate was no longer guaranteed). Restored; full
+suite green again.
+
+### Verification
+
+- `npm run build` — clean.
+- `npx vitest run` — 318 passed (was 310; +8 tests from this round).
+- `npm run pack && npm run test:smoke` — packaged and the smoke test passed
+  genuinely, with `~/.dsh` absent throughout.
+- `grep -rn "/Users/" src/ tests/` — empty.
+- `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain` —
+  empty throughout.

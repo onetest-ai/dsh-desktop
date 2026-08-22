@@ -52,7 +52,7 @@ Opening Settings on a configured managed source also checks, in the background, 
 
 ## Settings
 
-Reopen Settings any time from **File → Settings…** (⌘,), the application menu, or the tray. Changes take effect on save — no relaunch:
+Reopen Settings any time from **File → Settings…** (⌘,), the application menu, or the tray. It is organized into four tabs — **Harness**, **Plugins**, **Notifications & Shortcuts**, and **Advanced** — reachable by click or arrow/Home/End keys. Changes take effect on save — no relaunch:
 
 | Setting | Effect on save |
 |---|---|
@@ -91,22 +91,24 @@ Turn-completion notifications need the notification hook bridge, `@deepseek-ai/d
 
 ## Plugins
 
-Settings has a **Plugins** field: one package per line, typed the way you would on a command line.
+The **Plugins** tab has an Add field, typed the way you would type a package on a command line, plus one row per configured plugin showing its resolved version (or that it is not installed yet), whether it is pinned, and any offered update — each with its own Remove control.
 
 ```
 @deepseek-ai/dsh-hooks-claude-code
 @onetest/dsh-deck@0.2.1
 ```
 
-- `pkg` — **floating**: resolves to the registry's current version the first time it installs, and Settings later offers an update (with its own "Use it" button) without ever applying one on its own.
+- `pkg` — **floating**: resolves to the registry's current version the first time it installs, and Settings later offers an update (with its own "Use it" button on that row) without ever applying one on its own.
 - `pkg@version` — **pinned**: installs exactly that version and is never offered an update.
 
-Each entry installs under `$DSH_HOME/runtimes` and is inserted into the harness overlay at its own resolved entry file — the same managed-install machinery a managed harness source uses, so an install is a cache hit on every later save that does not change it. A plugin that fails to install, or that cannot actually be loaded once installed (a missing dependency, most commonly), is left out of that boot's overlay with the reason shown in the tray status; it never stops the harness from starting. A plugin that requires its own configuration is a separate case the app cannot protect against yet — see Known limitations. Removing a line removes that plugin from the next boot; it does not uninstall its files from `$DSH_HOME`.
+A spec is validated the moment you click Add — a malformed spec or one naming a package already in the list is rejected right there, next to the Add field, rather than only surfacing after Save.
+
+Each entry installs under `$DSH_HOME/runtimes` and is inserted into the harness overlay at its own resolved entry file — the same managed-install machinery a managed harness source uses, so an install is a cache hit on every later save that does not change it. A plugin that fails to install, or that cannot actually be loaded once installed (a missing dependency, most commonly), is left out of that boot's overlay with the reason shown in the tray status; it never stops the harness from starting. A plugin that requires its own configuration is a separate case the app cannot protect against yet — see Known limitations. Removing a row removes that plugin from the next boot; it does not uninstall its files from `$DSH_HOME`.
 
 ## Development
 
 ```bash
-npm test           # 280 unit tests
+npm test           # 318 unit tests
 npm run test:smoke # Playwright, against a packaged build (run `npm run pack` first)
 npm run build      # compile only
 ```
