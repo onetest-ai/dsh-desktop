@@ -51,6 +51,10 @@ function collect() {
   return form
 }
 
+function messageOf(error) {
+  return error && error.message ? error.message : String(error)
+}
+
 async function performSave() {
   clearErrors()
   clearStatus()
@@ -79,7 +83,7 @@ async function performSave() {
     // errors and status were just cleared and the button re-enables below, so
     // the user would see nothing at all and assume the save worked.
     const status = el('status')
-    status.textContent = `Settings were not saved. ${error && error.message ? error.message : String(error)}`
+    status.textContent = `Settings were not saved. ${messageOf(error)}`
     status.classList.add('status-failed')
   } finally {
     el('save').disabled = false
@@ -87,7 +91,21 @@ async function performSave() {
 }
 
 async function load() {
-  const result = await window.settings.read()
+  let result
+  try {
+    result = await window.settings.read()
+  } catch (error) {
+    // Without this the form would sit at its markup defaults — every field
+    // blank, the local radio checked — presenting itself as the stored
+    // configuration when nothing was read at all. Saying so, and saying that
+    // saving replaces rather than edits, keeps Save usable: this window is
+    // where a broken configuration gets repaired.
+    const status = el('status')
+    status.textContent = `The current settings could not be read. ${messageOf(error)}`
+    status.classList.add('status-failed')
+    el('intro').textContent = 'Saving will replace the stored configuration with what you enter here.'
+    return
+  }
   el('intro').textContent = result.configured
     ? 'Changes are applied as soon as you save.'
     : 'Tell the app where to find the harness to get started.'

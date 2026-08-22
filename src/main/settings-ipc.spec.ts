@@ -228,3 +228,97 @@ describe('save', () => {
     })
   })
 })
+
+describe('a failing update lookup', () => {
+  it('still returns the stored form when checkManagedUpdate throws synchronously', () => {
+    // What `resolveBinary` does when PATH is system-only and `npmPath` is
+    // unset: it throws before any promise exists, so a `.catch()` on the
+    // result never attaches. Escaping here would reject `settings:read` and
+    // leave the user with a blank form on the one screen that fixes it.
+    const checkManagedUpdate = vi.fn(() => {
+      throw new Error('dsh-desktop: npm is not on PATH')
+    })
+    const handlers = createSettingsHandlers(
+      deps({ readConfig: () => ({ configured: true, config: MANAGED_STORED }), checkManagedUpdate }),
+    )
+
+    const result = handlers.read(() => {})
+
+    expect(checkManagedUpdate).toHaveBeenCalled()
+    expect(result.configured).toBe(true)
+    expect(result.form).toEqual(
+      expect.objectContaining({ kind: 'managed', package: PKG, version: '0.1.1-rc.2' }),
+    )
+  })
+
+  it('never reports an update when the lookup throws synchronously', () => {
+    const handlers = createSettingsHandlers(
+      deps({
+        readConfig: () => ({ configured: true, config: MANAGED_STORED }),
+        checkManagedUpdate: vi.fn(() => {
+          throw new Error('dsh-desktop: npm is not on PATH')
+        }),
+      }),
+    )
+    const offered: string[] = []
+
+    handlers.read((latest) => offered.push(latest))
+
+    expect(offered).toEqual([])
+  })
+})
+
+describe('concurrent saves', () => {
+  it('runs one install when a second save arrives while the first is still installing', async () => {
+    // The reachable paths: the update hint's "use latest" button, which the
+    // renderer never disables, and a settings window reopened mid-install,
+    // whose Save starts enabled.
+    let releaseInstall: (version: string) => void = () => {}
+    const installManaged = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseInstall = resolve
+        }),
+    )
+    const writeConfig = vi.fn()
+    const apply = vi.fn(async () => [])
+    const handlers = createSettingsHandlers(deps({ installManaged, writeConfig, apply }))
+    const managedForm = form({ kind: 'managed', version: '0.1.1-rc.2', workspace: REPO })
+
+    const first = handlers.save(managedForm)
+    const second = handlers.save(form({ kind: 'managed', version: '0.2.0', workspace: REPO }))
+    releaseInstall('0.1.1-rc.2')
+    const results = await Promise.all([first, second])
+
+    expect(installManaged).toHaveBeenCalledTimes(1)
+    expect(writeConfig).toHaveBeenCalledTimes(1)
+    expect(apply).toHaveBeenCalledTimes(1)
+    expect(results).toEqual([
+      { ok: true, warnings: [] },
+      { ok: true, warnings: [] },
+    ])
+  })
+
+  it('starts a fresh save once the previous one has finished', async () => {
+    const writeConfig = vi.fn()
+    const handlers = createSettingsHandlers(deps({ writeConfig }))
+
+    await handlers.save(form())
+    await handlers.save(form())
+
+    expect(writeConfig).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses the form of the call that started the run, not one that joined it', async () => {
+    const writeConfig = vi.fn()
+    const apply = vi.fn(async () => [])
+    const handlers = createSettingsHandlers(deps({ writeConfig, apply, probePort: vi.fn(async () => true) }))
+
+    const first = handlers.save(form({ hotkey: 'CommandOrControl+Shift+D' }))
+    const second = handlers.save(form({ hotkey: 'CommandOrControl+Shift+K' }))
+    await Promise.all([first, second])
+
+    expect(writeConfig).toHaveBeenCalledTimes(1)
+    expect(writeConfig).toHaveBeenCalledWith(expect.objectContaining({ hotkey: 'CommandOrControl+Shift+D' }))
+  })
+})

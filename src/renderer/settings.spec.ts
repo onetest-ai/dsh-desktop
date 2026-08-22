@@ -114,9 +114,11 @@ interface Renderer {
 /**
  * Load `settings.js` over a fake document.
  * @param onSave - what the `settings.save` bridge call does.
+ * @param onRead - what the `settings.read` bridge call does; defaults to a
+ *   configured local source with empty fields.
  * @returns the fake elements and a way to fire the save button.
  */
-async function load(onSave: SaveOutcome): Promise<Renderer> {
+async function load(onSave: SaveOutcome, onRead?: () => Promise<unknown>): Promise<Renderer> {
   const hiddenIds = declaredHiddenIds()
   const elements = new Map(
     declaredIds().map((id) => {
@@ -147,10 +149,13 @@ async function load(onSave: SaveOutcome): Promise<Renderer> {
   let progressListener: ((line: string) => void) | undefined
   let updateListener: ((latest: string) => void) | undefined
   const settings = {
-    read: vi.fn(async () => ({
-      configured: true,
-      form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
-    })),
+    read: vi.fn(
+      onRead ??
+        (async () => ({
+          configured: true,
+          form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+        })),
+    ),
     pickFolder: vi.fn(async () => undefined),
     save: vi.fn(onSave),
     onProgress: vi.fn((listener: (line: string) => void) => {
@@ -278,5 +283,35 @@ describe('update available', () => {
 
     expect(renderer.elements.get('version')?.value).toBe('0.2.0')
     expect(save).toHaveBeenCalled()
+  })
+})
+
+describe('load', () => {
+  it('explains a rejected read instead of presenting the defaults as the stored config', async () => {
+    // The form's markup defaults are an empty local checkout. Left unexplained
+    // they claim to be the user's configuration, which is what makes a broken
+    // config look like no config at all.
+    const renderer = await load(
+      async () => ({ ok: true, warnings: [] }),
+      () => Promise.reject(new Error('dsh-desktop: npm is not on PATH')),
+    )
+
+    const status = renderer.elements.get('status')
+    expect(status?.textContent).toContain('could not be read')
+    expect(status?.textContent).toContain('npm is not on PATH')
+    expect(status?.classes.has('status-failed')).toBe(true)
+    expect(renderer.elements.get('intro')?.textContent).not.toBe('')
+  })
+
+  it('leaves Save usable after a failed read, since this is the repair screen', async () => {
+    const renderer = await load(
+      async () => ({ ok: true, warnings: [] }),
+      () => Promise.reject(new Error('dsh-desktop: npm is not on PATH')),
+    )
+
+    expect(renderer.elements.get('save')?.disabled).toBe(false)
+    await renderer.save()
+
+    expect(renderer.elements.get('status')?.textContent).toBe('Settings saved.')
   })
 })

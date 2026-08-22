@@ -1,5 +1,6 @@
 import type { ConfigResult, DesktopConfig } from './config'
 import { formFor, validateSettings, type FieldErrors, type SettingsForm } from './settings-validate'
+import { singleFlight } from './single-flight'
 
 /** Everything the handlers need from the surrounding app, injected for testability. */
 export interface SettingsDeps {
@@ -26,8 +27,11 @@ export interface SettingsDeps {
   /**
    * The registry's current `latest` for a managed package, when it differs
    * from the installed version; `undefined` when it matches or the lookup
-   * fails. A rejection is treated by the caller the same as `undefined` — see
-   * `read` below — so this may also reject.
+   * matches nothing. Update information is optional, so this may fail in
+   * either of the two ways a function can: by rejecting, or by throwing
+   * synchronously before any promise exists — resolving the `npm` binary can
+   * fail outright under a Finder-minimal PATH. `read` treats both the same as
+   * `undefined`.
    */
   checkManagedUpdate(pkg: string, installed: string, npmPath: string | undefined): Promise<string | undefined>
 }
@@ -41,14 +45,19 @@ export interface SettingsHandlers {
    * @param onUpdateAvailable - called at most once, later and out of band,
    *   with the registry's `latest` version when the stored source is managed
    *   and a newer version exists. Never called on a local source, an
-   *   unconfigured app, or a failed/offline lookup.
+   *   unconfigured app, a failed or offline lookup, or an `npm` binary that
+   *   cannot be resolved.
    */
   read(onUpdateAvailable?: (latest: string) => void): { configured: boolean; form: SettingsForm }
   pickFolder(): Promise<string | undefined>
   /**
+   * Saves one form. Saves are serialized: a call made while another is still
+   * running starts nothing and resolves with the running save's own outcome.
+   * @param form - the submitted values.
    * @param onProgress - called with each line of `npm install` output while a
    *   managed source installs. Never called for a local source or an
    *   already-installed managed version.
+   * @returns the save outcome.
    */
   save(form: SettingsForm, onProgress?: (line: string) => void): Promise<SaveResult>
 }
@@ -62,72 +71,118 @@ export interface SettingsHandlers {
  * @returns the handler set the IPC channels delegate to.
  */
 export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
+  /**
+   * The form and progress sink of the save currently being started.
+   *
+   * `singleFlight` takes no arguments, so the arguments travel through these
+   * two variables instead. `saveOnce()` invokes `performSave` synchronously on
+   * the call that starts a run, before `save` returns, so a run always reads
+   * the values its own caller just wrote; a call arriving mid-run overwrites
+   * them but starts nothing, and joins the run already in flight.
+   */
+  let pendingForm!: SettingsForm
+  let pendingProgress: ((line: string) => void) | undefined
+
+  /**
+   * Serialize saves in the main process, where every entry point converges.
+   *
+   * A save is a minutes-long operation — `npm install`, a config write, then
+   * `applySettings` — and the renderer's disabled Save button does not bound
+   * it: the update hint's "use latest" is a second trigger, and closing and
+   * reopening Settings mid-install produces a fresh window whose Save is
+   * enabled. Two concurrent runs would mean two `npm install --prefix` into
+   * one directory, two `writeConfig`, and two `applySettings`. A second caller
+   * joins the run in flight and observes its outcome instead of starting one.
+   */
+  const saveOnce = singleFlight(() => performSave(pendingForm, pendingProgress))
+
+  /**
+   * Validate, install, persist, and apply one settings form.
+   * @param form - the submitted values.
+   * @param onProgress - receives `npm install` output lines, for a managed source.
+   * @returns the save outcome.
+   */
+  async function performSave(form: SettingsForm, onProgress?: (line: string) => void): Promise<SaveResult> {
+    if (deps.isQuitting()) {
+      return { ok: false, errors: { kind: 'The app is shutting down; settings were not saved.' } }
+    }
+
+    const validated = validateSettings(form)
+    if (!validated.ok) return validated
+
+    let config = validated.config
+    if (config.harness.kind === 'managed') {
+      const harness = config.harness
+      let concreteVersion: string
+      try {
+        concreteVersion = await deps.installManaged(
+          harness.package,
+          harness.version,
+          config.npmPath,
+          onProgress ?? (() => {}),
+        )
+      } catch (error) {
+        return { ok: false, errors: { version: (error as Error).message } }
+      }
+      config = { ...config, harness: { ...harness, version: concreteVersion } }
+    }
+
+    // A save arriving while quitting is refused above; an install can run
+    // for minutes, so quitting is re-checked here too — otherwise a quit
+    // during a long install would still land a write and an apply behind
+    // its back once the install finishes.
+    if (deps.isQuitting()) {
+      return { ok: false, errors: { kind: 'The app is shutting down; settings were not saved.' } }
+    }
+
+    const stored = deps.readConfig()
+    const previous = stored.configured ? stored.config : undefined
+
+    if (previous?.notifyPort !== config.notifyPort) {
+      if (!(await deps.probePort(config.notifyPort))) {
+        return {
+          ok: false,
+          errors: { notifyPort: `Port ${String(config.notifyPort)} is already in use.` },
+        }
+      }
+    }
+
+    deps.writeConfig(config)
+    const warnings = await deps.apply(previous, config)
+    return { ok: true, warnings }
+  }
+
   return {
     read: (onUpdateAvailable) => {
       const stored = deps.readConfig()
       if (onUpdateAvailable !== undefined && stored.configured && stored.config.harness.kind === 'managed') {
         const { package: pkg, version } = stored.config.harness
-        deps
-          .checkManagedUpdate(pkg, version, stored.config.npmPath)
-          .then((latest) => {
-            if (latest !== undefined) onUpdateAvailable(latest)
-          })
-          .catch(() => {
-            // A failed or offline registry lookup is an optional nicety, not
-            // an error the settings window should ever surface.
-          })
+        try {
+          deps
+            .checkManagedUpdate(pkg, version, stored.config.npmPath)
+            .then((latest) => {
+              if (latest !== undefined) onUpdateAvailable(latest)
+            })
+            .catch(() => {
+              // A failed or offline registry lookup is an optional nicety, not
+              // an error the settings window should ever surface.
+            })
+        } catch {
+          // The same nicety, failing one step earlier: `checkManagedUpdate`
+          // resolves the `npm` binary before it has a promise to reject, and
+          // that resolution throws when PATH is system-only and `npmPath` is
+          // unset. Without this catch the throw escapes `read`, rejects the
+          // IPC call, and leaves the user with a blank settings form — the one
+          // screen that can fix the very config that caused the throw.
+        }
       }
       return { configured: stored.configured, form: formFor(stored) }
     },
     pickFolder: () => deps.pickFolder(),
-    async save(form: SettingsForm, onProgress?: (line: string) => void): Promise<SaveResult> {
-      if (deps.isQuitting()) {
-        return { ok: false, errors: { kind: 'The app is shutting down; settings were not saved.' } }
-      }
-
-      const validated = validateSettings(form)
-      if (!validated.ok) return validated
-
-      let config = validated.config
-      if (config.harness.kind === 'managed') {
-        const harness = config.harness
-        let concreteVersion: string
-        try {
-          concreteVersion = await deps.installManaged(
-            harness.package,
-            harness.version,
-            config.npmPath,
-            onProgress ?? (() => {}),
-          )
-        } catch (error) {
-          return { ok: false, errors: { version: (error as Error).message } }
-        }
-        config = { ...config, harness: { ...harness, version: concreteVersion } }
-      }
-
-      // A save arriving while quitting is refused above; an install can run
-      // for minutes, so quitting is re-checked here too — otherwise a quit
-      // during a long install would still land a write and an apply behind
-      // its back once the install finishes.
-      if (deps.isQuitting()) {
-        return { ok: false, errors: { kind: 'The app is shutting down; settings were not saved.' } }
-      }
-
-      const stored = deps.readConfig()
-      const previous = stored.configured ? stored.config : undefined
-
-      if (previous?.notifyPort !== config.notifyPort) {
-        if (!(await deps.probePort(config.notifyPort))) {
-          return {
-            ok: false,
-            errors: { notifyPort: `Port ${String(config.notifyPort)} is already in use.` },
-          }
-        }
-      }
-
-      deps.writeConfig(config)
-      const warnings = await deps.apply(previous, config)
-      return { ok: true, warnings }
+    save: (form, onProgress) => {
+      pendingForm = form
+      pendingProgress = onProgress
+      return saveOnce()
     },
   }
 }
