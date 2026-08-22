@@ -18,6 +18,7 @@ function clearStatus() {
   const status = el('status')
   status.textContent = ''
   status.classList.remove('status-warning')
+  status.classList.remove('status-failed')
 }
 
 function collect() {
@@ -73,6 +74,14 @@ el('save').addEventListener('click', async () => {
         if (target !== null) target.textContent = message
       }
     }
+  } catch (error) {
+    // A rejected invoke (the write itself failing with ENOSPC or EACCES, or
+    // the main handler throwing) would otherwise be an unhandled rejection:
+    // errors and status were just cleared and the button re-enables below, so
+    // the user would see nothing at all and assume the save worked.
+    const status = el('status')
+    status.textContent = `Settings were not saved. ${error && error.message ? error.message : String(error)}`
+    status.classList.add('status-failed')
   } finally {
     el('save').disabled = false
   }
