@@ -129,6 +129,57 @@ describe('ensureInstalled', () => {
     expect(rm).toHaveBeenCalledWith(managedStagingDir(DSH_HOME, PKG, '0.1.1-rc.2'))
   })
 
+  it('recovers a leftover install directory that has no linked binary, instead of failing every retry', async () => {
+    // Reachable from an install killed before staging existed, or a package
+    // that links no `dsh` bin: the directory is non-empty but `isInstalled`
+    // correctly reports it as absent, so the install runs and then renames
+    // onto it. `renameSync` fails with ENOTEMPTY on a non-empty target, and
+    // without a removal every retry fails identically with no way to recover
+    // from inside the app.
+    const dir = managedDir(DSH_HOME, PKG, '0.1.1-rc.2')
+    const present = new Set([dir, `${dir}/node_modules`, `${dir}/package.json`])
+    const run = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' })
+    const rm = vi.fn((path: string) => {
+      for (const entry of [...present]) {
+        if (entry === path || entry.startsWith(`${path}/`)) present.delete(entry)
+      }
+    })
+    const rename = vi.fn((from: string, to: string) => {
+      if (present.has(to)) throw new Error(`ENOTEMPTY: directory not empty, rename '${from}' -> '${to}'`)
+      present.add(to)
+    })
+    const deps = fakeDeps({ run, rm, rename }, present)
+
+    await expect(ensureInstalled(deps, NPM, DSH_HOME, PKG, '0.1.1-rc.2')).resolves.toBeUndefined()
+
+    expect(rename).toHaveBeenCalledWith(managedStagingDir(DSH_HOME, PKG, '0.1.1-rc.2'), dir)
+    expect(present.has(dir)).toBe(true)
+  })
+
+  it('removes the target only after the staging install has succeeded', async () => {
+    // Deleting a working install and then failing to replace it would be
+    // worse than the bug being fixed.
+    const dir = managedDir(DSH_HOME, PKG, '0.1.1-rc.2')
+    const run = vi.fn().mockResolvedValue({ code: 1, stdout: '', stderr: 'npm ERR! network timeout' })
+    const rm = vi.fn()
+    const deps = fakeDeps({ run, rm })
+
+    await expect(ensureInstalled(deps, NPM, DSH_HOME, PKG, '0.1.1-rc.2')).rejects.toThrow(/network timeout/)
+
+    expect(rm).not.toHaveBeenCalledWith(dir)
+  })
+
+  it('touches nothing above the version directory it replaces', async () => {
+    const run = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' })
+    const rm = vi.fn()
+    const deps = fakeDeps({ run, rm })
+
+    await ensureInstalled(deps, NPM, DSH_HOME, PKG, '0.1.1-rc.2')
+
+    const allowed = [managedStagingDir(DSH_HOME, PKG, '0.1.1-rc.2'), managedDir(DSH_HOME, PKG, '0.1.1-rc.2')]
+    for (const call of rm.mock.calls) expect(allowed).toContain(call[0])
+  })
+
   it('leaves no installed directory behind when the run is killed mid-install', async () => {
     // What quitting during a six-minute install looks like from here: the
     // process group is reaped, so the run rejects rather than returning a

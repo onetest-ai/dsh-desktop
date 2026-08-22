@@ -124,7 +124,9 @@ export function isInstalled(deps: InstallDeps, dshHome: string, pkg: string, ver
  * The install runs in a staging directory and is renamed into place only on
  * success, so a run killed by quit or cut short by `INSTALL_TIMEOUT_MS` can
  * never leave something a later `isInstalled` accepts (see
- * `managedStagingDir`).
+ * `managedStagingDir`). Whatever occupied the target directory is removed just
+ * before the rename, so a retry always converges rather than failing forever
+ * on residue.
  * @param deps - injected effects.
  * @param npm - the resolved `npm` binary.
  * @param dshHome - the resolved `$DSH_HOME` directory.
@@ -165,7 +167,19 @@ export async function ensureInstalled(
     throw new Error(`dsh-desktop: npm install ${pkg}@${version} failed:\n${result.stderr}`)
   }
 
-  deps.rename(staging, managedDir(dshHome, pkg, version))
+  const dir = managedDir(dshHome, pkg, version)
+  // A non-empty directory can sit here with no linked binary — an install
+  // killed before staging existed, or a package that links no `dsh` bin — and
+  // `isInstalled` correctly reports it as absent. Renaming onto a non-empty
+  // target fails with ENOTEMPTY, so without this every retry would fail
+  // identically and the install could never be repaired from inside the app.
+  //
+  // Removed only here, after the staging install has already succeeded: the
+  // replacement is on disk, so this cannot delete a working install and then
+  // fail to produce one. The path is derived for this exact package and
+  // version, never a parent of it.
+  deps.rm(dir)
+  deps.rename(staging, dir)
 }
 
 /**

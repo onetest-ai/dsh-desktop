@@ -1,6 +1,5 @@
 import type { ConfigResult, DesktopConfig } from './config'
 import { formFor, validateSettings, type FieldErrors, type SettingsForm } from './settings-validate'
-import { singleFlight } from './single-flight'
 
 /** Everything the handlers need from the surrounding app, injected for testability. */
 export interface SettingsDeps {
@@ -35,6 +34,9 @@ export interface SettingsDeps {
    */
   checkManagedUpdate(pkg: string, installed: string, npmPath: string | undefined): Promise<string | undefined>
 }
+
+/** What a save refused for overlapping another save reports on the `kind` field. */
+export const SAVE_IN_PROGRESS = 'A save is already running; wait for it to finish and try again.'
 
 /** Outcome of a save attempt. `warnings` carries non-blocking problems, such as a rejected hotkey. */
 export type SaveResult = { ok: true; warnings: string[] } | { ok: false; errors: FieldErrors }
@@ -72,29 +74,23 @@ export interface SettingsHandlers {
  */
 export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
   /**
-   * The form and progress sink of the save currently being started.
-   *
-   * `singleFlight` takes no arguments, so the arguments travel through these
-   * two variables instead. `saveOnce()` invokes `performSave` synchronously on
-   * the call that starts a run, before `save` returns, so a run always reads
-   * the values its own caller just wrote; a call arriving mid-run overwrites
-   * them but starts nothing, and joins the run already in flight.
-   */
-  let pendingForm!: SettingsForm
-  let pendingProgress: ((line: string) => void) | undefined
-
-  /**
-   * Serialize saves in the main process, where every entry point converges.
+   * Whether a save is running, gating every entry point in the main process.
    *
    * A save is a minutes-long operation — `npm install`, a config write, then
    * `applySettings` — and the renderer's disabled Save button does not bound
    * it: the update hint's "use latest" is a second trigger, and closing and
    * reopening Settings mid-install produces a fresh window whose Save is
    * enabled. Two concurrent runs would mean two `npm install --prefix` into
-   * one directory, two `writeConfig`, and two `applySettings`. A second caller
-   * joins the run in flight and observes its outcome instead of starting one.
+   * one directory, two `writeConfig`, and two `applySettings`.
+   *
+   * The second save is refused rather than joined. Joining is right for
+   * idempotent work like the tray's Restart, where every caller wants the one
+   * same outcome; each save instead carries its own values, so handing the
+   * second caller the first's result would report a local checkout as saved
+   * while a managed install was applied — dropping the user's intent and
+   * removing the very cue that would make them retry.
    */
-  const saveOnce = singleFlight(() => performSave(pendingForm, pendingProgress))
+  let saving = false
 
   /**
    * Validate, install, persist, and apply one settings form.
@@ -179,10 +175,16 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       return { configured: stored.configured, form: formFor(stored) }
     },
     pickFolder: () => deps.pickFolder(),
-    save: (form, onProgress) => {
-      pendingForm = form
-      pendingProgress = onProgress
-      return saveOnce()
+    save: async (form, onProgress) => {
+      if (saving) {
+        return { ok: false, errors: { kind: SAVE_IN_PROGRESS } }
+      }
+      saving = true
+      try {
+        return await performSave(form, onProgress)
+      } finally {
+        saving = false
+      }
     },
   }
 }

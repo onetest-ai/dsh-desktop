@@ -53,3 +53,26 @@ Findings 1–4 all gained covering tests, and both Criticals were proven non-vac
 - **Critical 2**: `install-process.spec.ts` drives real processes rather than a fake `spawn`, because the property under test is that quitting actually reaps the install — a mock can only show that a function was called. The child prints its own pid and a grandchild's, and the test asks the operating system whether they are gone. Removing `detached: true` and the tracking set failed both "kills an in-flight install and its whole process group" and "kills a run that outlives its bound"; the group-kill test failed only after its 30-second bound, with the processes still alive, and the reverted run left a grandchild behind on the machine — the leak the fix exists to prevent. Restoring returned the file to 8 passing.
 
 `index.spec.ts` covers the wiring — quit reaches `stopAll`, and reaches it before `app.quit()` — while the reaping itself is proven against real processes. `settings-window.spec.ts` now records which renderer each pushed line reached, so the cross-talk test can assert that a reopened window receives nothing.
+
+## Re-review residuals
+
+Two residuals came out of the re-review that confirmed the wave above. Both are boundaries the first pass reasoned about one step too early.
+
+### The rename had no target to rename onto
+
+`ensureInstalled` renamed the `.partial` staging directory onto `managedDir`, and `renameSync` fails with `ENOTEMPTY` when the target exists and is non-empty. That state is reachable: an install killed by a build from before the staging fix, or any package that links no `dsh` bin, leaves a non-empty `managedDir` whose `managedBin` is absent. `isInstalled` correctly says "not installed", the install runs, the rename fails — and it surfaces as an opaque error on the version field that **every retry reproduces identically**, with no way to recover from inside the app.
+
+The target is now removed immediately before the rename, so a retry always converges. Two properties bound what that removal can do. It is the derived `managedDir` for that exact package and version, never a parent — asserted by a test that checks every `rm` call against the two permitted paths. And it runs only after the staging install has already succeeded, so the replacement is on disk before anything is deleted: deleting a working install and then failing to produce one would be worse than the bug. A separate test pins that a failed install never removes the target.
+
+### Joining was the wrong semantics for a save
+
+`singleFlight` hands the second caller the run already in flight, so a second save received the *starter's* outcome. The previous round's own test pinned it: a save of `0.2.0` was told `{ok: true}` by an install of `0.1.1-rc.2`. Concretely, a reopened Settings window switches to a local checkout, clicks Save, and reads "Settings saved." while a managed config is applied instead — the user's intent silently dropped, and the success message removing the one cue that would make them retry.
+
+Joining is right for idempotent work like the tray's Restart, where every caller wants the same outcome. Each save carries its own values, so the second is now refused rather than joined, with `kind: "A save is already running; wait for it to finish and try again."` The serialization itself is unchanged and still asserted: one `npm install --prefix`, one `writeConfig`, one `applySettings`.
+
+The renderer routes a `kind` error to the status line instead of a field node. `kind` is not a value the user corrects — the source is a radio pair — and this class of error rejects the whole save rather than naming a bad input, so it belongs beside the Save button that produced it, where "Settings saved." and the save-failed message already appear. The now-unused `error-kind` node is gone from the markup, and `clearStatus` already clears where the message lands. Real field errors still go to their own fields, which a test pins so the two paths cannot collapse into one.
+
+### What the vacuity checks showed
+
+- **Rename target**: dropping the `deps.rm(dir)` line failed "recovers a leftover install directory that has no linked binary", with the promise rejecting `ENOTEMPTY: directory not empty` instead of resolving — the user-facing failure exactly. Restoring returned the file to 18 passing.
+- **Save semantics**: restoring the joining behaviour (the second caller awaiting the run in flight) failed both "refuses a second save instead of reporting the first one's outcome as its own" and "never applies the values of a save it refused"; the first only after its 30-second bound, because under joining the second caller blocks on an install that never finishes rather than being answered. Restoring returned the file to 24 passing.

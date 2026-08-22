@@ -315,3 +315,36 @@ describe('load', () => {
     expect(renderer.elements.get('status')?.textContent).toBe('Settings saved.')
   })
 })
+
+describe('a refused save', () => {
+  it('shows the refusal beside the Save button rather than under a control it does not name', async () => {
+    // `kind` rejects the whole save — a save already running, or the app
+    // shutting down — so it must land where the user is looking after
+    // clicking Save, not where a bad field value would.
+    const renderer = await load(async () => ({
+      ok: false,
+      errors: { kind: 'A save is already running; wait for it to finish and try again.' },
+    }))
+    await renderer.save()
+
+    const status = renderer.elements.get('status')
+    expect(status?.textContent).toBe('A save is already running; wait for it to finish and try again.')
+    expect(status?.classes.has('status-failed')).toBe(true)
+    expect(renderer.elements.get('save')?.disabled).toBe(false)
+  })
+
+  it('never leaves a refusal reading as a successful save', async () => {
+    const renderer = await load(async () => ({ ok: false, errors: { kind: 'A save is already running.' } }))
+    await renderer.save()
+
+    expect(renderer.elements.get('status')?.textContent).not.toBe('Settings saved.')
+  })
+
+  it('still routes a real field error to that field', async () => {
+    const renderer = await load(async () => ({ ok: false, errors: { version: 'npm ERR! 404 Not Found' } }))
+    await renderer.save()
+
+    expect(renderer.elements.get('error-version')?.textContent).toBe('npm ERR! 404 Not Found')
+    expect(renderer.elements.get('status')?.textContent).toBe('')
+  })
+})

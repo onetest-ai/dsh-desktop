@@ -12,10 +12,11 @@ function showKind() {
 
 function clearErrors() {
   // Not every field has an error node: only the ones main can reject by name
-  // do. The render loop below already tolerates an absent node, and this is
-  // the same fact, so it is tolerated the same way rather than by requiring
-  // the page to carry a node per field forever.
-  for (const name of [...FIELDS, 'kind']) {
+  // do. The render loop already tolerates an absent node, and this is the same
+  // fact, so it is tolerated the same way rather than by requiring the page to
+  // carry a node per field forever. `kind` is not here: it is reported on the
+  // status line, which `clearStatus` clears.
+  for (const name of FIELDS) {
     const target = el(`error-${name}`)
     if (target !== null) target.textContent = ''
   }
@@ -73,6 +74,17 @@ async function performSave() {
       }
     } else {
       for (const [name, message] of Object.entries(result.errors)) {
+        if (name === 'kind') {
+          // Not a field the user corrects — the source is a radio pair — and a
+          // `kind` error rejects the whole save rather than naming a bad
+          // value. It belongs beside the Save button that produced it, where
+          // the success and failure messages already appear; under the radios
+          // it would sit above the fold the user is looking at.
+          const status = el('status')
+          status.textContent = message
+          status.classList.add('status-failed')
+          continue
+        }
         const target = el(`error-${name}`)
         if (target !== null) target.textContent = message
       }

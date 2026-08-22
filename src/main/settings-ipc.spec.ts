@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSettingsHandlers, type SettingsDeps } from './settings-ipc'
+import { createSettingsHandlers, SAVE_IN_PROGRESS, type SettingsDeps } from './settings-ipc'
 import type { SettingsForm } from './settings-validate'
 import type { DesktopConfig } from './config'
 
@@ -269,10 +269,13 @@ describe('a failing update lookup', () => {
 })
 
 describe('concurrent saves', () => {
-  it('runs one install when a second save arrives while the first is still installing', async () => {
+  it('refuses a second save instead of reporting the first one\'s outcome as its own', async () => {
     // The reachable paths: the update hint's "use latest" button, which the
     // renderer never disables, and a settings window reopened mid-install,
-    // whose Save starts enabled.
+    // whose Save starts enabled. Each save carries different values, so the
+    // running save's outcome is not an answer to this one — being told
+    // "Settings saved." for a form that was never applied drops the user's
+    // intent and removes the cue that would make them retry.
     let releaseInstall: (version: string) => void = () => {}
     const installManaged = vi.fn(
       () =>
@@ -283,20 +286,18 @@ describe('concurrent saves', () => {
     const writeConfig = vi.fn()
     const apply = vi.fn(async () => [])
     const handlers = createSettingsHandlers(deps({ installManaged, writeConfig, apply }))
-    const managedForm = form({ kind: 'managed', version: '0.1.1-rc.2', workspace: REPO })
 
-    const first = handlers.save(managedForm)
-    const second = handlers.save(form({ kind: 'managed', version: '0.2.0', workspace: REPO }))
+    const first = handlers.save(form({ kind: 'managed', version: '0.1.1-rc.2', workspace: REPO }))
+    const second = await handlers.save(form({ kind: 'local', repo: REPO }))
     releaseInstall('0.1.1-rc.2')
-    const results = await Promise.all([first, second])
+    await first
 
+    expect(second).toEqual({ ok: false, errors: { kind: SAVE_IN_PROGRESS } })
+    // The serialization itself is unchanged: one install, one write, one apply.
     expect(installManaged).toHaveBeenCalledTimes(1)
     expect(writeConfig).toHaveBeenCalledTimes(1)
     expect(apply).toHaveBeenCalledTimes(1)
-    expect(results).toEqual([
-      { ok: true, warnings: [] },
-      { ok: true, warnings: [] },
-    ])
+    expect(writeConfig).toHaveBeenCalledWith(expect.objectContaining({ harness: expect.objectContaining({ kind: 'managed' }) }))
   })
 
   it('starts a fresh save once the previous one has finished', async () => {
@@ -309,15 +310,16 @@ describe('concurrent saves', () => {
     expect(writeConfig).toHaveBeenCalledTimes(2)
   })
 
-  it('uses the form of the call that started the run, not one that joined it', async () => {
+  it('never applies the values of a save it refused', async () => {
     const writeConfig = vi.fn()
     const apply = vi.fn(async () => [])
     const handlers = createSettingsHandlers(deps({ writeConfig, apply, probePort: vi.fn(async () => true) }))
 
     const first = handlers.save(form({ hotkey: 'CommandOrControl+Shift+D' }))
-    const second = handlers.save(form({ hotkey: 'CommandOrControl+Shift+K' }))
-    await Promise.all([first, second])
+    const second = await handlers.save(form({ hotkey: 'CommandOrControl+Shift+K' }))
+    await first
 
+    expect(second).toEqual({ ok: false, errors: { kind: SAVE_IN_PROGRESS } })
     expect(writeConfig).toHaveBeenCalledTimes(1)
     expect(writeConfig).toHaveBeenCalledWith(expect.objectContaining({ hotkey: 'CommandOrControl+Shift+D' }))
   })
