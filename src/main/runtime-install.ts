@@ -1,4 +1,4 @@
-import { managedBin, managedDir } from './harness-source'
+import { managedBin, managedDir, managedStagingDir } from './harness-source'
 import { envWithLauncherDir } from './server'
 
 /**
@@ -10,13 +10,40 @@ export interface InstallDeps {
   run(
     command: string,
     args: string[],
-    options: { cwd?: string; env?: NodeJS.ProcessEnv; onLine?: (line: string) => void },
+    options: { cwd?: string; env?: NodeJS.ProcessEnv; onLine?: (line: string) => void; timeoutMs?: number },
   ): Promise<{ code: number; stdout: string; stderr: string }>
   /** Whether a path exists on disk. */
   exists(path: string): boolean
   /** Creates a directory, including parents. */
   mkdir(path: string): void
+  /** Removes a directory and its contents; succeeds when it is already absent. */
+  rm(path: string): void
+  /** Moves a directory to a new path on the same filesystem. */
+  rename(from: string, to: string): void
 }
+
+/**
+ * Upper bound on a `npm view` metadata lookup.
+ *
+ * The lookup is one registry request for one field, and it runs on the path
+ * that opens Settings and the path that saves it. A registry that has accepted
+ * the connection and then stalled would otherwise leave Save disabled with no
+ * way out, so the bound is set well above any healthy response time but far
+ * below the install's.
+ */
+const VIEW_TIMEOUT_MS = 60_000
+
+/**
+ * Upper bound on one `npm install` of a managed runtime.
+ *
+ * A measured cold install of this package's dependency tree — 62 direct
+ * workspace dependencies whose transitive tree builds node-pty, sharp, and
+ * koffi — takes about 375 seconds; a warm one is skipped entirely by
+ * `isInstalled`. Fifteen minutes is roughly 2.4x the measured cold figure,
+ * which leaves room for a slow network or a slower machine while still
+ * bounding a hung install rather than letting it disable Save forever.
+ */
+const INSTALL_TIMEOUT_MS = 900_000
 
 /**
  * Run `npm` for a managed install, with `node` reachable on the child's PATH.
@@ -35,10 +62,10 @@ function runNpm(
   deps: InstallDeps,
   npm: string,
   args: string[],
-  options: { cwd?: string; onLine?: (line: string) => void },
+  options: { cwd?: string; onLine?: (line: string) => void; timeoutMs: number },
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const env = envWithLauncherDir(npm, process.env)
-  return deps.run(npm, args, { cwd: options.cwd, env, onLine: options.onLine })
+  return deps.run(npm, args, { cwd: options.cwd, env, onLine: options.onLine, timeoutMs: options.timeoutMs })
 }
 
 /**
@@ -59,7 +86,7 @@ function runNpm(
  */
 export async function resolveVersion(deps: InstallDeps, npm: string, pkg: string, spec: string): Promise<string> {
   const tag = spec === '' ? 'latest' : spec
-  const result = await runNpm(deps, npm, ['view', `${pkg}@${tag}`, 'version'], {})
+  const result = await runNpm(deps, npm, ['view', `${pkg}@${tag}`, 'version'], { timeoutMs: VIEW_TIMEOUT_MS })
   if (result.code !== 0) {
     throw new Error(`dsh-desktop: npm view ${pkg}@${tag} failed:\n${result.stderr}`)
   }
@@ -73,7 +100,9 @@ export async function resolveVersion(deps: InstallDeps, npm: string, pkg: string
  * existing: a directory can survive a partial or failed `npm install`
  * (dependency resolution written, `node_modules/.bin` not yet linked), and
  * treating that as "installed" would launch a broken binary instead of
- * retrying the install.
+ * retrying the install. The directory itself only ever appears complete —
+ * `ensureInstalled` installs into a staging sibling and renames — so the two
+ * checks agree rather than one covering for the other.
  * @param deps - injected effects.
  * @param dshHome - the resolved `$DSH_HOME` directory.
  * @param pkg - the package name.
@@ -91,6 +120,11 @@ export function isInstalled(deps: InstallDeps, dshHome: string, pkg: string, ver
  * holds: this is the fast path a warm cache and a pinned version make
  * possible, and the entire reason a dist-tag is never installed directly
  * (see `resolveVersion`).
+ *
+ * The install runs in a staging directory and is renamed into place only on
+ * success, so a run killed by quit or cut short by `INSTALL_TIMEOUT_MS` can
+ * never leave something a later `isInstalled` accepts (see
+ * `managedStagingDir`).
  * @param deps - injected effects.
  * @param npm - the resolved `npm` binary.
  * @param dshHome - the resolved `$DSH_HOME` directory.
@@ -108,17 +142,30 @@ export async function ensureInstalled(
 ): Promise<void> {
   if (isInstalled(deps, dshHome, pkg, version)) return
 
-  const dir = managedDir(dshHome, pkg, version)
-  deps.mkdir(dir)
-  const result = await runNpm(
-    deps,
-    npm,
-    ['install', '--prefix', dir, `${pkg}@${version}`, '--no-audit', '--no-fund'],
-    { cwd: dshHome, onLine },
-  )
+  const staging = managedStagingDir(dshHome, pkg, version)
+  // Residue from an install that was killed or timed out on an earlier
+  // attempt; npm would otherwise install on top of a partial tree.
+  deps.rm(staging)
+  deps.mkdir(staging)
+
+  let result: { code: number; stdout: string; stderr: string }
+  try {
+    result = await runNpm(
+      deps,
+      npm,
+      ['install', '--prefix', staging, `${pkg}@${version}`, '--no-audit', '--no-fund'],
+      { cwd: dshHome, onLine, timeoutMs: INSTALL_TIMEOUT_MS },
+    )
+  } catch (error) {
+    deps.rm(staging)
+    throw error
+  }
   if (result.code !== 0) {
+    deps.rm(staging)
     throw new Error(`dsh-desktop: npm install ${pkg}@${version} failed:\n${result.stderr}`)
   }
+
+  deps.rename(staging, managedDir(dshHome, pkg, version))
 }
 
 /**

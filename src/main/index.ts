@@ -1,10 +1,10 @@
 import { app, BrowserWindow, dialog, globalShortcut, Notification } from 'electron'
-import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
 import { ConfigurationError } from './configuration-error'
 import { configPath, resolveDshHome, type HarnessSource } from './harness-source'
+import { createInstallRunner } from './install-process'
 import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { preflight } from './preflight'
@@ -144,50 +144,21 @@ export async function applySettings(previous: DesktopConfig | undefined, next: D
 }
 
 /**
- * Run a command to completion, feeding every combined stdout/stderr line to
- * `onLine` as it arrives, for `runtime-install.ts`'s injected `InstallDeps`.
- * @param command - the binary to run.
- * @param args - its arguments.
- * @param options - working directory, environment, and a per-line callback.
- * @returns the completed run's exit code and captured output.
+ * Owns every `npm` child a managed install spawns.
+ *
+ * Held at module scope, not inside the installer, because the quit path has to
+ * reach it: an install runs for minutes, and `shutdown` reaps these children
+ * alongside the harness child rather than letting them outlive the app.
  */
-function runInstallCommand(
-  command: string,
-  args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; onLine?: (line: string) => void },
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(command, args, { cwd: options.cwd, env: options.env ?? process.env })
-    let stdout = ''
-    let stderr = ''
-    let buffer = ''
-    const feed = (chunk: Buffer): void => {
-      buffer += chunk.toString('utf8')
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-      for (const line of lines) options.onLine?.(line)
-    }
-    proc.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8')
-      feed(chunk)
-    })
-    proc.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf8')
-      feed(chunk)
-    })
-    proc.on('error', (cause) => reject(new Error(`dsh-desktop: failed to spawn ${command}`, { cause })))
-    proc.on('close', (code) => {
-      if (buffer !== '') options.onLine?.(buffer)
-      resolve({ code: code ?? 1, stdout, stderr })
-    })
-  })
-}
+const installs = createInstallRunner()
 
 /** Real `InstallDeps`, backing `runtime-install.ts`'s effects with the actual filesystem and `npm`. */
 const installDeps: InstallDeps = {
-  run: runInstallCommand,
+  run: (command, args, options) => installs.run(command, args, options),
   exists: existsSync,
   mkdir: (path) => mkdirSync(path, { recursive: true }),
+  rm: (path) => rmSync(path, { recursive: true, force: true }),
+  rename: renameSync,
 }
 
 const settingsHandlers = createSettingsHandlers({
@@ -418,6 +389,12 @@ async function restart(): Promise<void> {
  */
 async function shutdown(): Promise<void> {
   quitting = true
+  // The install child is reaped first and unconditionally: it is in neither
+  // the lifecycle chain nor `child`, so nothing below would ever find it, and
+  // an unreaped `npm` keeps writing into $DSH_HOME after Electron is gone.
+  // Killing it also makes the in-flight save's install reject, which is what
+  // lets that save unwind instead of finishing behind the quit's back.
+  await installs.stopAll()
   await stopCurrent()
   await transition
   // A transition that was mid-flight may have registered a child of its own

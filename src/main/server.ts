@@ -203,8 +203,8 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
 }
 
 /**
- * Terminate the child's entire process group, escalating to SIGKILL, and
- * resolve only once the direct child has actually exited.
+ * Terminate a detached child's entire process group, escalating to SIGKILL,
+ * and resolve only once the direct child has actually exited.
  *
  * Resolving at the signal rather than at the exit would let a caller treat the
  * child as gone while its `'exit'` (and therefore `onExit`) is still pending,
@@ -217,10 +217,13 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
  * coordinate a graceful stop. The residual risk is the usual one for
  * group-wide signals — the pid could in principle have been recycled after the
  * child was reaped — which is why the live path signals before that can happen.
+ * Every process this app spawns detached — the harness child and the `npm`
+ * install child — is reaped through this one function, so quit has a single
+ * teardown path rather than one per spawn site.
  * @param child - the detached child process.
  * @returns a promise that settles once the child is gone.
  */
-function stopGroup(child: ChildProcess): Promise<void> {
+export function stopGroup(child: ChildProcess): Promise<void> {
   const pid = child.pid
   if (pid === undefined) return Promise.resolve()
 

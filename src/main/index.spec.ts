@@ -177,6 +177,13 @@ function closeSettings(): void {
   settingsOnClosed?.()
 }
 
+/** The install runner `index.ts` owns; tests assert the quit path reaches it. */
+const installStopAll = vi.fn(async () => {})
+const installRun = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }))
+vi.mock('./install-process', () => ({
+  createInstallRunner: () => ({ run: installRun, stopAll: installStopAll }),
+}))
+
 const preflightMock = vi.fn(() => ({ ok: true }))
 vi.mock('./preflight', () => ({ preflight: (...args: unknown[]) => preflightMock(...(args as [])) }))
 
@@ -204,6 +211,8 @@ const dshWebCommandMock = vi.fn(() => ({ command: 'pnpm', args: [], cwd: '/tmp/h
 vi.mock('./server', () => ({
   startServer: (options: StartOptions) => startServer(options),
   dshWebCommand: (...args: unknown[]) => dshWebCommandMock(...(args as [])),
+  resolveBinary: vi.fn((configured: string | undefined, name: string) => configured ?? name),
+  stopGroup: vi.fn(async () => {}),
 }))
 
 /** Whether the next spawned child's `stop()` hangs until `releaseStop()`. */
@@ -303,6 +312,7 @@ beforeEach(() => {
   // config unreadable would otherwise leak that into the next one.
   loadConfigMock.mockImplementation(() => configResult)
   startNotifyListenerMock.mockImplementation(async () => ({ port: 1, close: notifyCloseMock }))
+  installStopAll.mockImplementation(async () => {})
   settingsOnClosed = undefined
   vi.clearAllMocks()
   fake.resetReady()
@@ -442,6 +452,35 @@ describe('before-quit', () => {
     await fake.emit('before-quit', second)
     expect(second.prevented).toBe(false)
     expect(child.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('reaps the npm install child, which is in neither the chain nor the harness child', async () => {
+    // A managed install runs for minutes. It is not the harness child and it
+    // is not a lifecycle transition, so nothing else on the quit path would
+    // ever find it, and an unreaped npm keeps writing into $DSH_HOME after
+    // Electron has exited.
+    await bootReady()
+
+    await fake.emit('before-quit', fake.quitEvent())
+    await settle()
+
+    expect(installStopAll).toHaveBeenCalled()
+    expect(fake.app.quit).toHaveBeenCalled()
+  })
+
+  it('reaps the install before the app is allowed to quit', async () => {
+    await bootReady()
+    let stopped = false
+    installStopAll.mockImplementation(async () => {
+      await Promise.resolve()
+      stopped = true
+    })
+
+    await fake.emit('before-quit', fake.quitEvent())
+    await settle()
+
+    expect(stopped).toBe(true)
+    expect(fake.app.quit).toHaveBeenCalled()
   })
 })
 

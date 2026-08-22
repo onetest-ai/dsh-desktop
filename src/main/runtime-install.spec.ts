@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { managedBin, managedDir } from './harness-source'
+import { managedBin, managedDir, managedStagingDir } from './harness-source'
 import { ensureInstalled, isInstalled, latestVersion, resolveVersion, updateAvailable, type InstallDeps } from './runtime-install'
 
 const PKG = '@deepseek-ai/dsh'
@@ -14,6 +14,8 @@ function fakeDeps(
   return {
     exists: (path) => existingPaths.has(path),
     mkdir: vi.fn(),
+    rm: vi.fn(),
+    rename: vi.fn(),
     ...overrides,
   }
 }
@@ -27,6 +29,16 @@ describe('resolveVersion', () => {
 
     expect(version).toBe('0.1.1-rc.2')
     expect(run).toHaveBeenCalledWith(NPM, ['view', `${PKG}@stable`, 'version'], expect.anything())
+  })
+
+  it('bounds the registry lookup with a timeout', async () => {
+    const run = vi.fn().mockResolvedValue({ code: 0, stdout: '0.1.1-rc.2\n', stderr: '' })
+    const deps = fakeDeps({ run })
+
+    await resolveVersion(deps, NPM, PKG, 'latest')
+
+    const options = run.mock.calls[0][2] as { timeoutMs?: number }
+    expect(options.timeoutMs).toBeGreaterThan(0)
   })
 
   it('treats an empty spec as latest', async () => {
@@ -67,27 +79,70 @@ describe('ensureInstalled', () => {
     expect(run).not.toHaveBeenCalled()
   })
 
-  it('creates the directory and runs npm install for a version not yet present', async () => {
+  it('installs into a staging directory and renames it into place on success', async () => {
     const run = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' })
     const mkdir = vi.fn()
-    const deps = fakeDeps({ run, mkdir })
+    const rename = vi.fn()
+    const deps = fakeDeps({ run, mkdir, rename })
 
     await ensureInstalled(deps, NPM, DSH_HOME, PKG, '0.1.1-rc.2')
 
-    const dir = managedDir(DSH_HOME, PKG, '0.1.1-rc.2')
-    expect(mkdir).toHaveBeenCalledWith(dir)
+    const staging = managedStagingDir(DSH_HOME, PKG, '0.1.1-rc.2')
+    expect(mkdir).toHaveBeenCalledWith(staging)
     expect(run).toHaveBeenCalledWith(
       NPM,
-      ['install', '--prefix', dir, `${PKG}@0.1.1-rc.2`, '--no-audit', '--no-fund'],
+      ['install', '--prefix', staging, `${PKG}@0.1.1-rc.2`, '--no-audit', '--no-fund'],
       expect.anything(),
     )
+    expect(rename).toHaveBeenCalledWith(staging, managedDir(DSH_HOME, PKG, '0.1.1-rc.2'))
   })
 
-  it('throws carrying npm stderr when the install fails', async () => {
-    const run = vi.fn().mockResolvedValue({ code: 1, stdout: '', stderr: 'npm ERR! network timeout' })
+  it('bounds the install with a timeout', async () => {
+    const run = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' })
     const deps = fakeDeps({ run })
 
+    await ensureInstalled(deps, NPM, DSH_HOME, PKG, '0.1.1-rc.2')
+
+    const options = run.mock.calls[0][2] as { timeoutMs?: number }
+    expect(options.timeoutMs).toBeGreaterThan(0)
+  })
+
+  it('clears staging residue from an earlier killed install before starting', async () => {
+    const run = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' })
+    const rm = vi.fn()
+    const deps = fakeDeps({ run, rm })
+
+    await ensureInstalled(deps, NPM, DSH_HOME, PKG, '0.1.1-rc.2')
+
+    expect(rm).toHaveBeenCalledWith(managedStagingDir(DSH_HOME, PKG, '0.1.1-rc.2'))
+  })
+
+  it('throws carrying npm stderr when the install fails, and leaves nothing in place', async () => {
+    const run = vi.fn().mockResolvedValue({ code: 1, stdout: '', stderr: 'npm ERR! network timeout' })
+    const rename = vi.fn()
+    const rm = vi.fn()
+    const deps = fakeDeps({ run, rename, rm })
+
     await expect(ensureInstalled(deps, NPM, DSH_HOME, PKG, '0.1.1-rc.2')).rejects.toThrow(/npm ERR! network timeout/)
+
+    expect(rename).not.toHaveBeenCalled()
+    expect(rm).toHaveBeenCalledWith(managedStagingDir(DSH_HOME, PKG, '0.1.1-rc.2'))
+  })
+
+  it('leaves no installed directory behind when the run is killed mid-install', async () => {
+    // What quitting during a six-minute install looks like from here: the
+    // process group is reaped, so the run rejects rather than returning a
+    // code. The version must not read as installed on the next launch.
+    const run = vi.fn().mockRejectedValue(new Error('dsh-desktop: npm install exceeded 900000ms and was stopped.'))
+    const rename = vi.fn()
+    const rm = vi.fn()
+    const deps = fakeDeps({ run, rename, rm })
+
+    await expect(ensureInstalled(deps, NPM, DSH_HOME, PKG, '0.1.1-rc.2')).rejects.toThrow(/was stopped/)
+
+    expect(rename).not.toHaveBeenCalled()
+    expect(rm).toHaveBeenLastCalledWith(managedStagingDir(DSH_HOME, PKG, '0.1.1-rc.2'))
+    expect(isInstalled(deps, DSH_HOME, PKG, '0.1.1-rc.2')).toBe(false)
   })
 
   it('streams npm install output lines to onLine', async () => {

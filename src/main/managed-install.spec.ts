@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { managedBin, managedDir } from './harness-source'
+import { managedBin, managedDir, managedStagingDir } from './harness-source'
 import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import type { InstallDeps } from './runtime-install'
 
@@ -15,6 +15,8 @@ function fakeDeps(
   return {
     exists: (path) => existingPaths.has(path),
     mkdir: vi.fn(),
+    rm: vi.fn(),
+    rename: vi.fn(),
     ...overrides,
   }
 }
@@ -33,7 +35,14 @@ describe('createManagedInstaller', () => {
     expect(run).toHaveBeenCalledWith(NPM, ['view', `${PKG}@latest`, 'version'], expect.anything())
     expect(run).toHaveBeenCalledWith(
       NPM,
-      ['install', '--prefix', managedDir(DSH_HOME, PKG, '0.1.1-rc.2'), `${PKG}@0.1.1-rc.2`, '--no-audit', '--no-fund'],
+      [
+        'install',
+        '--prefix',
+        managedStagingDir(DSH_HOME, PKG, '0.1.1-rc.2'),
+        `${PKG}@0.1.1-rc.2`,
+        '--no-audit',
+        '--no-fund',
+      ],
       expect.anything(),
     )
   })

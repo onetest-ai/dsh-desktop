@@ -110,6 +110,31 @@ export function managedDir(dshHome: string, pkg: string, version: string): strin
 }
 
 /**
+ * Directory an in-progress `npm install` writes into, before it is moved into
+ * place as `managedDir`.
+ *
+ * Installing straight into the final directory means a killed install — the
+ * quit path reaping `npm` mid-run, or the install timing out — leaves a
+ * half-written tree where a complete one is expected. `isInstalled` checks the
+ * linked binary rather than the directory, but `node_modules/.bin/dsh` is
+ * linked before the dependency tree is fully written, so that check alone
+ * cannot tell a killed install from a finished one. Staging elsewhere and
+ * renaming makes the final directory appear only once the install has
+ * succeeded, which is a filesystem-atomic step rather than a check.
+ *
+ * The suffix cannot collide with a real version's directory: `encodeSegment`
+ * escapes every `.` as `%2E`, so no encoded segment ever contains a literal
+ * dot, let alone ends with `.partial`.
+ * @param dshHome - the resolved `$DSH_HOME` directory.
+ * @param pkg - the package name.
+ * @param version - the exact version being installed.
+ * @returns a sibling of `managedDir` holding the in-progress install.
+ */
+export function managedStagingDir(dshHome: string, pkg: string, version: string): string {
+  return `${managedDir(dshHome, pkg, version)}.partial`
+}
+
+/**
  * The `dsh` executable inside a managed install directory.
  *
  * The published package declares `"bin": { "dsh": "lib/bin.js" }`, so
