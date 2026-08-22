@@ -60,12 +60,14 @@
 
   <p class="group-label" id="plugins-label">Plugins</p>
   <section class="group" aria-labelledby="plugins-label">
-    <p class="hint">One package per line: <code>pkg</code> for the latest, offered updates later, or <code>pkg@version</code> to pin it exactly and never be offered an update. The notification hook bridge is pre-seeded below.</p>
-    <label for="plugins">Packages</label>
-    <textarea id="plugins" rows="4" spellcheck="false"></textarea>
-    <p class="error" id="error-plugins"></p>
-    <p class="hint" id="plugin-status"></p>
-    <div id="plugin-updates"></div>
+    <p class="hint"><code>pkg</code> for the latest, offered updates later, or <code>pkg@version</code> to pin it exactly and never be offered an update. The notification hook bridge is pre-seeded below.</p>
+    <label for="plugin-spec">Add a package</label>
+    <div class="row">
+      <input id="plugin-spec" type="text" placeholder="pkg or pkg@version" spellcheck="false">
+      <button id="add-plugin" type="button">Add</button>
+    </div>
+    <p class="error" id="error-plugin-spec"></p>
+    <ul id="plugin-rows" class="plugin-rows"></ul>
   </section>
 
 </main>

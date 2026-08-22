@@ -3,17 +3,21 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 /**
  * The settings renderer's entire capability surface.
  *
- * Four operations reach the main process, plus three receive-only
+ * Five operations reach the main process, plus three receive-only
  * subscriptions. The renderer has no `fs`, no path construction, and no way
  * to write anything: every value it can persist goes through `save` or
  * `acceptPluginUpdate`, both of which validate in main. `acceptPluginUpdate`
  * is distinct from `save` so accepting an update for a floating plugin can
  * move only that entry's installed version without touching its spec text —
  * routing it through `save` would mean rewriting the spec to carry a version,
- * which is exactly what pins an entry.
+ * which is exactly what pins an entry. `validatePlugin` is a fifth call-in:
+ * it lets the row-based plugin list validate one spec against the same
+ * grammar `save` re-checks, without installing anything and without handing
+ * the renderer its own copy of that grammar.
  * `onProgress`/`onUpdateAvailable`/`onPluginUpdateAvailable` add no way to
  * *call* into main — they only let the renderer listen for what main chooses
- * to push, each returning an unsubscribe function.
+ * to push, each returning an unsubscribe function. `validatePlugin` adds no
+ * new push channel: it answers over its own `invoke`, like the other four.
  */
 contextBridge.exposeInMainWorld('settings', {
   read: () => ipcRenderer.invoke('settings:read'),
@@ -21,6 +25,8 @@ contextBridge.exposeInMainWorld('settings', {
   save: (form: unknown) => ipcRenderer.invoke('settings:save', form),
   acceptPluginUpdate: (pkg: string, version: string) =>
     ipcRenderer.invoke('settings:accept-plugin-update', pkg, version),
+  validatePlugin: (spec: string, existingPackages: string[]) =>
+    ipcRenderer.invoke('settings:validate-plugin', spec, existingPackages),
   onProgress: (listener: (line: string) => void) => {
     const handler = (_event: IpcRendererEvent, line: string): void => listener(line)
     ipcRenderer.on('settings:progress', handler)

@@ -1,6 +1,13 @@
 import type { ConfigResult, DesktopConfig } from './config'
 import { parseSpec, type PluginEntry } from './plugin-entries'
-import { formFor, validateSettings, type FieldErrors, type SettingsForm } from './settings-validate'
+import {
+  formFor,
+  validatePluginSpec,
+  validateSettings,
+  type FieldErrors,
+  type PluginSpecValidation,
+  type SettingsForm,
+} from './settings-validate'
 
 /** Everything the handlers need from the surrounding app, injected for testability. */
 export interface SettingsDeps {
@@ -109,6 +116,20 @@ export interface SettingsHandlers {
    * @returns the outcome, in the same shape as `save`.
    */
   acceptPluginUpdate(pkg: string, version: string, onProgress?: (line: string) => void): Promise<SaveResult>
+  /**
+   * Validate one freshly typed plugin spec for the Settings window's
+   * row-based Add control, synchronously and without installing anything.
+   *
+   * This is the row-based control's only access to the spec grammar: the
+   * renderer holds no copy of `validSpecShape`/`parseSpec`, so a change to
+   * that grammar cannot drift between what Add accepts and what Save later
+   * re-validates.
+   * @param spec - the raw text typed into the Add input.
+   * @param existingPackages - package names of the rows already added, so a
+   *   duplicate is rejected here rather than only surfacing at Save.
+   * @returns the parsed entry to add as a row, or the message to show beside the input.
+   */
+  validatePlugin(spec: string, existingPackages: string[]): PluginSpecValidation
 }
 
 /**
@@ -392,5 +413,6 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
         saving = false
       }
     },
+    validatePlugin: (spec, existingPackages) => validatePluginSpec(spec, existingPackages),
   }
 }

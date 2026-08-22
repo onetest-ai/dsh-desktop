@@ -1,13 +1,14 @@
 // Dumb form: reads values, sends them to main, renders whatever comes back.
 // All validation lives in the main process.
-const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'plugins']
+const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath']
 const el = (id) => document.getElementById(id)
 const kindOf = () => document.querySelector('input[name="kind"]:checked').value
 
-// The last plugins the main process reported, keyed by package name, so a
-// later out-of-band update-available push can be rendered without another
-// round trip. Reset on every `load`.
-let pluginsByPackage = new Map()
+// The plugin rows currently shown, in display order, each `{ spec, package,
+// pinned, version }` — `version` is undefined until a save has installed the
+// entry at least once. Populated from `read()` on load and appended to by
+// `addPlugin`; never edited as free text, only added to or removed from.
+let pluginRows = []
 
 // Updates offered but not yet accepted, keyed by package name so any number
 // of floating plugins can each carry their own pending update at once — a
@@ -56,12 +57,16 @@ function appendProgress(line) {
 function hideUpdateHint() {
   el('update-hint').hidden = true
   pluginUpdates.clear()
-  renderPluginUpdates()
+  renderPluginRows()
 }
 
 function collect() {
   const form = { kind: kindOf() }
   for (const name of FIELDS) form[name] = el(name).value
+  // The wire format `validateSettings` expects is still one spec per line —
+  // only the way the user builds that list changed, from a free-text
+  // textarea to rows validated one at a time on Add.
+  form.plugins = pluginRows.map((plugin) => plugin.spec).join('\n')
   return form
 }
 
@@ -69,40 +74,107 @@ function messageOf(error) {
   return error && error.message ? error.message : String(error)
 }
 
-/** Render the plugin status block from `pluginsByPackage`, one line per entry. */
-function renderPluginStatus() {
-  const lines = [...pluginsByPackage.values()].map((plugin) => {
+/**
+ * Render one row per entry in `pluginRows`, each showing the package, its
+ * resolved version or that it is not installed yet, whether it is pinned,
+ * and — inline, not in a separate list — any update offered for it. Each row
+ * carries its own remove control.
+ */
+function renderPluginRows() {
+  const list = el('plugin-rows')
+  list.textContent = ''
+  for (const plugin of pluginRows) {
+    const row = document.createElement('li')
+    row.className = 'plugin-row'
+
+    const main = document.createElement('div')
+    main.className = 'plugin-row-main'
+
+    const name = document.createElement('span')
+    name.className = 'plugin-name'
+    name.textContent = plugin.package
+    main.append(name)
+
+    const meta = document.createElement('span')
+    meta.className = 'plugin-meta'
     const state = plugin.version === undefined ? 'not installed yet' : `v${plugin.version} installed`
-    return `${plugin.package} — ${plugin.pinned ? 'pinned, ' : ''}${state}`
-  })
-  el('plugin-status').textContent = lines.join('\n')
+    meta.textContent = plugin.pinned ? `pinned, ${state}` : state
+    main.append(meta)
+
+    row.append(main)
+
+    const actions = document.createElement('div')
+    actions.className = 'plugin-row-actions'
+
+    const latest = pluginUpdates.get(plugin.package)
+    if (latest !== undefined) {
+      const hint = document.createElement('span')
+      hint.className = 'plugin-update-hint'
+      hint.textContent = `${latest} available`
+      actions.append(hint)
+
+      const use = document.createElement('button')
+      use.type = 'button'
+      use.className = 'plugin-update-use'
+      use.textContent = 'Use it'
+      use.addEventListener('click', () => acceptPluginUpdate(plugin.package, latest))
+      actions.append(use)
+    }
+
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'plugin-remove'
+    remove.setAttribute('aria-label', `Remove ${plugin.package}`)
+    remove.textContent = 'Remove'
+    remove.addEventListener('click', () => removePlugin(plugin.package))
+    actions.append(remove)
+
+    row.append(actions)
+    list.append(row)
+  }
 }
 
 /**
- * Render one hint row per pending update in `pluginUpdates`, each with its
- * own "Use it" button — never one shared element, so a second plugin's
- * update is never overwritten and left unreachable by the first's.
+ * Validate the text in the Add input against the current rows and, if
+ * accepted, append it as a new row and clear the input. Validation happens
+ * here, in main over `settings.validatePlugin`, not deferred to Save.
  */
-function renderPluginUpdates() {
-  const container = el('plugin-updates')
-  container.textContent = ''
-  for (const [pkg, latest] of pluginUpdates) {
-    const row = document.createElement('p')
-    row.className = 'hint update-hint'
-    row.textContent = `${pkg}: version ${latest} is available. `
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.textContent = 'Use it'
-    button.addEventListener('click', () => acceptPluginUpdate(pkg, latest))
-    row.append(button)
-    container.append(row)
+async function addPlugin() {
+  const input = el('plugin-spec')
+  const errorNode = el('error-plugin-spec')
+  errorNode.textContent = ''
+  const spec = input.value
+  const existingPackages = pluginRows.map((plugin) => plugin.package)
+  let result
+  try {
+    result = await window.settings.validatePlugin(spec, existingPackages)
+  } catch (error) {
+    errorNode.textContent = messageOf(error)
+    return
   }
+  if (!result.ok) {
+    errorNode.textContent = result.message
+    return
+  }
+  pluginRows.push({ ...result.plugin, version: undefined })
+  input.value = ''
+  renderPluginRows()
+}
+
+/**
+ * Remove exactly the row naming `pkg`, and any pending update offered for it.
+ * @param {string} pkg - the package name of the row to remove.
+ */
+function removePlugin(pkg) {
+  pluginRows = pluginRows.filter((plugin) => plugin.package !== pkg)
+  pluginUpdates.delete(pkg)
+  renderPluginRows()
 }
 
 /**
  * Install `version` for `pkg`'s already-configured floating entry and store
  * it, without touching the entry's spec text — that is what keeps it
- * floating rather than silently pinning it the way rewriting the textarea to
+ * floating rather than silently pinning it the way rewriting the entry to
  * `pkg@version` would.
  * @param {string} pkg - the package name.
  * @param {string} version - the version to install and store.
@@ -116,7 +188,6 @@ async function acceptPluginUpdate(pkg, version) {
     const status = el('status')
     if (result.ok) {
       pluginUpdates.delete(pkg)
-      renderPluginUpdates()
       status.textContent =
         result.warnings.length === 0 ? 'Settings saved.' : ['Settings saved.', ...result.warnings].join(' ')
       if (result.warnings.length > 0) status.classList.add('status-warning')
@@ -124,11 +195,13 @@ async function acceptPluginUpdate(pkg, version) {
     } else {
       status.textContent = result.errors.kind ?? 'The update could not be applied.'
       status.classList.add('status-failed')
+      renderPluginRows()
     }
   } catch (error) {
     const status = el('status')
     status.textContent = `The update could not be applied. ${messageOf(error)}`
     status.classList.add('status-failed')
+    renderPluginRows()
   } finally {
     el('save').disabled = false
   }
@@ -205,15 +278,14 @@ async function load() {
     radio.checked = radio.value === form.kind
   }
   showKind()
-  pluginsByPackage = new Map(result.plugins.map((plugin) => [plugin.package, plugin]))
-  renderPluginStatus()
+  pluginRows = result.plugins.map((plugin) => ({ ...plugin }))
   // A freshly loaded plugin's version may already reflect an update that was
   // pending; drop any hint whose package no longer has a stale version.
   for (const pkg of [...pluginUpdates.keys()]) {
-    const plugin = pluginsByPackage.get(pkg)
+    const plugin = pluginRows.find((candidate) => candidate.package === pkg)
     if (plugin === undefined || plugin.version === pluginUpdates.get(pkg)) pluginUpdates.delete(pkg)
   }
-  renderPluginUpdates()
+  renderPluginRows()
 }
 
 for (const radio of document.querySelectorAll('input[name="kind"]')) {
@@ -237,6 +309,10 @@ el('use-latest').addEventListener('click', () => {
   void performSave()
 })
 
+el('add-plugin').addEventListener('click', () => {
+  void addPlugin()
+})
+
 // Receive-only: the main process pushes progress lines while a managed
 // install runs, and a later update-available result once the background
 // registry lookup finishes. Neither adds a way to call into main.
@@ -247,10 +323,10 @@ window.settings.onUpdateAvailable((latest) => {
   el('update-hint').hidden = false
 })
 window.settings.onPluginUpdateAvailable((pkg, latest) => {
-  const plugin = pluginsByPackage.get(pkg)
+  const plugin = pluginRows.find((candidate) => candidate.package === pkg)
   if (plugin === undefined || plugin.version === latest) return
   pluginUpdates.set(pkg, latest)
-  renderPluginUpdates()
+  renderPluginRows()
 })
 
 void load()

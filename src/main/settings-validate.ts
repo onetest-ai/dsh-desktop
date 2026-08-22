@@ -53,14 +53,15 @@ const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$
 const VERSION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.+-]*$/
 
 /**
- * Parse the `plugins` textarea into entries, or the reason the text was
- * rejected.
+ * Parse the `plugins` field — one spec per line, accumulated from the
+ * Settings window's row-based Add control — into entries, or the reason the
+ * text was rejected.
  *
  * Each non-blank line is one spec. A duplicate package name (pinned or not)
- * is rejected rather than silently keeping one: the user typed two lines
- * about the same package, which is almost certainly a mistake worth
- * surfacing instead of guessing which one they meant.
- * @param text - the raw textarea contents.
+ * is rejected rather than silently keeping one. In normal use the row-based
+ * control already rejects a duplicate at Add time (see `validatePluginSpec`
+ * below), so this is a second check on the accumulated list at Save.
+ * @param text - the raw field contents.
  * @returns the parsed entries, or an error message naming the bad line.
  */
 function parsePluginsField(text: string): { ok: true; entries: PluginEntry[] } | { ok: false; message: string } {
@@ -80,6 +81,52 @@ function parsePluginsField(text: string): { ok: true; entries: PluginEntry[] } |
     entries.push({ spec })
   }
   return { ok: true, entries }
+}
+
+/**
+ * The row-based Add control's view of one freshly added plugin: everything
+ * the renderer needs to draw a row without parsing the spec itself.
+ */
+export interface ValidatedPlugin {
+  /** As typed by the user. */
+  spec: string
+  /** The parsed package name. */
+  package: string
+  /** True when the spec carried `@version`. */
+  pinned: boolean
+}
+
+/** Result of validating one plugin spec for the row-based Add control. */
+export type PluginSpecValidation = { ok: true; plugin: ValidatedPlugin } | { ok: false; message: string }
+
+/**
+ * Validate one freshly typed plugin spec before it becomes a row.
+ *
+ * Reuses `validSpecShape`/`parseSpec` — the same grammar `parsePluginsField`
+ * applies at Save — so a spec accepted here is guaranteed to be accepted
+ * again when the accumulated list is submitted, and so the renderer never
+ * needs its own copy of that grammar to display the package name or pinned
+ * state: this function hands both back already parsed. This is the only
+ * place the grammar is checked outside `parsePluginsField`.
+ * @param spec - the raw text typed into the Add input.
+ * @param existingPackages - package names already present in the list, so a
+ *   spec naming one of them is rejected here instead of only at Save.
+ * @returns the parsed plugin to add as a row, or the message to show beside the input.
+ */
+export function validatePluginSpec(spec: string, existingPackages: string[]): PluginSpecValidation {
+  const trimmed = spec.trim()
+  if (trimmed === '') return { ok: false, message: 'Enter a package name to add.' }
+  if (!validSpecShape(trimmed)) {
+    return {
+      ok: false,
+      message: `"${trimmed}" does not look like a package name, package@version, or a valid version.`,
+    }
+  }
+  const { package: pkg, pinnedVersion } = parseSpec(trimmed)
+  if (existingPackages.includes(pkg)) {
+    return { ok: false, message: `${pkg} is already in the list.` }
+  }
+  return { ok: true, plugin: { spec: trimmed, package: pkg, pinned: pinnedVersion !== undefined } }
 }
 
 function isDirectory(path: string): boolean {

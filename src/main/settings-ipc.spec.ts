@@ -604,3 +604,29 @@ describe('concurrent saves', () => {
     expect(writeConfig).toHaveBeenCalledWith(expect.objectContaining({ hotkey: 'CommandOrControl+Shift+D' }))
   })
 })
+
+describe('validatePlugin', () => {
+  it('accepts a well-shaped, non-duplicate spec, mirroring what save would accept', () => {
+    const handlers = createSettingsHandlers(deps())
+    expect(handlers.validatePlugin(`${DECK}@0.2.1`, [HOOKS_PACKAGE])).toEqual({
+      ok: true,
+      plugin: { spec: `${DECK}@0.2.1`, package: DECK, pinned: true },
+    })
+  })
+
+  it('rejects a malformed spec without touching disk', () => {
+    const writeConfig = vi.fn()
+    const handlers = createSettingsHandlers(deps({ writeConfig }))
+    const result = handlers.validatePlugin('../../etc', [])
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/package name/i)
+    expect(writeConfig).not.toHaveBeenCalled()
+  })
+
+  it('rejects a package already in the given list', () => {
+    const handlers = createSettingsHandlers(deps())
+    const result = handlers.validatePlugin(DECK, [DECK])
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toBe(`${DECK} is already in the list.`)
+  })
+})

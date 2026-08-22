@@ -66,6 +66,9 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
     ipcMain.handle('settings:accept-plugin-update', (event, pkg: string, version: string) =>
       handlers.acceptPluginUpdate(pkg, version, (line) => pushToSender(event.sender, 'settings:progress', line)),
     )
+    ipcMain.handle('settings:validate-plugin', (_event, spec: string, existingPackages: string[]) =>
+      handlers.validatePlugin(spec, existingPackages),
+    )
     channelsRegistered = true
   }
 

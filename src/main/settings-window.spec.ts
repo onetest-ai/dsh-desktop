@@ -80,6 +80,7 @@ function handlers(overrides: Partial<SettingsHandlers> = {}): SettingsHandlers {
     pickFolder: vi.fn(async () => undefined),
     save: vi.fn(async () => ({ ok: true, warnings: [] })),
     acceptPluginUpdate: vi.fn(async () => ({ ok: true, warnings: [] })),
+    validatePlugin: vi.fn(() => ({ ok: true, plugin: { spec: '@onetest/dsh-deck', package: '@onetest/dsh-deck', pinned: false } })),
     ...overrides,
   }
 }
@@ -213,5 +214,27 @@ describe('the read channel', () => {
     expect(fake.sent).toEqual([
       { to: 'asking', channel: 'settings:plugin-update-available', payload: { pkg: '@onetest/dsh-deck', latest: '0.2.0' } },
     ])
+  })
+})
+
+describe('the validate-plugin channel', () => {
+  it('forwards the spec and existing packages, and returns the answer, without pushing anything', async () => {
+    const { openSettings } = await import('./settings-window')
+    const validatePlugin = vi.fn(() => ({
+      ok: true as const,
+      plugin: { spec: '@onetest/dsh-deck@0.2.1', package: '@onetest/dsh-deck', pinned: true },
+    }))
+    openSettings(handlers({ validatePlugin }), () => {})
+
+    const validateHandler = fake.ipcHandlers.get('settings:validate-plugin')
+    const first = fake.sender('first')
+    const result = await validateHandler?.(event(first), '@onetest/dsh-deck@0.2.1', ['@deepseek-ai/dsh-hooks-claude-code'])
+
+    expect(validatePlugin).toHaveBeenCalledWith('@onetest/dsh-deck@0.2.1', ['@deepseek-ai/dsh-hooks-claude-code'])
+    expect(result).toEqual({
+      ok: true,
+      plugin: { spec: '@onetest/dsh-deck@0.2.1', package: '@onetest/dsh-deck', pinned: true },
+    })
+    expect(fake.sent).toEqual([])
   })
 })

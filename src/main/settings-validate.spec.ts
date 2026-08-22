@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HOOKS_PACKAGE } from './plugin-entries'
-import { formFor, validateSettings, type SettingsForm } from './settings-validate'
+import { formFor, validatePluginSpec, validateSettings, type SettingsForm } from './settings-validate'
 
 function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
   return {
@@ -153,6 +153,50 @@ describe('validateSettings — plugins', () => {
     const result = validateSettings(form({ plugins: '@onetest/dsh-deck\n@onetest/dsh-deck@0.2.1' }))
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errors.plugins).toMatch(/more than once/i)
+  })
+})
+
+describe('validatePluginSpec', () => {
+  it('accepts a floating spec', () => {
+    const result = validatePluginSpec('@onetest/dsh-deck', [])
+    expect(result).toEqual({ ok: true, plugin: { spec: '@onetest/dsh-deck', package: '@onetest/dsh-deck', pinned: false } })
+  })
+
+  it('accepts a pinned spec', () => {
+    const result = validatePluginSpec('@onetest/dsh-deck@0.2.1', [])
+    expect(result).toEqual({
+      ok: true,
+      plugin: { spec: '@onetest/dsh-deck@0.2.1', package: '@onetest/dsh-deck', pinned: true },
+    })
+  })
+
+  it('trims surrounding whitespace', () => {
+    const result = validatePluginSpec('  @onetest/dsh-deck  ', [])
+    expect(result).toEqual({ ok: true, plugin: { spec: '@onetest/dsh-deck', package: '@onetest/dsh-deck', pinned: false } })
+  })
+
+  it('rejects an empty spec', () => {
+    const result = validatePluginSpec('', [])
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/enter a package name/i)
+  })
+
+  it('rejects a spec that does not look like a package name, the same grammar Save applies', () => {
+    const result = validatePluginSpec('../../etc', [])
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/package name/i)
+  })
+
+  it('rejects a pinned spec with a traversal-shaped version', () => {
+    const result = validatePluginSpec('@onetest/dsh-deck@../../etc', [])
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/version/i)
+  })
+
+  it('rejects a package name already in the list', () => {
+    const result = validatePluginSpec('@onetest/dsh-deck@0.2.1', ['@onetest/dsh-deck'])
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toBe('@onetest/dsh-deck is already in the list.')
   })
 })
 

@@ -272,6 +272,103 @@ details > label:first-of-type {
   padding: 0 10px;
 }
 
+/* Row-based plugin list: each entry is its own card-in-a-card, sized and
+   colored from the same tokens as the surrounding group so it reads as part
+   of this window rather than a bare list bolted onto it. */
+.plugin-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  /* `minmax(0, 1fr)`, not the implicit `auto` track a bare `display: grid`
+     gives a single-column list: `auto` sizes the column to its widest row's
+     own content, the same overflow a flex row without `min-width: 0` has, so
+     a long row would widen the column — and, downstream, `.plugin-name`'s
+     ellipsis never engages because its flex item never actually shrinks. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.plugin-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--input-fill);
+}
+
+.plugin-row-main {
+  /* `flex: 1 1 0` (not `auto`) plus `min-width: 0` is what lets this shrink
+     below its content's natural width so `.plugin-name` can truncate rather
+     than wrapping onto a second line or pushing `.plugin-row-actions` out of
+     the card. */
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.plugin-name {
+  font-weight: 500;
+  /* A long scoped name (`@some-long-scope/some-long-package-name`) truncates
+     rather than wrapping onto a second line or pushing the remove control
+     off the row. */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-meta {
+  flex: 0 0 auto;
+  color: var(--label-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.plugin-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.plugin-update-hint {
+  color: var(--accent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.plugin-update-use,
+.plugin-remove {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.plugin-remove {
+  border-color: transparent;
+  color: var(--danger);
+}
+
+.plugin-remove:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+/* Many rows scroll inside their own bounded area instead of growing the
+   window past its fixed 620x640 size. */
+.plugin-rows:not(:empty) {
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
 /* The action bar stays put so Save is reachable without scrolling. */
 .actions {
   position: fixed;
