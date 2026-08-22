@@ -11,7 +11,14 @@ function showKind() {
 }
 
 function clearErrors() {
-  for (const name of [...FIELDS, 'kind']) el(`error-${name}`).textContent = ''
+  // Not every field has an error node: only the ones main can reject by name
+  // do. The render loop below already tolerates an absent node, and this is
+  // the same fact, so it is tolerated the same way rather than by requiring
+  // the page to carry a node per field forever.
+  for (const name of [...FIELDS, 'kind']) {
+    const target = el(`error-${name}`)
+    if (target !== null) target.textContent = ''
+  }
 }
 
 function clearStatus() {

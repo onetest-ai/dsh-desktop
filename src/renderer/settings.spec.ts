@@ -14,20 +14,34 @@ import { describe, expect, it, vi } from 'vitest'
  */
 
 const SOURCE = readFileSync(join(__dirname, 'settings.js'), 'utf8')
+const MARKUP = readFileSync(join(__dirname, 'settings.html'), 'utf8')
 
-/** The ids `settings.html` declares, mirrored so a lookup of anything else fails loudly. */
+/**
+ * Every `id` `settings.html` declares.
+ *
+ * Derived from the page rather than restated, so the fixture cannot drift from
+ * it: a hand-written list is what let `clearErrors` reference three error
+ * nodes the real page has never had. `getElementById` returns null for
+ * anything outside this set, exactly as the browser does.
+ * @returns the declared ids.
+ */
+function declaredIds(): string[] {
+  return [...MARKUP.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1])
+}
+
+/**
+ * The `kind` radios the page declares, in document order.
+ * @returns each radio's value and whether the markup marks it checked.
+ */
+function declaredKindRadios(): Array<{ value: string; checked: boolean }> {
+  return [...MARKUP.matchAll(/<input([^>]*\bname="kind"[^>]*)>/g)].map((match) => ({
+    value: /\bvalue="([^"]+)"/.exec(match[1])?.[1] ?? '',
+    checked: /\bchecked\b/.test(match[1]),
+  }))
+}
+
+/** The field ids `settings.js` collects; asserted against the page below. */
 const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npxPath']
-const IDS = [
-  ...FIELDS,
-  ...[...FIELDS, 'kind'].map((name) => `error-${name}`),
-  'intro',
-  'local-fields',
-  'npx-fields',
-  'status',
-  'save',
-  'browse',
-  'browse-workspace',
-]
 
 interface FakeElement {
   id: string
@@ -77,22 +91,23 @@ interface Renderer {
  * @returns the fake elements and a way to fire the save button.
  */
 async function load(onSave: SaveOutcome): Promise<Renderer> {
-  const elements = new Map(IDS.map((id) => [id, element(id)]))
-  const localRadio = element('kind-local')
-  localRadio.value = 'local'
-  localRadio.checked = true
-  const npxRadio = element('kind-npx')
-  npxRadio.value = 'npx'
+  const elements = new Map(declaredIds().map((id) => [id, element(id)]))
+  const radios = declaredKindRadios().map((radio) => {
+    const node = element(`kind-${radio.value}`)
+    node.value = radio.value
+    node.checked = radio.checked
+    return node
+  })
 
   const document = {
     getElementById: (id: string) => elements.get(id) ?? null,
     querySelector: (selector: string) => {
       if (selector !== 'input[name="kind"]:checked') throw new Error(`unexpected selector ${selector}`)
-      return [localRadio, npxRadio].find((radio) => radio.checked)
+      return radios.find((radio) => radio.checked)
     },
     querySelectorAll: (selector: string) => {
       if (selector !== 'input[name="kind"]') throw new Error(`unexpected selector ${selector}`)
-      return [localRadio, npxRadio]
+      return radios
     },
   }
 
@@ -121,6 +136,23 @@ async function load(onSave: SaveOutcome): Promise<Renderer> {
     },
   }
 }
+
+describe('the page it runs against', () => {
+  it('declares an input for every field the script collects', () => {
+    expect(declaredIds()).toEqual(expect.arrayContaining(FIELDS))
+  })
+
+  it('declares error nodes for only some of those fields', () => {
+    // The reason `clearErrors` must tolerate a missing node. If the page ever
+    // gains all of them this fails, and the guard can be revisited on purpose.
+    const withError = FIELDS.filter((name) => declaredIds().includes(`error-${name}`))
+    expect(withError).not.toEqual(FIELDS)
+  })
+
+  it('matches the field list the script hard-codes', () => {
+    expect(/const FIELDS = \[([^\]]+)\]/.exec(SOURCE)?.[1].match(/'([^']+)'/g)?.length).toBe(FIELDS.length)
+  })
+})
 
 describe('save', () => {
   it('reports success', async () => {
