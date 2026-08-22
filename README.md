@@ -111,6 +111,7 @@ Design notes and the decisions taken while building this live in [`docs/`](docs/
 
 ## Known limitations
 
+- **Profile plugins installed with pnpm do not resolve under a managed source.** `dsh plugin --profile web add …` forwards to pnpm, which links dependencies through its own store layout. A managed install is a plain `npm` tree, so the harness cannot resolve those plugins' dependencies and the profile fails to boot — the notification hook bridge is the likely one to hit. A local source is unaffected. If you use both, install the profile plugin the same way the runtime you boot with resolves it.
 - **`dsh://` links only focus the app.** The harness Web UI has no per-session URLs, so there is no address to deep-link to.
 - **Unsigned and macOS-only.** No Windows or Linux packaging target is configured.
 - The tray icon, menus, and shortcut have not been verified visually by an automated test — only their behavior in code.
