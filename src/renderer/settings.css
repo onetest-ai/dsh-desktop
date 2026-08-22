@@ -1,16 +1,263 @@
-:root { color-scheme: light dark; }
-body { font: 13px/1.5 -apple-system, system-ui, sans-serif; margin: 0; padding: 1.5rem; }
-main { max-width: 34rem; margin: 0 auto; display: grid; gap: .5rem; }
-h1 { font-size: 1.1rem; margin: 0; }
-.hint { margin: 0 0 .5rem; opacity: .75; }
-label { font-weight: 500; margin-top: .5rem; }
-fieldset label { font-weight: 400; display: block; }
-input[type="text"] { width: 100%; box-sizing: border-box; padding: .4rem; }
-.row { display: flex; gap: .5rem; }
-.row input { flex: 1; }
-.error { color: #d33; margin: .15rem 0 0; min-height: 1em; }
-.status { color: #2a8a3e; margin: .15rem 0 0; min-height: 1em; }
-.status.status-warning { color: #b8860b; }
-.status.status-failed { color: #d33; }
-.actions { margin-top: 1rem; display: flex; justify-content: flex-end; }
-button { padding: .4rem 1rem; }
+/* Tokens mirrored from the harness's own design platform
+ * (packages/client/ui-theme/src/styles/design-platform.css) so this window
+ * reads as part of the same app. The harness switches theme via a body
+ * attribute it controls; this window follows the system instead, since it
+ * runs before any harness is necessarily up. */
+:root {
+  --bg: rgb(255, 255, 255);
+  --surface: rgb(235, 238, 242);
+  --surface-hover: rgb(225, 229, 238);
+  --input-fill: rgb(255, 255, 255);
+  --label: rgb(15, 17, 21);
+  --label-secondary: rgb(97, 102, 107);
+  --border: rgba(0, 0, 0, 0.1);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --accent: rgb(65, 118, 230);
+  --primary-fill: rgb(15, 17, 21);
+  --primary-text: rgb(255, 255, 255);
+  --danger: rgb(199, 58, 58);
+  --ok: rgb(38, 128, 74);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: rgb(21, 21, 23);
+    --surface: rgb(44, 44, 46);
+    --surface-hover: rgb(53, 54, 56);
+    --input-fill: rgb(53, 54, 56);
+    --label: rgb(249, 250, 251);
+    --label-secondary: rgb(207, 211, 214);
+    --border: rgba(255, 255, 255, 0.12);
+    --border-strong: rgba(255, 255, 255, 0.2);
+    --accent: rgb(86, 134, 254);
+    --primary-fill: rgb(249, 250, 251);
+    --primary-text: rgb(15, 17, 21);
+    --danger: rgb(255, 138, 138);
+    --ok: rgb(126, 214, 160);
+  }
+}
+
+/* Author styles beat the UA sheet, so a grid/flex rule would otherwise
+   defeat the hidden attribute the source toggle relies on. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  padding: 28px 32px 96px;
+  background: var(--bg);
+  color: var(--label);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+main {
+  max-width: 34rem;
+  margin: 0 auto;
+  display: grid;
+  gap: 20px;
+}
+
+h1 {
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.hint {
+  margin: -14px 0 0;
+  color: var(--label-secondary);
+}
+
+/* Grouped rows, the way the harness groups settings into cards. */
+fieldset,
+section.group {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 16px;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+legend {
+  padding: 0 6px;
+  color: var(--label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+label {
+  display: block;
+  font-weight: 500;
+}
+
+input[type='text'] {
+  width: 100%;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--input-fill);
+  color: var(--label);
+  font: inherit;
+}
+
+input[type='text']::placeholder {
+  color: var(--label-secondary);
+  opacity: 0.7;
+}
+
+input[type='text']:focus-visible,
+input[type='radio']:focus-visible,
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input[type='radio'] {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+.row input {
+  flex: 1;
+}
+
+/* Capsule geometry taken from the harness Button component: h36, r18, pad 14. */
+button {
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  background: transparent;
+  color: var(--label);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+#save {
+  margin-left: auto;
+  border: none;
+  background: var(--primary-fill);
+  color: var(--primary-text);
+  font-weight: 500;
+  padding: 0 20px;
+}
+
+#save:hover:not(:disabled) {
+  opacity: 0.85;
+  background: var(--primary-fill);
+}
+
+details {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+summary {
+  cursor: pointer;
+  color: var(--label-secondary);
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+summary::before {
+  content: '›';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 120ms ease;
+}
+
+details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+details > label:first-of-type {
+  margin-top: 10px;
+}
+
+.error {
+  color: var(--danger);
+  margin: 4px 0 0;
+  min-height: 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.error:empty {
+  display: none;
+}
+
+.status {
+  color: var(--ok);
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.status.status-warning {
+  color: var(--danger);
+}
+
+.status:empty {
+  display: none;
+}
+
+/* The action bar stays put so Save is reachable without scrolling. */
+.actions {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 14px 32px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  summary::before {
+    transition: none;
+  }
+}

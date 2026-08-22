@@ -12,7 +12,7 @@
     <label><input type="radio" name="kind" value="npx"> The published package (npx)</label>
   </fieldset>
 
-  <section id="local-fields">
+  <section id="local-fields" class="group">
     <label for="repo">Checkout folder</label>
     <div class="row">
       <input id="repo" type="text" placeholder="/path/to/deepseek-harness">
@@ -21,7 +21,7 @@
     <p class="error" id="error-repo"></p>
   </section>
 
-  <section id="npx-fields" hidden>
+  <section id="npx-fields" class="group" hidden>
     <label for="package">Package</label>
     <input id="package" type="text">
     <p class="error" id="error-package"></p>
@@ -35,24 +35,28 @@
     <p class="error" id="error-workspace"></p>
   </section>
 
-  <label for="notifyPort">Notification port</label>
-  <input id="notifyPort" type="text" inputmode="numeric">
-  <p class="error" id="error-notifyPort"></p>
+  <section class="group">
+    <label for="notifyPort">Notification port</label>
+    <input id="notifyPort" type="text" inputmode="numeric">
+    <p class="error" id="error-notifyPort"></p>
 
-  <label for="hotkey">Show/hide shortcut</label>
-  <input id="hotkey" type="text">
-  <p class="error" id="error-hotkey"></p>
+    <label for="hotkey">Show/hide shortcut</label>
+    <input id="hotkey" type="text">
+    <p class="error" id="error-hotkey"></p>
 
-  <details>
-    <summary>Advanced</summary>
-    <label for="pnpmPath">pnpm path</label>
-    <input id="pnpmPath" type="text" placeholder="found on PATH by default">
-    <label for="npxPath">npx path</label>
-    <input id="npxPath" type="text" placeholder="found on PATH by default">
-  </details>
+    <details>
+      <summary>Advanced</summary>
+      <label for="pnpmPath">pnpm path</label>
+      <input id="pnpmPath" type="text" placeholder="found on PATH by default">
+      <label for="npxPath">npx path</label>
+      <input id="npxPath" type="text" placeholder="found on PATH by default">
+    </details>
+  </section>
 
   <p class="error" id="error-kind"></p>
-  <p class="status" id="status" role="status"></p>
-  <div class="actions"><button id="save" type="button">Save</button></div>
 </main>
+<div class="actions">
+  <p class="status" id="status" role="status"></p>
+  <button id="save" type="button">Save</button>
+</div>
 <script src="settings.js"></script>
