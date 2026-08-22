@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checkPackageLoadable, hooksConfig, patchOverlay, writeRuntimeFiles, type LoadabilityProbe } from './runtime-files'
+import type { PluginStatus } from './plugin-entries'
 
 /**
  * Build a fixture `node_modules` tree on disk so `checkPackageLoadable` can be
@@ -47,10 +48,10 @@ function buildFixture(
   return root
 }
 
-/** Always reports the bridge as loadable, regardless of `fromDirectory`. */
+/** Always reports the candidate as loadable, regardless of `fromDirectory`. */
 const alwaysLoadable: LoadabilityProbe = () => undefined
 
-/** Always reports the bridge as unloadable, with a fixed reason. */
+/** Always reports the candidate as unloadable, with a fixed reason. */
 const alwaysUnloadable: LoadabilityProbe = () => 'package not found'
 
 describe('hooksConfig', () => {
@@ -71,19 +72,52 @@ describe('hooksConfig', () => {
 })
 
 describe('patchOverlay', () => {
-  it('mounts the hook bridge against the generated hook config when no reason is given', () => {
-    const overlay = patchOverlay("/tmp/o'brien/hooks.json")
+  it('mounts a plugin at its resolved entry file, not the bare package name', () => {
+    const overlay = patchOverlay([{ package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: "/tmp/o'brien/lib/index.js", configPath: "/tmp/o'brien/hooks.json" }], [])
     expect(overlay).toContain("configPath: '/tmp/o''brien/hooks.json'")
-    expect(overlay).toContain("name: '@deepseek-ai/dsh-hooks-claude-code'")
+    expect(overlay).toContain("name: '/tmp/o''brien/lib/index.js'")
+    expect(overlay).not.toContain("name: '@deepseek-ai/dsh-hooks-claude-code'")
     expect(overlay).toContain('port: 0')
   })
 
-  it('omits the insert and records the reason as a comment when the bridge is unloadable', () => {
-    const overlay = patchOverlay('/tmp/hooks.json', "cannot find package 'x'")
+  it('mounts a plugin with no configPath under an empty config object, never a configPath', () => {
+    // cordis's own config resolution rejects an insert with no `config` node
+    // at all ("expected a config object"); an empty object satisfies it
+    // without giving a generic entry anything to configure.
+    const overlay = patchOverlay([{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js' }], [])
+    expect(overlay).toContain("name: '/tmp/deck/lib/index.js'")
+    expect(overlay).toContain('config: {}')
+    expect(overlay).not.toContain('configPath')
+  })
+
+  it('mounts every ready entry, each under its own id', () => {
+    const overlay = patchOverlay(
+      [
+        { package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: '/tmp/hooks/lib/index.js', configPath: '/tmp/hooks.json' },
+        { package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js' },
+      ],
+      [],
+    )
+    expect(overlay).toContain('id: deepseek-ai-dsh-hooks-claude-code')
+    expect(overlay).toContain('id: onetest-dsh-deck')
+    expect(overlay).toContain("name: '/tmp/hooks/lib/index.js'")
+    expect(overlay).toContain("name: '/tmp/deck/lib/index.js'")
+  })
+
+  it('omits an unavailable entry and records the reason as a comment', () => {
+    const overlay = patchOverlay([], [{ package: '@onetest/dsh-deck', reason: "cannot find package 'x'" }])
     expect(overlay).not.toContain('insert')
-    expect(overlay).not.toContain("name: '@deepseek-ai/dsh-hooks-claude-code'")
-    expect(overlay).toContain("was omitted: cannot find package 'x'")
+    expect(overlay).toContain("@onetest/dsh-deck was omitted: cannot find package 'x'")
     expect(overlay).toContain('port: 0')
+  })
+
+  it('mounts a ready entry while separately omitting a broken one', () => {
+    const overlay = patchOverlay(
+      [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js' }],
+      [{ package: '@deepseek-ai/dsh-hooks-claude-code', reason: 'not installed yet' }],
+    )
+    expect(overlay).toContain("name: '/tmp/deck/lib/index.js'")
+    expect(overlay).toContain('@deepseek-ai/dsh-hooks-claude-code was omitted: not installed yet')
   })
 })
 
@@ -133,24 +167,34 @@ describe('checkPackageLoadable', () => {
   })
 })
 
-describe('writeRuntimeFiles', () => {
-  it('includes the insert when the bridge is loadable', () => {
-    const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
-    const files = writeRuntimeFiles(directory, 44001, '/irrelevant', alwaysLoadable)
+/** A plugin candidate ready to probe from `/irrelevant`, with the given entry file. */
+function ready(pkg = '@onetest/dsh-deck', entryPath = '/irrelevant/lib/index.js'): PluginStatus {
+  return { kind: 'ready', package: pkg, entryPath, probeDirectory: '/irrelevant' }
+}
 
-    expect(files.hooksOmittedReason).toBeUndefined()
+/** A plugin already known to be unavailable, bypassing `probe` entirely. */
+function unavailable(pkg: string, reason: string): PluginStatus {
+  return { kind: 'unavailable', package: pkg, reason }
+}
+
+describe('writeRuntimeFiles', () => {
+  it('includes the insert, pointed at the resolved entry file, when the plugin is loadable', () => {
+    const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
+    const files = writeRuntimeFiles(directory, 44001, [ready('@onetest/dsh-deck', '/irrelevant/lib/index.js')], alwaysLoadable)
+
+    expect(files.omitted).toEqual([])
     expect(files.patchPath).toBe(join(directory, 'desktop.patch.yml'))
     const overlay = readFileSync(files.patchPath, 'utf8')
-    expect(overlay).toContain(`configPath: '${files.hooksPath}'`)
+    expect(overlay).toContain("name: '/irrelevant/lib/index.js'")
     expect(overlay).toContain('port: 0')
     expect(readFileSync(files.hooksPath, 'utf8')).toContain('127.0.0.1:44001')
   })
 
-  it('omits the insert and reports a reason when the bridge is not loadable', () => {
+  it('omits the insert and reports a reason when the plugin is not loadable', () => {
     const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
-    const files = writeRuntimeFiles(directory, 44001, '/irrelevant', alwaysUnloadable)
+    const files = writeRuntimeFiles(directory, 44001, [ready()], alwaysUnloadable)
 
-    expect(files.hooksOmittedReason).toBe('package not found')
+    expect(files.omitted).toEqual([{ package: '@onetest/dsh-deck', reason: 'package not found' }])
     const overlay = readFileSync(files.patchPath, 'utf8')
     expect(overlay).not.toContain('insert')
     expect(overlay).toContain('was omitted: package not found')
@@ -158,10 +202,39 @@ describe('writeRuntimeFiles', () => {
     expect(overlay).toContain('port: 0')
   })
 
+  it('omits the insert without probing when the plugin is already known to be unavailable, and still boots', () => {
+    const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
+    const probe = vi.fn(alwaysLoadable)
+    const files = writeRuntimeFiles(directory, 44001, [unavailable('@onetest/dsh-deck', 'not installed yet')], probe)
+
+    expect(probe).not.toHaveBeenCalled()
+    expect(files.omitted).toEqual([{ package: '@onetest/dsh-deck', reason: 'not installed yet' }])
+    const overlay = readFileSync(files.patchPath, 'utf8')
+    expect(overlay).not.toContain('insert')
+    expect(overlay).toContain('was omitted: not installed yet')
+    // The webserver pin — what lets the harness boot — is written either way.
+    expect(overlay).toContain('port: 0')
+  })
+
+  it('mounts one plugin while omitting another broken one, and still boots', () => {
+    const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
+    const files = writeRuntimeFiles(
+      directory,
+      44001,
+      [ready('@onetest/dsh-deck', '/irrelevant/deck/index.js'), unavailable('@deepseek-ai/dsh-hooks-claude-code', 'not installed yet')],
+      alwaysLoadable,
+    )
+
+    expect(files.omitted).toEqual([{ package: '@deepseek-ai/dsh-hooks-claude-code', reason: 'not installed yet' }])
+    const overlay = readFileSync(files.patchPath, 'utf8')
+    expect(overlay).toContain("name: '/irrelevant/deck/index.js'")
+    expect(overlay).toContain('port: 0')
+  })
+
   it('rewrites the port when the configuration changes', () => {
     const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
-    writeRuntimeFiles(directory, 44001, '/irrelevant', alwaysLoadable)
-    const files = writeRuntimeFiles(directory, 44002, '/irrelevant', alwaysLoadable)
+    writeRuntimeFiles(directory, 44001, [ready()], alwaysLoadable)
+    const files = writeRuntimeFiles(directory, 44002, [ready()], alwaysLoadable)
     expect(readFileSync(files.hooksPath, 'utf8')).toContain('127.0.0.1:44002')
   })
 })

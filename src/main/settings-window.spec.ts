@@ -76,7 +76,7 @@ vi.mock('electron', () => ({
 
 function handlers(overrides: Partial<SettingsHandlers> = {}): SettingsHandlers {
   return {
-    read: vi.fn(() => ({ configured: true, form: {} as never })),
+    read: vi.fn(() => ({ configured: true, form: {} as never, plugins: [] })),
     pickFolder: vi.fn(async () => undefined),
     save: vi.fn(async () => ({ ok: true, warnings: [] })),
     ...overrides,
@@ -172,5 +172,26 @@ describe('the read channel', () => {
     capturedOnUpdate?.('0.2.0')
 
     expect(fake.sent).toEqual([{ to: 'asking', channel: 'settings:update-available', payload: '0.2.0' }])
+  })
+
+  it('forwards a later plugin update-available result over settings:plugin-update-available', async () => {
+    const { openSettings } = await import('./settings-window')
+    let capturedOnPluginUpdate: ((pkg: string, latest: string) => void) | undefined
+    const read = vi.fn(
+      (_onUpdateAvailable?: (latest: string) => void, onPluginUpdateAvailable?: (pkg: string, latest: string) => void) => {
+        capturedOnPluginUpdate = onPluginUpdateAvailable
+        return { configured: true, form: {} as never, plugins: [] }
+      },
+    )
+    openSettings(handlers({ read }), () => {})
+
+    const readHandler = fake.ipcHandlers.get('settings:read')
+    const asking = fake.sender('asking')
+    readHandler?.(event(asking))
+    capturedOnPluginUpdate?.('@onetest/dsh-deck', '0.2.0')
+
+    expect(fake.sent).toEqual([
+      { to: 'asking', channel: 'settings:plugin-update-available', payload: { pkg: '@onetest/dsh-deck', latest: '0.2.0' } },
+    ])
   })
 })

@@ -12,6 +12,9 @@ import { ensureInstalled, latestVersion, resolveVersion, updateAvailable, type I
  * @param deps - injected install effects.
  * @param npm - the resolved `npm` binary.
  * @param dshHome - the resolved `$DSH_HOME` directory.
+ * @param marker - forwarded to `ensureInstalled`; a library-only package
+ *   (e.g. the hook bridge, which links no `bin`) passes its own completion
+ *   marker instead of the default `dsh` binary check.
  * @returns a function taking the package, a version or dist-tag, and a
  *   progress callback; resolves to the concrete installed version.
  */
@@ -19,10 +22,11 @@ export function createManagedInstaller(
   deps: InstallDeps,
   npm: string,
   dshHome: string,
+  marker?: (dir: string) => string,
 ): (pkg: string, version: string, onLine: (line: string) => void) => Promise<string> {
   return async (pkg, version, onLine) => {
     const concrete = await resolveVersion(deps, npm, pkg, version)
-    await ensureInstalled(deps, npm, dshHome, pkg, concrete, onLine)
+    await ensureInstalled(deps, npm, dshHome, pkg, concrete, onLine, marker)
     return concrete
   }
 }

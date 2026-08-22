@@ -58,6 +58,19 @@
     </details>
   </section>
 
+  <p class="group-label" id="plugins-label">Plugins</p>
+  <section class="group" aria-labelledby="plugins-label">
+    <p class="hint">One package per line: <code>pkg</code> for the latest, offered updates later, or <code>pkg@version</code> to pin it exactly and never be offered an update. The notification hook bridge is pre-seeded below.</p>
+    <label for="plugins">Packages</label>
+    <textarea id="plugins" rows="4" spellcheck="false"></textarea>
+    <p class="error" id="error-plugins"></p>
+    <p class="hint" id="plugin-status"></p>
+    <p class="hint update-hint" id="plugin-update-hint" hidden>
+      <span id="plugin-update-name"></span> <span id="latest-plugin-version"></span> is available.
+      <button id="use-latest-plugin" type="button">Use it</button>
+    </p>
+  </section>
+
 </main>
 <div class="actions">
   <div class="actions-status">

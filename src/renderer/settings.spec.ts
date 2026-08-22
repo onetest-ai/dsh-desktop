@@ -58,7 +58,7 @@ function declaredKindRadios(): Array<{ value: string; checked: boolean }> {
 }
 
 /** The field ids `settings.js` collects; asserted against the page below. */
-const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath']
+const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'plugins']
 
 interface FakeElement {
   id: string
@@ -109,13 +109,24 @@ interface Renderer {
   pushProgress(line: string): void
   /** Fires the preload's `onUpdateAvailable` subscription as main would push a result. */
   pushUpdateAvailable(latest: string): void
+  useLatestPlugin(): Promise<void>
+  /** Fires the preload's `onPluginUpdateAvailable` subscription as main would push a result. */
+  pushPluginUpdateAvailable(pkg: string, latest: string): void
+}
+
+/** Default read result: a configured local source with an empty plugin list. */
+function defaultRead(): Promise<unknown> {
+  return Promise.resolve({
+    configured: true,
+    form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+    plugins: [],
+  })
 }
 
 /**
  * Load `settings.js` over a fake document.
  * @param onSave - what the `settings.save` bridge call does.
- * @param onRead - what the `settings.read` bridge call does; defaults to a
- *   configured local source with empty fields.
+ * @param onRead - what the `settings.read` bridge call does; defaults to `defaultRead`.
  * @returns the fake elements and a way to fire the save button.
  */
 async function load(onSave: SaveOutcome, onRead?: () => Promise<unknown>): Promise<Renderer> {
@@ -148,14 +159,9 @@ async function load(onSave: SaveOutcome, onRead?: () => Promise<unknown>): Promi
 
   let progressListener: ((line: string) => void) | undefined
   let updateListener: ((latest: string) => void) | undefined
+  let pluginUpdateListener: ((pkg: string, latest: string) => void) | undefined
   const settings = {
-    read: vi.fn(
-      onRead ??
-        (async () => ({
-          configured: true,
-          form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
-        })),
-    ),
+    read: vi.fn(onRead ?? defaultRead),
     pickFolder: vi.fn(async () => undefined),
     save: vi.fn(onSave),
     onProgress: vi.fn((listener: (line: string) => void) => {
@@ -163,6 +169,9 @@ async function load(onSave: SaveOutcome, onRead?: () => Promise<unknown>): Promi
     }),
     onUpdateAvailable: vi.fn((listener: (latest: string) => void) => {
       updateListener = listener
+    }),
+    onPluginUpdateAvailable: vi.fn((listener: (pkg: string, latest: string) => void) => {
+      pluginUpdateListener = listener
     }),
   }
 
@@ -185,6 +194,10 @@ async function load(onSave: SaveOutcome, onRead?: () => Promise<unknown>): Promi
     },
     pushProgress: (line) => progressListener?.(line),
     pushUpdateAvailable: (latest) => updateListener?.(latest),
+    useLatestPlugin: async () => {
+      await elements.get('use-latest-plugin')?.listeners.get('click')?.()
+    },
+    pushPluginUpdateAvailable: (pkg, latest) => pluginUpdateListener?.(pkg, latest),
   }
 }
 
@@ -283,6 +296,55 @@ describe('update available', () => {
 
     expect(renderer.elements.get('version')?.value).toBe('0.2.0')
     expect(save).toHaveBeenCalled()
+  })
+})
+
+describe('plugins', () => {
+  const READ_WITH_PLUGINS = (): Promise<unknown> =>
+    Promise.resolve({
+      configured: true,
+      form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+      plugins: [
+        { spec: '@deepseek-ai/dsh-hooks-claude-code', package: '@deepseek-ai/dsh-hooks-claude-code', pinned: false, version: '0.1.1-rc.2' },
+        { spec: '@onetest/dsh-deck@0.2.1', package: '@onetest/dsh-deck', pinned: true, version: undefined },
+      ],
+    })
+
+  it('reports each entry\'s resolved version and pinned state', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), READ_WITH_PLUGINS)
+
+    const status = renderer.elements.get('plugin-status')?.textContent ?? ''
+    expect(status).toContain('@deepseek-ai/dsh-hooks-claude-code — v0.1.1-rc.2 installed')
+    expect(status).toContain('@onetest/dsh-deck — pinned, not installed yet')
+  })
+
+  it('reveals its own update hint, separate from the harness one, naming the package', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), READ_WITH_PLUGINS)
+    renderer.pushPluginUpdateAvailable('@deepseek-ai/dsh-hooks-claude-code', '0.2.0')
+
+    expect(renderer.elements.get('plugin-update-hint')?.hidden).toBe(false)
+    expect(renderer.elements.get('plugin-update-name')?.textContent).toBe('@deepseek-ai/dsh-hooks-claude-code')
+    expect(renderer.elements.get('latest-plugin-version')?.textContent).toBe('0.2.0')
+    expect(renderer.elements.get('update-hint')?.hidden).toBe(true)
+  })
+
+  it('using it pins that entry\'s line in the textarea and saves', async () => {
+    const save = vi.fn(async () => ({ ok: true, warnings: [] }))
+    const renderer = await load(save, READ_WITH_PLUGINS)
+    renderer.elements.get('plugins')!.value = '@deepseek-ai/dsh-hooks-claude-code\n@onetest/dsh-deck@0.2.1'
+    renderer.pushPluginUpdateAvailable('@deepseek-ai/dsh-hooks-claude-code', '0.2.0')
+
+    await renderer.useLatestPlugin()
+
+    expect(renderer.elements.get('plugins')?.value).toBe('@deepseek-ai/dsh-hooks-claude-code@0.2.0\n@onetest/dsh-deck@0.2.1')
+    expect(save).toHaveBeenCalled()
+  })
+
+  it('ignores a push naming an unknown package rather than crashing', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), READ_WITH_PLUGINS)
+    renderer.pushPluginUpdateAvailable('@unknown/package', '0.3.0')
+
+    expect(renderer.elements.get('plugin-update-hint')?.hidden).toBe(true)
   })
 })
 

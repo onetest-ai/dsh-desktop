@@ -25,7 +25,7 @@ function isOpen(): boolean {
  * @param channel - the IPC channel the preload listens on.
  * @param payload - the value to send.
  */
-function pushToSender(sender: WebContents, channel: string, payload: string): void {
+function pushToSender(sender: WebContents, channel: string, payload: unknown): void {
   if (!sender.isDestroyed()) sender.send(channel, payload)
 }
 
@@ -54,7 +54,10 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
 
   if (!channelsRegistered) {
     ipcMain.handle('settings:read', (event) =>
-      handlers.read((latest) => pushToSender(event.sender, 'settings:update-available', latest)),
+      handlers.read(
+        (latest) => pushToSender(event.sender, 'settings:update-available', latest),
+        (pkg, latest) => pushToSender(event.sender, 'settings:plugin-update-available', { pkg, latest }),
+      ),
     )
     ipcMain.handle('settings:pick-folder', () => handlers.pickFolder())
     ipcMain.handle('settings:save', (event, form: SettingsForm) =>

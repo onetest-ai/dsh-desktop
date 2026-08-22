@@ -66,6 +66,16 @@ describe('isInstalled', () => {
     expect(isInstalled(deps, DSH_HOME, PKG, '0.1.1-rc.2')).toBe(true)
     expect(isInstalled(deps, DSH_HOME, PKG, '0.1.0')).toBe(false)
   })
+
+  it('checks a custom marker instead of the default dsh binary, for a package with no bin', () => {
+    const dir = managedDir(DSH_HOME, PKG, '0.1.1-rc.2')
+    const marker = (installDir: string): string => `${installDir}/node_modules/${PKG}/package.json`
+    const deps = fakeDeps({ run: vi.fn() }, new Set([marker(dir)]))
+
+    expect(isInstalled(deps, DSH_HOME, PKG, '0.1.1-rc.2', marker)).toBe(true)
+    // The default marker (the dsh binary) was never written for this fixture.
+    expect(isInstalled(deps, DSH_HOME, PKG, '0.1.1-rc.2')).toBe(false)
+  })
 })
 
 describe('ensureInstalled', () => {
@@ -194,6 +204,17 @@ describe('ensureInstalled', () => {
     expect(rename).not.toHaveBeenCalled()
     expect(rm).toHaveBeenLastCalledWith(managedStagingDir(DSH_HOME, PKG, '0.1.1-rc.2'))
     expect(isInstalled(deps, DSH_HOME, PKG, '0.1.1-rc.2')).toBe(false)
+  })
+
+  it('skips the install for a package with no bin when its custom marker already exists', async () => {
+    const dir = managedDir(DSH_HOME, PKG, '0.1.1-rc.2')
+    const marker = (installDir: string): string => `${installDir}/node_modules/${PKG}/package.json`
+    const run = vi.fn()
+    const deps = fakeDeps({ run }, new Set([marker(dir)]))
+
+    await ensureInstalled(deps, NPM, DSH_HOME, PKG, '0.1.1-rc.2', undefined, marker)
+
+    expect(run).not.toHaveBeenCalled()
   })
 
   it('streams npm install output lines to onLine', async () => {

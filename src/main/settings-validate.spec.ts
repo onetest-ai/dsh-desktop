@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { HOOKS_PACKAGE } from './plugin-entries'
 import { formFor, validateSettings, type SettingsForm } from './settings-validate'
 
 function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
@@ -15,6 +16,7 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
     hotkey: 'CommandOrControl+Shift+D',
     pnpmPath: '',
     npmPath: '',
+    plugins: HOOKS_PACKAGE,
     ...overrides,
   }
 }
@@ -29,6 +31,7 @@ describe('validateSettings — local source', () => {
         harness: { kind: 'local', repo: input.repo },
         notifyPort: 43117,
         hotkey: 'CommandOrControl+Shift+D',
+        plugins: [{ spec: HOOKS_PACKAGE }],
       },
     })
   })
@@ -70,6 +73,7 @@ describe('validateSettings — managed source', () => {
         harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: input.workspace },
         notifyPort: 43117,
         hotkey: 'CommandOrControl+Shift+D',
+        plugins: [{ spec: HOOKS_PACKAGE }],
       },
     })
   })
@@ -109,6 +113,46 @@ describe('validateSettings — managed source', () => {
     const result = validateSettings(form({ kind: 'managed', package: '../../etc' }))
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errors.package).toMatch(/package name/i)
+  })
+})
+
+describe('validateSettings — plugins', () => {
+  it('parses a spec with a version as pinned, and one without as floating', () => {
+    const result = validateSettings(form({ plugins: '@onetest/dsh-deck@0.2.1\n@onetest/other' }))
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.config.plugins).toEqual([{ spec: '@onetest/dsh-deck@0.2.1' }, { spec: '@onetest/other' }])
+    }
+  })
+
+  it('ignores blank lines', () => {
+    const result = validateSettings(form({ plugins: '\n@onetest/dsh-deck\n\n' }))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.config.plugins).toEqual([{ spec: '@onetest/dsh-deck' }])
+  })
+
+  it('accepts an empty list', () => {
+    const result = validateSettings(form({ plugins: '' }))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.config.plugins).toEqual([])
+  })
+
+  it('rejects a line that does not look like a package name', () => {
+    const result = validateSettings(form({ plugins: '../../etc' }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.plugins).toMatch(/package name/i)
+  })
+
+  it('rejects a pinned entry with a traversal-shaped version', () => {
+    const result = validateSettings(form({ plugins: '@onetest/dsh-deck@../../etc' }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.plugins).toMatch(/version/i)
+  })
+
+  it('rejects the same package listed twice', () => {
+    const result = validateSettings(form({ plugins: '@onetest/dsh-deck\n@onetest/dsh-deck@0.2.1' }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.plugins).toMatch(/more than once/i)
   })
 })
 
@@ -155,7 +199,7 @@ describe('validateSettings — port and hotkey', () => {
 })
 
 describe('formFor', () => {
-  it('fills defaults for a first run', () => {
+  it('fills defaults for a first run, pre-seeding the hook bridge as the only plugin', () => {
     const filled = formFor({ configured: false })
     expect(filled.kind).toBe('local')
     expect(filled.repo).toBe('')
@@ -163,6 +207,7 @@ describe('formFor', () => {
     expect(filled.hotkey).toBe('CommandOrControl+Shift+D')
     expect(filled.package).toBe('@deepseek-ai/dsh')
     expect(filled.version).toBe('latest')
+    expect(filled.plugins).toBe(HOOKS_PACKAGE)
   })
 
   it('round-trips a stored local config', () => {
@@ -170,14 +215,16 @@ describe('formFor', () => {
       harness: { kind: 'local' as const, repo: '/tmp/harness' },
       notifyPort: 5000,
       hotkey: 'Alt+D',
+      plugins: [{ spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' }, { spec: '@onetest/dsh-deck@0.2.1', version: '0.2.1' }],
     }
     const filled = formFor({ configured: true, config })
     expect(filled.repo).toBe('/tmp/harness')
     expect(filled.notifyPort).toBe('5000')
     expect(filled.hotkey).toBe('Alt+D')
+    expect(filled.plugins).toBe(`${HOOKS_PACKAGE}\n@onetest/dsh-deck@0.2.1`)
   })
 
-  it('round-trips a stored managed config', () => {
+  it('round-trips a stored managed config with no plugins as an empty list', () => {
     const config = {
       harness: { kind: 'managed' as const, package: '@acme/dsh', version: '1.2.3', workspace: '/tmp/ws' },
       notifyPort: 43117,
@@ -188,5 +235,6 @@ describe('formFor', () => {
     expect(filled.package).toBe('@acme/dsh')
     expect(filled.version).toBe('1.2.3')
     expect(filled.workspace).toBe('/tmp/ws')
+    expect(filled.plugins).toBe('')
   })
 })

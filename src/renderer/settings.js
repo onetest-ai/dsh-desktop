@@ -1,8 +1,13 @@
 // Dumb form: reads values, sends them to main, renders whatever comes back.
 // All validation lives in the main process.
-const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath']
+const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'plugins']
 const el = (id) => document.getElementById(id)
 const kindOf = () => document.querySelector('input[name="kind"]:checked').value
+
+// The last plugins the main process reported, keyed by package name, so a
+// later out-of-band update-available push can be rendered without another
+// round trip. Reset on every `load`.
+let pluginsByPackage = new Map()
 
 function showKind() {
   const managed = kindOf() === 'managed'
@@ -44,6 +49,7 @@ function appendProgress(line) {
 
 function hideUpdateHint() {
   el('update-hint').hidden = true
+  el('plugin-update-hint').hidden = true
 }
 
 function collect() {
@@ -54,6 +60,33 @@ function collect() {
 
 function messageOf(error) {
   return error && error.message ? error.message : String(error)
+}
+
+/**
+ * Replace one line of the `plugins` textarea — the one for `pkg` — with a
+ * pinned spec at `version`, and save.
+ * @param {string} pkg - the package name whose line is being updated.
+ * @param {string} version - the version to pin the line to.
+ */
+function acceptPluginUpdate(pkg, version) {
+  const lines = el('plugins').value.split('\n')
+  const updated = lines.map((line) => {
+    const trimmed = line.trim()
+    const atVersion = trimmed.indexOf('@', trimmed.startsWith('@') ? 1 : 0)
+    const linePkg = atVersion === -1 ? trimmed : trimmed.slice(0, atVersion)
+    return linePkg === pkg ? `${pkg}@${version}` : line
+  })
+  el('plugins').value = updated.join('\n')
+  void performSave()
+}
+
+/** Render the plugin status block from `pluginsByPackage`, one line per entry. */
+function renderPluginStatus() {
+  const lines = [...pluginsByPackage.values()].map((plugin) => {
+    const state = plugin.version === undefined ? 'not installed yet' : `v${plugin.version} installed`
+    return `${plugin.package} — ${plugin.pinned ? 'pinned, ' : ''}${state}`
+  })
+  el('plugin-status').textContent = lines.join('\n')
 }
 
 async function performSave() {
@@ -127,6 +160,8 @@ async function load() {
     radio.checked = radio.value === form.kind
   }
   showKind()
+  pluginsByPackage = new Map(result.plugins.map((plugin) => [plugin.package, plugin]))
+  renderPluginStatus()
 }
 
 for (const radio of document.querySelectorAll('input[name="kind"]')) {
@@ -150,6 +185,10 @@ el('use-latest').addEventListener('click', () => {
   void performSave()
 })
 
+el('use-latest-plugin').addEventListener('click', () => {
+  acceptPluginUpdate(el('plugin-update-name').textContent, el('latest-plugin-version').textContent)
+})
+
 // Receive-only: the main process pushes progress lines while a managed
 // install runs, and a later update-available result once the background
 // registry lookup finishes. Neither adds a way to call into main.
@@ -158,6 +197,13 @@ window.settings.onUpdateAvailable((latest) => {
   if (latest === el('version').value) return
   el('latest-version').textContent = latest
   el('update-hint').hidden = false
+})
+window.settings.onPluginUpdateAvailable((pkg, latest) => {
+  const plugin = pluginsByPackage.get(pkg)
+  if (plugin === undefined || plugin.version === latest) return
+  el('plugin-update-name').textContent = pkg
+  el('latest-plugin-version').textContent = latest
+  el('plugin-update-hint').hidden = false
 })
 
 void load()

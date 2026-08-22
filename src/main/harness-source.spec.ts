@@ -49,6 +49,19 @@ describe('managedDir', () => {
     }
   })
 
+  it('never emits a % character, which Node\'s ESM resolver reads as a URL escape', () => {
+    // A plugin entry file under this directory is imported by path (see
+    // `plugin-entries.ts`'s `resolvePluginEntry`), and Node's ESM resolver
+    // treats a bare absolute path specifier as a URL reference: `%XX` in it
+    // is decoded during resolution, and a literal `%2F` or `%5C` — what a
+    // naive `encodeURIComponent` emits for a scoped package's `/` — is
+    // refused outright as a disguised path separator
+    // (`ERR_INVALID_MODULE_SPECIFIER`), reproduced live booting the real
+    // harness against `@onetest/dsh-deck` (see `docs/notes/plugin-list.md`).
+    const dir = managedDir(home, '@onetest/dsh-deck', '0.2.1')
+    expect(dir).not.toContain('%')
+  })
+
   it('nests under a runtimes folder inside $DSH_HOME', () => {
     const dir = managedDir(home, '@deepseek-ai/dsh', 'latest')
     expect(dir.startsWith(join(home, 'runtimes'))).toBe(true)

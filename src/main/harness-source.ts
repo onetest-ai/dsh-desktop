@@ -57,35 +57,40 @@ export function configPath(env: NodeJS.ProcessEnv): string {
 }
 
 /**
- * Percent-encode a string into a single path segment that cannot be `.`,
- * `..`, empty, or contain a `/`.
+ * Encode a string into a single path segment that cannot be `.`, `..`,
+ * empty, or contain a `/` — and, unlike percent-encoding, contains no `%`
+ * either.
  *
- * `encodeURIComponent` alone is not enough: it leaves `.` unescaped (an
- * unreserved character), so an input of `..` (or a version like
- * `../b/1.0.0`, whose slashes it escapes but whose dots it does not) survives
- * as a literal `..` segment that `path.join` then resolves as "go up a
- * directory" — a traversal out of `runtimes/`, and a collision between
- * distinct inputs that both normalize to the same real directory.
+ * A plugin entry file's absolute path is passed straight to the cordis
+ * loader as an `import()` specifier (see `plugin-entries.ts`'s
+ * `resolvePluginEntry`), and Node's ESM resolver treats a bare absolute path
+ * specifier as a URL reference rather than a raw filesystem path: `%XX`
+ * substrings in it are read as percent-escapes and decoded during
+ * resolution, and a literal `%2F` or `%5C` — exactly what `encodeURIComponent`
+ * emits for a scoped package's `/` — is refused outright as a disguised path
+ * separator (`ERR_INVALID_MODULE_SPECIFIER`). No amount of re-escaping `%`
+ * itself survives this: the decode happens as part of ordinary URL
+ * resolution, not `decodeURIComponent`, so an escaped-`%` scheme round-trips
+ * incorrectly and the loader ends up looking for a directory that was never
+ * created (`ERR_MODULE_NOT_FOUND`) instead of the one this function wrote to
+ * disk. The segment therefore avoids `%` entirely rather than trying to
+ * out-escape it.
  *
- * The extra `.` → `%2E` substitution closes that gap. `encodeURIComponent`
- * never itself emits the literal substring `%2E` — the only byte whose hex
- * pair is `2E` is `.`, which is unreserved and therefore left unescaped, so
- * `%2E` cannot appear in its output for any input — so the substitution
- * cannot collide with an already-encoded triplet, and the resulting map from
- * input string to output segment stays injective (reversible by decoding
- * `%2E` back to `.` and then `decodeURIComponent`ing). After substitution the
- * segment contains only unreserved characters (`A-Za-z0-9-_~`, `.` never
- * bare) and `%XX` triplets, so it can never equal `.` or `..`, be empty, or
- * contain a `/` — for any input, hostile or not. An empty input maps to the
- * literal string `%00`: not a genuine null byte, just three ordinary
- * characters that are unreachable from any encoded input (padding the
- * mapping cleanly rather than colliding it with anything).
+ * `base64url` (RFC 4648 §5) does that: its alphabet is `A-Za-z0-9-_`, none of
+ * which is `.`, `/`, or `%`, so the result can never be `.`, `..`, contain a
+ * `/`, or be misread as a URL escape — for any input, hostile or not — and
+ * the encoding is a lossless, injective map (invertible by base64url-decoding
+ * back to the original UTF-8 bytes). An empty input encodes to the empty
+ * string, which is not a valid path segment, so it is padded to `00` — not a
+ * genuine encoding, just two characters unreachable from any non-empty input
+ * (`base64url` never emits a bare unpadded `00`) or the empty one.
  * @param value - the string to place into one path segment.
- * @returns a segment safe to `path.join` without traversal or collision risk.
+ * @returns a segment safe to `path.join` without traversal, collision, or
+ *   import-specifier risk.
  */
 function encodeSegment(value: string): string {
-  const encoded = encodeURIComponent(value).replaceAll('.', '%2E')
-  return encoded === '' ? '%00' : encoded
+  const encoded = Buffer.from(value, 'utf8').toString('base64url')
+  return encoded === '' ? '00' : encoded
 }
 
 /**

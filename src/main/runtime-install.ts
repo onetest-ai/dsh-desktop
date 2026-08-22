@@ -103,14 +103,26 @@ export async function resolveVersion(deps: InstallDeps, npm: string, pkg: string
  * retrying the install. The directory itself only ever appears complete —
  * `ensureInstalled` installs into a staging sibling and renames — so the two
  * checks agree rather than one covering for the other.
+ * A package with no `bin` entry (the hook bridge, unlike the core `dsh`
+ * package) links nothing at `managedBin` to check, so the completion marker
+ * is injectable: it defaults to `managedBin` for a package launched
+ * directly, and a caller installing a library-only package passes its own
+ * marker instead — e.g. the installed package's own `package.json`.
  * @param deps - injected effects.
  * @param dshHome - the resolved `$DSH_HOME` directory.
  * @param pkg - the package name.
  * @param version - the exact, already-resolved version.
- * @returns whether the version's binary exists.
+ * @param marker - resolves the install directory to the path whose existence means the install is complete.
+ * @returns whether the version's completion marker exists.
  */
-export function isInstalled(deps: InstallDeps, dshHome: string, pkg: string, version: string): boolean {
-  return deps.exists(managedBin(managedDir(dshHome, pkg, version)))
+export function isInstalled(
+  deps: InstallDeps,
+  dshHome: string,
+  pkg: string,
+  version: string,
+  marker: (dir: string) => string = managedBin,
+): boolean {
+  return deps.exists(marker(managedDir(dshHome, pkg, version)))
 }
 
 /**
@@ -133,6 +145,7 @@ export function isInstalled(deps: InstallDeps, dshHome: string, pkg: string, ver
  * @param pkg - the package name.
  * @param version - the exact, already-resolved version to install.
  * @param onLine - receives every line of `npm install`'s combined output, for progress logging.
+ * @param marker - forwarded to `isInstalled`; see there for why a library-only package needs one.
  */
 export async function ensureInstalled(
   deps: InstallDeps,
@@ -141,8 +154,9 @@ export async function ensureInstalled(
   pkg: string,
   version: string,
   onLine?: (line: string) => void,
+  marker: (dir: string) => string = managedBin,
 ): Promise<void> {
-  if (isInstalled(deps, dshHome, pkg, version)) return
+  if (isInstalled(deps, dshHome, pkg, version, marker)) return
 
   const staging = managedStagingDir(dshHome, pkg, version)
   // Residue from an install that was killed or timed out on an earlier

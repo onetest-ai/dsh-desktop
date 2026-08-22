@@ -2,6 +2,7 @@ import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { DEFAULT_HOTKEY, DEFAULT_NOTIFY_PORT, type ConfigResult, type DesktopConfig } from './config'
 import type { HarnessSource } from './harness-source'
+import { defaultPlugins, parseSpec, type PluginEntry } from './plugin-entries'
 
 /** The settings form's raw values. Every field is a string because HTML forms yield strings. */
 export interface SettingsForm {
@@ -14,6 +15,13 @@ export interface SettingsForm {
   hotkey: string
   pnpmPath: string
   npmPath: string
+  /**
+   * One plugin spec per line, typed the way the user would on a command
+   * line: `pkg@version` (pinned) or `pkg` (floating). Blank lines are
+   * ignored. `settings-ipc.ts`'s `performSave` resolves and installs each
+   * line and reconciles it against the previously stored entries.
+   */
+  plugins: string
 }
 
 /** Per-field messages for a rejected form; absent keys validated cleanly. */
@@ -43,6 +51,39 @@ const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$
  * `managedDir` as a traversal or multi-segment string.
  */
 const VERSION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.+-]*$/
+
+/**
+ * Parse the `plugins` textarea into entries, or the reason the text was
+ * rejected.
+ *
+ * Each non-blank line is one spec. A duplicate package name (pinned or not)
+ * is rejected rather than silently keeping one: the user typed two lines
+ * about the same package, which is almost certainly a mistake worth
+ * surfacing instead of guessing which one they meant.
+ * @param text - the raw textarea contents.
+ * @returns the parsed entries, or an error message naming the bad line.
+ */
+function parsePluginsField(text: string): { ok: true; entries: PluginEntry[] } | { ok: false; message: string } {
+  const seen = new Set<string>()
+  const entries: PluginEntry[] = []
+  for (const raw of text.split('\n')) {
+    const spec = raw.trim()
+    if (spec === '') continue
+    const { package: pkg, pinnedVersion } = parseSpec(spec)
+    if (!PACKAGE_NAME_PATTERN.test(pkg)) {
+      return { ok: false, message: `"${spec}" does not look like a package name or package@version.` }
+    }
+    if (pinnedVersion !== undefined && !VERSION_PATTERN.test(pinnedVersion)) {
+      return { ok: false, message: `"${spec}" does not look like a valid version.` }
+    }
+    if (seen.has(pkg)) {
+      return { ok: false, message: `${pkg} is listed more than once.` }
+    }
+    seen.add(pkg)
+    entries.push({ spec })
+  }
+  return { ok: true, entries }
+}
 
 function isDirectory(path: string): boolean {
   try {
@@ -108,6 +149,9 @@ export function validateSettings(form: SettingsForm): ValidationResult {
   const hotkey = form.hotkey.trim()
   if (hotkey === '') errors.hotkey = 'A shortcut is required.'
 
+  const parsedPlugins = parsePluginsField(form.plugins)
+  if (!parsedPlugins.ok) errors.plugins = parsedPlugins.message
+
   if (harness === undefined || Object.keys(errors).length > 0) {
     return { ok: false, errors }
   }
@@ -120,6 +164,11 @@ export function validateSettings(form: SettingsForm): ValidationResult {
       harness,
       notifyPort,
       hotkey,
+      // Each entry's `version` is resolved and installed by
+      // `settings-ipc.ts`'s `performSave`, which also reconciles this fresh
+      // parse against the previously stored entries to carry forward an
+      // already-resolved version for a spec that has not changed.
+      plugins: parsedPlugins.ok ? parsedPlugins.entries : [],
       ...(pnpmPath === '' ? {} : { pnpmPath }),
       ...(npmPath === '' ? {} : { npmPath }),
     },
@@ -142,10 +191,16 @@ export function formFor(result: ConfigResult): SettingsForm {
     hotkey: DEFAULT_HOTKEY,
     pnpmPath: '',
     npmPath: '',
+    // A never-configured install pre-seeds the notification hook bridge as
+    // the first plugin, so the first save installs it rather than special-
+    // casing it outside this generic list.
+    plugins: defaultPlugins()
+      .map((entry) => entry.spec)
+      .join('\n'),
   }
   if (!result.configured) return base
 
-  const { harness, notifyPort, hotkey, pnpmPath, npmPath } = result.config
+  const { harness, notifyPort, hotkey, pnpmPath, npmPath, plugins } = result.config
   return {
     ...base,
     kind: harness.kind,
@@ -156,5 +211,6 @@ export function formFor(result: ConfigResult): SettingsForm {
     hotkey,
     pnpmPath: pnpmPath ?? '',
     npmPath: npmPath ?? '',
+    plugins: (plugins ?? []).map((entry) => entry.spec).join('\n'),
   }
 }

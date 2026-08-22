@@ -7,8 +7,9 @@ import { configPath, resolveDshHome, type HarnessSource } from './harness-source
 import { createInstallRunner } from './install-process'
 import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
+import { HOOKS_PACKAGE, parseSpec, pluginInstallMarker, pluginStatus, type PluginEntry } from './plugin-entries'
 import { preflight } from './preflight'
-import { writeRuntimeFiles } from './runtime-files'
+import { runtimeFilePaths, writeRuntimeFiles } from './runtime-files'
 import type { InstallDeps } from './runtime-install'
 import { dshWebCommand, resolveBinary, startServer } from './server'
 import { createSettingsHandlers } from './settings-ipc'
@@ -65,6 +66,12 @@ function harnessSourceChanged(previous: HarnessSource, next: HarnessSource): boo
   }
 }
 
+/** Whether two plugin lists differ in spec or resolved version, order-sensitively. */
+function pluginsChanged(previous: PluginEntry[], next: PluginEntry[]): boolean {
+  if (previous.length !== next.length) return true
+  return previous.some((entry, index) => entry.spec !== next[index].spec || entry.version !== next[index].version)
+}
+
 /** Whether two configs differ in a way that requires respawning the harness child. */
 function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig): boolean {
   if (previous === undefined) return true
@@ -75,7 +82,11 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
     previous.notifyPort !== next.notifyPort ||
     // Both binaries are resolved when the child is spawned.
     previous.pnpmPath !== next.pnpmPath ||
-    previous.npmPath !== next.npmPath
+    previous.npmPath !== next.npmPath ||
+    // Every entry's resolved entry file is baked into the generated overlay
+    // at boot, so a newly resolved or reordered list only reaches the
+    // harness child through a respawn.
+    pluginsChanged(previous.plugins ?? [], next.plugins ?? [])
   )
 }
 
@@ -173,6 +184,15 @@ const settingsHandlers = createSettingsHandlers({
   isQuitting: () => quitting,
   installManaged: (pkg, version, npmPath, onLine) =>
     createManagedInstaller(installDeps, resolveBinary(npmPath, 'npm', process.env), DSH_HOME)(pkg, version, onLine),
+  installPlugin: (pkg, version, npmPath, onLine) =>
+    createManagedInstaller(
+      installDeps,
+      resolveBinary(npmPath, 'npm', process.env),
+      DSH_HOME,
+      // A plugin entry links no `bin`, so its completion marker cannot be
+      // the default `dsh` binary check; see `plugin-entries.ts`'s own doc.
+      (dir) => pluginInstallMarker(dir, pkg),
+    )(pkg, version, onLine),
   checkManagedUpdate: (pkg, installed, npmPath) =>
     createUpdateChecker(installDeps, resolveBinary(npmPath, 'npm', process.env))(pkg, installed),
 })
@@ -321,11 +341,23 @@ async function bootNow(): Promise<void> {
   let patchPath: string
   let hooksNote: string | undefined
   try {
-    // The harness resolves profile plugins from here; see `spawnFor`'s
-    // hardcoded `--profile web`.
-    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, join(DSH_HOME, 'profiles', 'web'))
+    // Where each configured plugin entry would load from, or why it is
+    // unavailable — from whatever a Settings save last resolved and
+    // installed; never installed here at boot. The hook bridge is
+    // privileged with `configPath` pointing at the hooks file this same
+    // boot is about to write; every other entry gets none.
+    const { hooksPath } = runtimeFilePaths(runtimeDirectory())
+    const statuses = (config.plugins ?? []).map((entry) =>
+      pluginStatus(installDeps, DSH_HOME, entry, parseSpec(entry.spec).package === HOOKS_PACKAGE ? hooksPath : undefined),
+    )
+    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses)
     patchPath = files.patchPath
-    hooksNote = files.hooksOmittedReason
+    const bridgeOmitted = files.omitted.find((entry) => entry.package === HOOKS_PACKAGE)
+    const otherOmitted = files.omitted.filter((entry) => entry.package !== HOOKS_PACKAGE)
+    const notes: string[] = []
+    if (bridgeOmitted !== undefined) notes.push(`notifications unavailable — hook bridge not loaded: ${bridgeOmitted.reason}`)
+    for (const entry of otherOmitted) notes.push(`${entry.package} not loaded: ${entry.reason}`)
+    hooksNote = notes.length > 0 ? notes.join('; ') : undefined
   } catch (error) {
     fail('The harness launch files could not be written', (error as Error).message)
     return
@@ -348,10 +380,7 @@ async function bootNow(): Promise<void> {
       // A stop overtook this boot; the child is already being reaped elsewhere.
       return
     }
-    setStatus(
-      'running',
-      hooksNote !== undefined ? `notifications unavailable — hook bridge not loaded: ${hooksNote}` : undefined,
-    )
+    setStatus('running', hooksNote)
     if (window !== undefined && !window.isDestroyed()) void window.loadURL(handle.url)
   } catch (error) {
     if (mine !== generation) return

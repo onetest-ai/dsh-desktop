@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { ConfigurationError } from './configuration-error'
 import type { HarnessSource } from './harness-source'
+import type { PluginEntry } from './plugin-entries'
 
 /** Resolved desktop settings. `pnpmPath`/`npmPath` pin binaries when PATH cannot find them. */
 export interface DesktopConfig {
@@ -10,6 +11,13 @@ export interface DesktopConfig {
   hotkey: string
   pnpmPath?: string
   npmPath?: string
+  /**
+   * Packages the desktop shell installs and inserts into the harness,
+   * managed exactly like `harness`'s own managed source — pinned, cached,
+   * update-checked. Optional so a `desktop.json` predating this field stays
+   * valid; absent means no plugins configured, not "use the defaults".
+   */
+  plugins?: PluginEntry[]
 }
 
 export const DEFAULT_NOTIFY_PORT = 43117
@@ -77,12 +85,19 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     throw new ConfigurationError(`dsh-desktop: ${filePath} harness.kind must be "local" or "managed"`)
   }
 
+  if (record.plugins !== undefined) {
+    if (!Array.isArray(record.plugins) || record.plugins.some((entry) => typeof entry?.spec !== 'string')) {
+      throw new ConfigurationError(`dsh-desktop: ${filePath} "plugins" must be a list of {spec, version?} entries`)
+    }
+  }
+
   return {
     harness,
     notifyPort: record.notifyPort ?? DEFAULT_NOTIFY_PORT,
     hotkey: record.hotkey ?? DEFAULT_HOTKEY,
     ...(record.pnpmPath === undefined ? {} : { pnpmPath: record.pnpmPath }),
     ...(record.npmPath === undefined ? {} : { npmPath: record.npmPath }),
+    ...(record.plugins === undefined ? {} : { plugins: record.plugins }),
   }
 }
 

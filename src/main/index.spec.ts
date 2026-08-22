@@ -187,8 +187,22 @@ vi.mock('./install-process', () => ({
 const preflightMock = vi.fn(() => ({ ok: true }))
 vi.mock('./preflight', () => ({ preflight: (...args: unknown[]) => preflightMock(...(args as [])) }))
 
+const writeRuntimeFilesMock = vi.fn(() => ({ patchPath: '/tmp/p.yml', hooksPath: '/tmp/h.json', omitted: [] }))
 vi.mock('./runtime-files', () => ({
-  writeRuntimeFiles: vi.fn(() => ({ patchPath: '/tmp/p.yml', hooksPath: '/tmp/h.json' })),
+  writeRuntimeFiles: (...args: unknown[]) => writeRuntimeFilesMock(...(args as [])),
+  runtimeFilePaths: (directory: string) => ({ patchPath: `${directory}/desktop.patch.yml`, hooksPath: `${directory}/hooks.json` }),
+}))
+
+/** Controlled by tests that assert what `bootNow` derives for each configured plugin entry. */
+const pluginStatusMock = vi.fn(() => ({ kind: 'unavailable', package: '@deepseek-ai/dsh-hooks-claude-code', reason: 'not installed yet' }))
+vi.mock('./plugin-entries', () => ({
+  pluginStatus: (...args: unknown[]) => pluginStatusMock(...(args as [])),
+  pluginInstallMarker: vi.fn(),
+  parseSpec: (spec: string) => {
+    const at = spec.indexOf('@', spec.startsWith('@') ? 1 : 0)
+    return at === -1 ? { package: spec } : { package: spec.slice(0, at), pinnedVersion: spec.slice(at + 1) }
+  },
+  HOOKS_PACKAGE: '@deepseek-ai/dsh-hooks-claude-code',
 }))
 
 /** One spawned harness child, controlled by the test. */
@@ -312,6 +326,12 @@ beforeEach(() => {
   // config unreadable would otherwise leak that into the next one.
   loadConfigMock.mockImplementation(() => configResult)
   startNotifyListenerMock.mockImplementation(async () => ({ port: 1, close: notifyCloseMock }))
+  writeRuntimeFilesMock.mockImplementation(() => ({ patchPath: '/tmp/p.yml', hooksPath: '/tmp/h.json', omitted: [] }))
+  pluginStatusMock.mockImplementation(() => ({
+    kind: 'unavailable',
+    package: '@deepseek-ai/dsh-hooks-claude-code',
+    reason: 'not installed yet',
+  }))
   installStopAll.mockImplementation(async () => {})
   settingsOnClosed = undefined
   vi.clearAllMocks()
@@ -329,6 +349,56 @@ describe('boot', () => {
     expect(child.options.timeoutMs).toBeGreaterThan(0)
     expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:5000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running')
+  })
+
+  it('derives a plugin status per configured entry, and passes them straight to writeRuntimeFiles', async () => {
+    configResult = {
+      configured: true,
+      config: { ...STORED, plugins: [{ spec: '@deepseek-ai/dsh-hooks-claude-code', version: '0.1.1-rc.2' }] },
+    }
+    pluginStatusMock.mockImplementation(() => ({
+      kind: 'ready',
+      package: '@deepseek-ai/dsh-hooks-claude-code',
+      entryPath: '/tmp/bridge/lib/index.js',
+      probeDirectory: '/tmp/bridge',
+    }))
+
+    await bootReady()
+
+    expect(pluginStatusMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      { spec: '@deepseek-ai/dsh-hooks-claude-code', version: '0.1.1-rc.2' },
+      expect.stringContaining('hooks.json'),
+    )
+    expect(writeRuntimeFilesMock).toHaveBeenCalledWith(expect.any(String), STORED.notifyPort, [
+      { kind: 'ready', package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: '/tmp/bridge/lib/index.js', probeDirectory: '/tmp/bridge' },
+    ])
+  })
+
+  it('still boots, with the insert omitted, when a plugin is unavailable', async () => {
+    configResult = {
+      configured: true,
+      config: { ...STORED, plugins: [{ spec: '@deepseek-ai/dsh-hooks-claude-code' }] },
+    }
+    pluginStatusMock.mockImplementation(() => ({
+      kind: 'unavailable',
+      package: '@deepseek-ai/dsh-hooks-claude-code',
+      reason: 'not installed yet',
+    }))
+    writeRuntimeFilesMock.mockImplementation(() => ({
+      patchPath: '/tmp/p.yml',
+      hooksPath: '/tmp/h.json',
+      omitted: [{ package: '@deepseek-ai/dsh-hooks-claude-code', reason: 'not installed yet' }],
+    }))
+
+    await bootReady()
+
+    expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:5000')
+    expect(setTrayStatus).toHaveBeenLastCalledWith(
+      'running',
+      expect.stringContaining('not installed yet'),
+    )
   })
 
   it('shows the failure pane when the child never becomes ready, without opening settings', async () => {
@@ -665,6 +735,16 @@ describe('applySettings', () => {
     await bootReady()
     startServer.mockClear()
     await applySettingsReady(STORED, { ...STORED, npmPath: '/opt/npm' })
+    expect(startServer).toHaveBeenCalledTimes(1)
+  })
+
+  it('restarts when the resolved plugin list changes, since it is baked into the generated overlay', async () => {
+    await bootReady()
+    startServer.mockClear()
+    await applySettingsReady(STORED, {
+      ...STORED,
+      plugins: [{ spec: '@deepseek-ai/dsh-hooks-claude-code', version: '0.1.1-rc.2' }],
+    })
     expect(startServer).toHaveBeenCalledTimes(1)
   })
 

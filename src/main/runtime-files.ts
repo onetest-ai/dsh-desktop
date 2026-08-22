@@ -1,6 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import type { PluginStatus } from './plugin-entries'
+
+export { HOOKS_PACKAGE } from './plugin-entries'
 
 /** Absolute paths of the files generated for one harness launch. */
 export interface RuntimeFiles {
@@ -8,20 +11,24 @@ export interface RuntimeFiles {
   patchPath: string
   /** Referenced from the overlay as the Claude Code hook bridge's `configPath`. */
   hooksPath: string
-  /**
-   * Set when the hook bridge insert was left out of the overlay, naming why
-   * the bridge was not loadable from the profile at boot. `undefined` when
-   * the insert is present.
-   */
-  hooksOmittedReason?: string
+  /** Every configured plugin left out of the overlay, and why. Empty when all mounted. */
+  omitted: { package: string; reason: string }[]
 }
 
 /** File names inside the runtime directory. */
 const PATCH_FILE = 'desktop.patch.yml'
 const HOOKS_FILE = 'hooks.json'
 
-/** The Claude Code hook bridge package the overlay mounts. */
-export const HOOKS_PACKAGE = '@deepseek-ai/dsh-hooks-claude-code'
+/**
+ * The absolute paths the generated runtime files will occupy in `directory`,
+ * without writing anything — needed before the files exist, e.g. to build
+ * the hook bridge's `configPath` ahead of resolving its plugin status.
+ * @param directory - the runtime directory a boot writes into.
+ * @returns the patch and hooks file paths.
+ */
+export function runtimeFilePaths(directory: string): { patchPath: string; hooksPath: string } {
+  return { patchPath: join(directory, PATCH_FILE), hooksPath: join(directory, HOOKS_FILE) }
+}
 
 /**
  * Checks whether a package is loadable from a directory, returning `undefined`
@@ -46,7 +53,7 @@ interface Manifest {
  * `require.resolve` alone is not enough: it follows the package's own
  * `exports`/`main` field to an entry file, but does not execute that file, so
  * a dependency the entry file imports at runtime — and that turns out to be
- * missing — never surfaces (this is exactly how the bridge failed in
+ * missing — never surfaces (this is exactly how the hook bridge failed in
  * practice: it imports `@deepseek-ai/dsh-hook-protocol`, declared only as a
  * peer dependency, not as `dependencies`). Both `dependencies` and
  * non-optional `peerDependencies` are therefore resolved too, from the
@@ -54,23 +61,23 @@ interface Manifest {
  *
  * A peer marked `peerDependenciesMeta[name].optional` is skipped: an absent
  * optional peer is a normal, healthy install, and treating it as a failure
- * would disable notifications on every install of the bridge that omits it.
- * A *required* peer that is absent is treated as a hard failure even though
- * some required peers (e.g. `@deepseek-ai/cordis`) are ones the harness host
- * itself provides at runtime rather than ones the bridge's own install step
- * places in its `node_modules`: `require.resolve`'s search walks up through
- * every ancestor `node_modules` starting at the package's own directory, so a
- * peer the profile's own dependency tree hoists to a shared, higher
+ * would disable a plugin on every install that omits it. A *required* peer
+ * that is absent is treated as a hard failure even though some required
+ * peers (e.g. `@deepseek-ai/cordis`) are ones the harness host itself
+ * provides at runtime rather than ones the plugin's own install step places
+ * in its `node_modules`: `require.resolve`'s search walks up through every
+ * ancestor `node_modules` starting at the package's own directory, so a peer
+ * the profile's own dependency tree hoists to a shared, higher
  * `node_modules` (which is how the profile installs these host-provided
  * packages) still resolves from there. A peer that cannot be found by that
  * walk is one nothing in the profile provides, at any level — which is
  * exactly the class of break this probe exists to catch.
  *
- * The walk covers one level: the bridge's own declared dependencies, not
+ * The walk covers one level: the plugin's own declared dependencies, not
  * their transitive dependencies. The reproduced failure, and the class of
- * failures a hook bridge can introduce on its own, are one hop from the
- * entry point — the bridge's own `package.json`. A break two hops down is a
- * mis-published dependency of a dependency, which is outside the bridge's
+ * failures a plugin can introduce on its own, are one hop from the entry
+ * point — the plugin's own `package.json`. A break two hops down is a
+ * mis-published dependency of a dependency, which is outside the plugin's
  * control and would, in practice, also break the harness's own boot far more
  * broadly, so it is not the primary risk this probe is guarding against; a
  * full transitive walk would also make this boot-time check's cost scale
@@ -139,38 +146,69 @@ function yamlScalar(value: string): string {
 }
 
 /**
+ * A stable, filesystem/YAML-safe insert id for a package name.
+ * @param pkg - the package name, e.g. `@onetest/dsh-deck`.
+ * @returns the id, e.g. `onetest-dsh-deck`.
+ */
+function insertId(pkg: string): string {
+  return pkg.replaceAll(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+/**
  * The cordis patch overlay the harness child is launched with.
  *
- * It binds the webserver to an OS-assigned loopback port and, when the hook
- * bridge is loadable, mounts it against the generated hook config. A missing
- * or broken bridge must cost notifications, not the harness's ability to
- * boot at all, so the insert is left out rather than attempted — the reason
- * is recorded as a comment so it can be surfaced rather than silently
- * swallowed.
- * @param hooksPath - absolute path of the generated hooks file.
- * @param hooksOmittedReason - when set, why the insert was left out.
+ * It binds the webserver to an OS-assigned loopback port and inserts every
+ * ready plugin entry against its resolved entry file. A missing or broken
+ * plugin must cost only that plugin, never the harness's ability to boot at
+ * all, so an unready entry is left out of the `insert` list rather than
+ * attempted — the reason is recorded as a comment so it can be surfaced
+ * rather than silently swallowed.
+ * @param ready - plugin entries confirmed loadable, in configured order.
+ * @param omitted - entries left out, and why.
  * @returns the overlay document.
  */
-export function patchOverlay(hooksPath: string, hooksOmittedReason?: string): string {
+export function patchOverlay(
+  ready: { package: string; entryPath: string; configPath?: string }[],
+  omitted: { package: string; reason: string }[],
+): string {
   const webserver = `# Generated by dsh-desktop at launch; edits are overwritten on the next boot.
 - id: webserver
   config:
     host: 127.0.0.1
     port: 0
 `
-  if (hooksOmittedReason !== undefined) {
-    const reason = hooksOmittedReason.replaceAll('\n', ' ')
-    return `${webserver}
-# The ${HOOKS_PACKAGE} hook bridge was omitted: ${reason}
-`
-  }
+  const comments = omitted
+    .map((entry) => `# ${entry.package} was omitted: ${entry.reason.replaceAll('\n', ' ')}\n`)
+    .join('')
+
+  if (ready.length === 0) return `${webserver}\n${comments}`
+
+  // Each `name` is an absolute path to the plugin's own resolved entry file,
+  // not the bare package name or its install directory: the cordis loader
+  // resolves a directory `name` by looking only for `index.jsx` and ignores
+  // `package.json`, so only the entry file itself works here.
+  //
+  // `config` is always present, even for a generic entry with nothing to
+  // configure: cordis's own config resolution rejects an insert with no
+  // `config` node at all ("expected a config object"), reproduced live
+  // booting the real harness against `@onetest/dsh-deck` (see
+  // `docs/notes/plugin-list.md`) — an omitted key is not the same as an
+  // empty object to it. A generic entry gets `{}`; only the entry the app
+  // privileges with a `configPath` gets one.
+  const inserts = ready
+    .map((entry) => {
+      const config =
+        entry.configPath === undefined
+          ? '\n      config: {}'
+          : `\n      config:\n        configPath: ${yamlScalar(entry.configPath)}`
+      return `    - id: ${insertId(entry.package)}\n      name: ${yamlScalar(entry.entryPath)}${config}\n`
+    })
+    .join('')
+
   return `${webserver}
 - insert:
-    - id: hooks-claude-code
-      name: ${yamlScalar(HOOKS_PACKAGE)}
-      config:
-        configPath: ${yamlScalar(hooksPath)}
-`
+${inserts}
+${comments}`
 }
 
 /**
@@ -206,32 +244,46 @@ export function hooksConfig(notifyPort: number): string {
  * into a directory that is writable by construction — a packaged app's own
  * resources are inside `app.asar` and may sit on a read-only volume.
  *
- * Before mounting the hook bridge, `probe` checks whether it is actually
- * loadable from `profileDirectory` — the directory the harness resolves
- * profile plugins from. When it is not, the insert is left out of the
- * overlay: our own overlay must never be able to prevent the harness from
- * starting.
+ * `statuses` names where each configured plugin entry would load from, or
+ * that it is already known to be unavailable (never installed, or resolved
+ * to a version missing from disk — see `plugin-entries.ts`'s `pluginStatus`).
+ * For each candidate, `probe` still checks whether it actually loads —
+ * together with its own declared dependencies — from its install directory
+ * before the insert is added. Either way, an unusable plugin only ever costs
+ * its own insert, never the harness's ability to boot: our own overlay must
+ * never be able to prevent that.
  * @param directory - writable directory to generate into, created if absent.
  * @param notifyPort - the port the desktop notification listener uses.
- * @param profileDirectory - the harness profile directory the hook bridge would load from.
- * @param probe - checks whether the hook bridge is loadable; injectable for tests.
- * @returns the absolute paths of the generated files, and why the insert was
- *   omitted, if it was.
+ * @param statuses - every configured plugin's resolved status.
+ * @param probe - checks whether a plugin is loadable; injectable for tests.
+ * @returns the absolute paths of the generated files, and which plugins were
+ *   omitted, if any.
  */
 export function writeRuntimeFiles(
   directory: string,
   notifyPort: number,
-  profileDirectory: string,
+  statuses: PluginStatus[],
   probe: LoadabilityProbe = checkPackageLoadable,
 ): RuntimeFiles {
-  const hooksOmittedReason = probe(HOOKS_PACKAGE, profileDirectory)
-  const files: RuntimeFiles = {
-    patchPath: join(directory, PATCH_FILE),
-    hooksPath: join(directory, HOOKS_FILE),
-    hooksOmittedReason,
+  const omitted: { package: string; reason: string }[] = []
+  const ready: { package: string; entryPath: string; configPath?: string }[] = []
+  for (const status of statuses) {
+    if (status.kind === 'unavailable') {
+      omitted.push({ package: status.package, reason: status.reason })
+      continue
+    }
+    const reason = probe(status.package, status.probeDirectory)
+    if (reason !== undefined) {
+      omitted.push({ package: status.package, reason })
+      continue
+    }
+    ready.push({ package: status.package, entryPath: status.entryPath, configPath: status.configPath })
   }
+
+  const paths = runtimeFilePaths(directory)
+  const files: RuntimeFiles = { ...paths, omitted }
   mkdirSync(directory, { recursive: true })
   writeFileSync(files.hooksPath, hooksConfig(notifyPort))
-  writeFileSync(files.patchPath, patchOverlay(files.hooksPath, hooksOmittedReason))
+  writeFileSync(files.patchPath, patchOverlay(ready, omitted))
   return files
 }

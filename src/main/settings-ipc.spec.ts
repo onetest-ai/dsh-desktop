@@ -8,12 +8,15 @@ import type { DesktopConfig } from './config'
 
 const REPO = mkdtempSync(join(tmpdir(), 'dsh-repo-'))
 const PKG = '@deepseek-ai/dsh'
+const DECK = '@onetest/dsh-deck'
+
+const HOOKS_PACKAGE = '@deepseek-ai/dsh-hooks-claude-code'
 
 function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
   return {
     kind: 'local', repo: REPO, package: PKG, version: 'latest',
     workspace: '', notifyPort: '43117', hotkey: 'CommandOrControl+Shift+D',
-    pnpmPath: '', npmPath: '', ...overrides,
+    pnpmPath: '', npmPath: '', plugins: '', ...overrides,
   }
 }
 
@@ -38,16 +41,18 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     apply: vi.fn(async () => []),
     isQuitting: () => false,
     installManaged: vi.fn(async (_pkg, version) => version),
+    installPlugin: vi.fn(async (_pkg, version) => version),
     checkManagedUpdate: vi.fn(async () => undefined),
     ...overrides,
   }
 }
 
 describe('read', () => {
-  it('returns the stored values as form fields', () => {
+  it('returns the stored values as form fields, with an empty plugin list', () => {
     expect(createSettingsHandlers(deps()).read()).toEqual({
       configured: true,
       form: expect.objectContaining({ kind: 'local', repo: REPO, notifyPort: '43117' }),
+      plugins: [],
     })
   })
 
@@ -56,6 +61,7 @@ describe('read', () => {
     expect(handlers.read()).toEqual({
       configured: false,
       form: expect.objectContaining({ repo: '', notifyPort: '43117' }),
+      plugins: [],
     })
   })
 
@@ -96,6 +102,76 @@ describe('read', () => {
     createSettingsHandlers(d).read(vi.fn())
     expect(checkManagedUpdate).not.toHaveBeenCalled()
   })
+
+  describe('plugins', () => {
+    const withPlugins = (plugins: DesktopConfig['plugins']): DesktopConfig => ({ ...STORED, plugins })
+
+    it('reports pinned and floating entries, each with its parsed package and resolved version', () => {
+      const d = deps({
+        readConfig: () => ({
+          configured: true,
+          config: withPlugins([
+            { spec: `${DECK}@0.2.1`, version: '0.2.1' },
+            { spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' },
+          ]),
+        }),
+      })
+
+      const { plugins } = createSettingsHandlers(d).read()
+
+      expect(plugins).toEqual([
+        { spec: `${DECK}@0.2.1`, package: DECK, pinned: true, version: '0.2.1' },
+        { spec: HOOKS_PACKAGE, package: HOOKS_PACKAGE, pinned: false, version: '0.1.1-rc.2' },
+      ])
+    })
+
+    it('offers an update for a floating entry, out of band', async () => {
+      const checkManagedUpdate = vi.fn(async () => '0.3.0')
+      const d = deps({
+        readConfig: () => ({ configured: true, config: withPlugins([{ spec: DECK, version: '0.2.1' }]) }),
+        checkManagedUpdate,
+      })
+      const offered: { pkg: string; latest: string }[] = []
+
+      createSettingsHandlers(d).read(undefined, (pkg, latest) => offered.push({ pkg, latest }))
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(checkManagedUpdate).toHaveBeenCalledWith(DECK, '0.2.1', undefined)
+      expect(offered).toEqual([{ pkg: DECK, latest: '0.3.0' }])
+    })
+
+    it('never offers an update for a pinned entry', async () => {
+      // Non-vacuity: with the `plugin.pinned` guard removed from `read`, this
+      // test fails because the pinned entry's higher registry version is
+      // reported anyway. Restoring the guard fixes it.
+      const checkManagedUpdate = vi.fn(async () => '0.3.0')
+      const d = deps({
+        readConfig: () => ({ configured: true, config: withPlugins([{ spec: `${DECK}@0.2.1`, version: '0.2.1' }]) }),
+        checkManagedUpdate,
+      })
+      const offered: { pkg: string; latest: string }[] = []
+
+      createSettingsHandlers(d).read(undefined, (pkg, latest) => offered.push({ pkg, latest }))
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(checkManagedUpdate).not.toHaveBeenCalled()
+      expect(offered).toEqual([])
+    })
+
+    it('never checks an entry that has not been installed yet', () => {
+      const checkManagedUpdate = vi.fn(async () => '0.3.0')
+      const d = deps({
+        readConfig: () => ({ configured: true, config: withPlugins([{ spec: DECK }]) }),
+        checkManagedUpdate,
+      })
+
+      createSettingsHandlers(d).read(undefined, vi.fn())
+
+      expect(checkManagedUpdate).not.toHaveBeenCalled()
+    })
+  })
 })
 
 describe('pickFolder', () => {
@@ -118,6 +194,7 @@ describe('save', () => {
       harness: { kind: 'local', repo: REPO },
       notifyPort: 43117,
       hotkey: 'CommandOrControl+Shift+D',
+      plugins: [],
     })
     expect(d.apply).toHaveBeenCalledWith(STORED, expect.objectContaining({ notifyPort: 43117 }))
   })
@@ -227,6 +304,93 @@ describe('save', () => {
       expect(d.apply).not.toHaveBeenCalled()
     })
   })
+
+  describe('plugins', () => {
+    it('installs a pinned entry at exactly its spec\'s version, reusing the shared installer', async () => {
+      const installPlugin = vi.fn(async (_pkg: string, version: string) => version)
+      const d = deps({ installPlugin })
+
+      const result = await createSettingsHandlers(d).save(form({ plugins: `${DECK}@0.2.1` }))
+
+      expect(result).toEqual({ ok: true, warnings: [] })
+      expect(installPlugin).toHaveBeenCalledWith(DECK, '0.2.1', undefined, expect.any(Function))
+      expect(d.writeConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ plugins: [{ spec: `${DECK}@0.2.1`, version: '0.2.1' }] }),
+      )
+    })
+
+    it('resolves a floating entry with no prior version to latest', async () => {
+      const installPlugin = vi.fn(async () => '0.2.1')
+      const d = deps({ installPlugin })
+
+      await createSettingsHandlers(d).save(form({ plugins: DECK }))
+
+      expect(installPlugin).toHaveBeenCalledWith(DECK, 'latest', undefined, expect.any(Function))
+    })
+
+    it('reinstalls a floating entry at its previously resolved version, not latest again', async () => {
+      const installPlugin = vi.fn(async (_pkg: string, version: string) => version)
+      const d = deps({
+        installPlugin,
+        readConfig: () => ({ configured: true, config: { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }] } }),
+      })
+
+      await createSettingsHandlers(d).save(form({ plugins: DECK }))
+
+      expect(installPlugin).toHaveBeenCalledWith(DECK, '0.2.1', undefined, expect.any(Function))
+    })
+
+    it('adds and removes entries, round-tripping through config', async () => {
+      const installPlugin = vi.fn(async (_pkg: string, version: string) => (version === 'latest' ? '1.0.0' : version))
+      const d = deps({
+        installPlugin,
+        readConfig: () => ({
+          configured: true,
+          config: { ...STORED, plugins: [{ spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' }, { spec: DECK, version: '0.2.1' }] },
+        }),
+      })
+
+      // The saved form keeps the bridge, drops the deck, and adds a third entry.
+      await createSettingsHandlers(d).save(form({ plugins: `${HOOKS_PACKAGE}\n@onetest/other` }))
+
+      expect(d.writeConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          plugins: [{ spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' }, { spec: '@onetest/other', version: '1.0.0' }],
+        }),
+      )
+    })
+
+    it('keeps the previously resolved version and reports a warning when an install fails', async () => {
+      const installPlugin = vi.fn(async () => {
+        throw new Error('registry unreachable')
+      })
+      const d = deps({
+        installPlugin,
+        readConfig: () => ({ configured: true, config: { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }] } }),
+      })
+
+      const result = await createSettingsHandlers(d).save(form({ plugins: DECK }))
+
+      expect(result.ok).toBe(true)
+      if (result.ok) expect(result.warnings[0]).toMatch(/dsh-deck.*registry unreachable/)
+      expect(d.writeConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ plugins: [{ spec: DECK, version: '0.2.1' }] }),
+      )
+    })
+
+    it('never fails the whole save because one plugin failed to install', async () => {
+      const d = deps({
+        installPlugin: vi.fn(async () => {
+          throw new Error('offline')
+        }),
+      })
+
+      const result = await createSettingsHandlers(d).save(form({ plugins: DECK }))
+
+      expect(result.ok).toBe(true)
+      expect(d.apply).toHaveBeenCalled()
+    })
+  })
 })
 
 describe('a failing update lookup', () => {
@@ -277,12 +441,16 @@ describe('concurrent saves', () => {
     // "Settings saved." for a form that was never applied drops the user's
     // intent and removes the cue that would make them retry.
     let releaseInstall: (version: string) => void = () => {}
-    const installManaged = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
+    let hungOnce = false
+    const installManaged = vi.fn((_pkg: string, version: string) => {
+      if (!hungOnce) {
+        hungOnce = true
+        return new Promise<string>((resolve) => {
           releaseInstall = resolve
-        }),
-    )
+        })
+      }
+      return Promise.resolve(version)
+    })
     const writeConfig = vi.fn()
     const apply = vi.fn(async () => [])
     const handlers = createSettingsHandlers(deps({ installManaged, writeConfig, apply }))
@@ -293,7 +461,6 @@ describe('concurrent saves', () => {
     await first
 
     expect(second).toEqual({ ok: false, errors: { kind: SAVE_IN_PROGRESS } })
-    // The serialization itself is unchanged: one install, one write, one apply.
     expect(installManaged).toHaveBeenCalledTimes(1)
     expect(writeConfig).toHaveBeenCalledTimes(1)
     expect(apply).toHaveBeenCalledTimes(1)

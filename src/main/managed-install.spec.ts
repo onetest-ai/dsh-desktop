@@ -74,6 +74,22 @@ describe('createManagedInstaller', () => {
 
     expect(lines).toEqual(['added 455 packages'])
   })
+
+  it('checks a custom marker for a package with no bin, skipping install when it already exists', async () => {
+    const marker = (dir: string): string => `${dir}/node_modules/${PKG}/package.json`
+    const existing = marker(managedDir(DSH_HOME, PKG, '0.1.1-rc.2'))
+    const run = vi.fn().mockResolvedValue({ code: 0, stdout: '0.1.1-rc.2\n', stderr: '' })
+    const deps = fakeDeps({ run }, new Set([existing]))
+    const install = createManagedInstaller(deps, NPM, DSH_HOME, marker)
+
+    const version = await install(PKG, '0.1.1-rc.2', () => {})
+
+    expect(version).toBe('0.1.1-rc.2')
+    // `view` still ran to resolve; `install` never did, because the custom
+    // marker (not the default dsh binary, which this package has none of)
+    // already existed.
+    expect(run).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('createUpdateChecker', () => {
