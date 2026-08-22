@@ -10,7 +10,7 @@ It is a **shell, not a fork**: it never modifies the harness. Point it at a chec
 - Node 22 or newer
 - One of:
   - **a local harness checkout** with its frontend built (`pnpm run build:web`), plus `pnpm` on your `PATH`, or
-  - **a managed install**, to run the published `@deepseek-ai/dsh` package instead, once it has been installed under `$DSH_HOME`
+  - **a managed install**, to run the published `@deepseek-ai/dsh` package instead — Settings installs it under `$DSH_HOME` on save, no checkout required
 
 ## Running it
 
@@ -40,9 +40,15 @@ The build is **unsigned** (`identity: null`). On first launch macOS may refuse t
 There is no configuration baked into the app, so the first launch opens **Settings** instead of starting a harness. Choose where the harness runs from:
 
 - **A local checkout** — pick the folder containing your `deepseek-harness` clone. Its frontend must already be built; if it is not, the app tells you to run `pnpm run build:web` there.
-- **The published package** — the app runs `@deepseek-ai/dsh` from a one-time install under `$DSH_HOME` instead, with no checkout required. See the caveat below.
+- **A managed install** — the app installs `@deepseek-ai/dsh` under `$DSH_HOME/runtimes` and runs it from there, with no checkout required.
 
 Save, and the harness starts. Closing Settings without saving on a first run quits the app, since there is nothing yet for it to run.
+
+### Managed installs
+
+Saving a managed source resolves a blank version or a dist-tag like `latest` to the concrete version currently published, then installs it if it is not already under `$DSH_HOME/runtimes` — the concrete version, never the tag, is what gets written to `desktop.json`, so a later save of the same tag is a cache hit rather than a reinstall. A cold install pulls the full dependency tree and can take several minutes; Settings shows `npm install`'s output live while it runs and keeps Save disabled until it finishes. An already-installed version starts in seconds.
+
+Opening Settings on a configured managed source also checks, in the background, whether the registry's `latest` differs from the pinned version. When it does, a hint appears next to the version field with a button to switch to it and save; the app never installs an update on its own, and a failed or offline check is silent rather than shown as an error.
 
 ## Settings
 
@@ -94,7 +100,7 @@ Note this applies to **every** `dsh web` you run afterwards, not only this app. 
 ## Development
 
 ```bash
-npm test           # 129 unit tests
+npm test           # 181 unit tests
 npm run test:smoke # Playwright, against a packaged build (run `npm run pack` first)
 npm run build      # compile only
 ```
@@ -105,7 +111,6 @@ Design notes and the decisions taken while building this live in [`docs/`](docs/
 
 ## Known limitations
 
-- **Managed mode has no installer yet.** The spawn path is unit-tested, but nothing yet installs the package under `$DSH_HOME/runtimes` — a prior `npx`-per-launch approach pulled 62 dependencies on every start and never once completed. Local-checkout mode is the supported path today.
 - **`dsh://` links only focus the app.** The harness Web UI has no per-session URLs, so there is no address to deep-link to.
 - **Unsigned and macOS-only.** No Windows or Linux packaging target is configured.
 - The tray icon, menus, and shortcut have not been verified visually by an automated test — only their behavior in code.

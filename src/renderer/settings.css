@@ -243,6 +243,35 @@ details > label:first-of-type {
   display: none;
 }
 
+.status.status-failed {
+  color: var(--danger);
+}
+
+/* Streamed npm install output, shown only while a managed install runs. */
+.progress {
+  margin: 4px 0 0;
+  max-height: 72px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-fill);
+  color: var(--label-secondary);
+  font: 11px/16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+}
+
+.update-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-hint button {
+  height: 26px;
+  padding: 0 10px;
+}
+
 /* The action bar stays put so Save is reachable without scrolling. */
 .actions {
   position: fixed;
@@ -256,6 +285,13 @@ details > label:first-of-type {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.actions-status {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
 }
 
 @media (prefers-reduced-motion: reduce) {

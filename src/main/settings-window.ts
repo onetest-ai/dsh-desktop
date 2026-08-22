@@ -11,6 +11,17 @@ function isOpen(): boolean {
 }
 
 /**
+ * Push one value to the settings window over a receive-only channel,
+ * tolerating a window that has since closed. A managed install runs for
+ * minutes; the window can be gone by the time a later line arrives.
+ * @param channel - the IPC channel the preload listens on.
+ * @param payload - the value to send.
+ */
+function pushToWindow(channel: string, payload: string): void {
+  if (isOpen()) settingsWindow?.webContents.send(channel, payload)
+}
+
+/**
  * Open the settings window, or focus it if it is already open.
  *
  * The preload lives only on this window: the main window loads the harness
@@ -30,9 +41,13 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
   }
 
   if (!channelsRegistered) {
-    ipcMain.handle('settings:read', () => handlers.read())
+    ipcMain.handle('settings:read', () =>
+      handlers.read((latest) => pushToWindow('settings:update-available', latest)),
+    )
     ipcMain.handle('settings:pick-folder', () => handlers.pickFolder())
-    ipcMain.handle('settings:save', (_event, form: SettingsForm) => handlers.save(form))
+    ipcMain.handle('settings:save', (_event, form: SettingsForm) =>
+      handlers.save(form, (line) => pushToWindow('settings:progress', line)),
+    )
     channelsRegistered = true
   }
 

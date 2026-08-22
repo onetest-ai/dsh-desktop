@@ -1,12 +1,16 @@
 import { app, BrowserWindow, dialog, globalShortcut, Notification } from 'electron'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
 import { ConfigurationError } from './configuration-error'
 import { configPath, resolveDshHome, type HarnessSource } from './harness-source'
+import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { preflight } from './preflight'
 import { writeRuntimeFiles } from './runtime-files'
-import { dshWebCommand, startServer } from './server'
+import type { InstallDeps } from './runtime-install'
+import { dshWebCommand, resolveBinary, startServer } from './server'
 import { createSettingsHandlers } from './settings-ipc'
 import { openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
@@ -139,6 +143,53 @@ export async function applySettings(previous: DesktopConfig | undefined, next: D
   return warnings
 }
 
+/**
+ * Run a command to completion, feeding every combined stdout/stderr line to
+ * `onLine` as it arrives, for `runtime-install.ts`'s injected `InstallDeps`.
+ * @param command - the binary to run.
+ * @param args - its arguments.
+ * @param options - working directory, environment, and a per-line callback.
+ * @returns the completed run's exit code and captured output.
+ */
+function runInstallCommand(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; onLine?: (line: string) => void },
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(command, args, { cwd: options.cwd, env: options.env ?? process.env })
+    let stdout = ''
+    let stderr = ''
+    let buffer = ''
+    const feed = (chunk: Buffer): void => {
+      buffer += chunk.toString('utf8')
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) options.onLine?.(line)
+    }
+    proc.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8')
+      feed(chunk)
+    })
+    proc.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8')
+      feed(chunk)
+    })
+    proc.on('error', (cause) => reject(new Error(`dsh-desktop: failed to spawn ${command}`, { cause })))
+    proc.on('close', (code) => {
+      if (buffer !== '') options.onLine?.(buffer)
+      resolve({ code: code ?? 1, stdout, stderr })
+    })
+  })
+}
+
+/** Real `InstallDeps`, backing `runtime-install.ts`'s effects with the actual filesystem and `npm`. */
+const installDeps: InstallDeps = {
+  run: runInstallCommand,
+  exists: existsSync,
+  mkdir: (path) => mkdirSync(path, { recursive: true }),
+}
+
 const settingsHandlers = createSettingsHandlers({
   readConfig: () => loadConfig(CONFIG_PATH),
   writeConfig: (config) => writeConfig(CONFIG_PATH, config),
@@ -149,6 +200,10 @@ const settingsHandlers = createSettingsHandlers({
   probePort: portIsFree,
   apply: applySettings,
   isQuitting: () => quitting,
+  installManaged: (pkg, version, npmPath, onLine) =>
+    createManagedInstaller(installDeps, resolveBinary(npmPath, 'npm', process.env), DSH_HOME)(pkg, version, onLine),
+  checkManagedUpdate: (pkg, installed, npmPath) =>
+    createUpdateChecker(installDeps, resolveBinary(npmPath, 'npm', process.env))(pkg, installed),
 })
 
 /**

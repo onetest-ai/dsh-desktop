@@ -9,7 +9,7 @@
   <p class="group-label" id="source-label">Where the harness runs from</p>
   <section class="group choices" role="radiogroup" aria-labelledby="source-label">
     <label><input type="radio" name="kind" value="local" checked> A local checkout</label>
-    <label><input type="radio" name="kind" value="npx"> The published package (npx)</label>
+    <label><input type="radio" name="kind" value="managed"> A managed install</label>
   </section>
 
   <section id="local-fields" class="group">
@@ -21,12 +21,17 @@
     <p class="error" id="error-repo"></p>
   </section>
 
-  <section id="npx-fields" class="group" hidden>
+  <section id="managed-fields" class="group" hidden>
     <label for="package">Package</label>
     <input id="package" type="text">
     <p class="error" id="error-package"></p>
     <label for="version">Version</label>
     <input id="version" type="text">
+    <p class="error" id="error-version"></p>
+    <p class="hint update-hint" id="update-hint" hidden>
+      Version <span id="latest-version"></span> is available.
+      <button id="use-latest" type="button">Use it</button>
+    </p>
     <label for="workspace">Workspace folder</label>
     <div class="row">
       <input id="workspace" type="text" placeholder="defaults to your home folder">
@@ -48,15 +53,18 @@
       <summary>Advanced</summary>
       <label for="pnpmPath">pnpm path</label>
       <input id="pnpmPath" type="text" placeholder="found on PATH by default">
-      <label for="npxPath">npx path</label>
-      <input id="npxPath" type="text" placeholder="found on PATH by default">
+      <label for="npmPath">npm path</label>
+      <input id="npmPath" type="text" placeholder="found on PATH by default">
     </details>
   </section>
 
   <p class="error" id="error-kind"></p>
 </main>
 <div class="actions">
-  <p class="status" id="status" role="status"></p>
+  <div class="actions-status">
+    <p class="status" id="status" role="status"></p>
+    <pre class="progress" id="progress" role="status" hidden></pre>
+  </div>
   <button id="save" type="button">Save</button>
 </div>
 <script src="settings.js"></script>

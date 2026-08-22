@@ -30,6 +30,23 @@ function declaredIds(): string[] {
 }
 
 /**
+ * Ids `settings.html` marks `hidden` in the markup itself, so the fixture's
+ * initial state matches what a real DOM parse would give `element.hidden`
+ * before any script runs.
+ * @returns the ids of every tag declaring the `hidden` attribute.
+ */
+function declaredHiddenIds(): Set<string> {
+  const ids = new Set<string>()
+  for (const match of MARKUP.matchAll(/<[a-z]+\b[^>]*>/g)) {
+    const tag = match[0]
+    if (!/\bhidden\b/.test(tag)) continue
+    const id = /\bid="([^"]+)"/.exec(tag)?.[1]
+    if (id !== undefined) ids.add(id)
+  }
+  return ids
+}
+
+/**
  * The `kind` radios the page declares, in document order.
  * @returns each radio's value and whether the markup marks it checked.
  */
@@ -41,7 +58,7 @@ function declaredKindRadios(): Array<{ value: string; checked: boolean }> {
 }
 
 /** The field ids `settings.js` collects; asserted against the page below. */
-const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npxPath']
+const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath']
 
 interface FakeElement {
   id: string
@@ -50,6 +67,8 @@ interface FakeElement {
   hidden: boolean
   disabled: boolean
   checked: boolean
+  scrollTop: number
+  scrollHeight: number
   classes: Set<string>
   classList: { add(name: string): void; remove(name: string): void }
   addEventListener(name: string, handler: () => unknown): void
@@ -66,6 +85,8 @@ function element(id: string): FakeElement {
     hidden: false,
     disabled: false,
     checked: false,
+    scrollTop: 0,
+    scrollHeight: 0,
     classes,
     classList: {
       add: (name: string) => classes.add(name),
@@ -83,6 +104,11 @@ type SaveOutcome = () => Promise<unknown>
 interface Renderer {
   elements: Map<string, FakeElement>
   save(): Promise<void>
+  useLatest(): Promise<void>
+  /** Fires the preload's `onProgress` subscription as main would push a line. */
+  pushProgress(line: string): void
+  /** Fires the preload's `onUpdateAvailable` subscription as main would push a result. */
+  pushUpdateAvailable(latest: string): void
 }
 
 /**
@@ -91,7 +117,14 @@ interface Renderer {
  * @returns the fake elements and a way to fire the save button.
  */
 async function load(onSave: SaveOutcome): Promise<Renderer> {
-  const elements = new Map(declaredIds().map((id) => [id, element(id)]))
+  const hiddenIds = declaredHiddenIds()
+  const elements = new Map(
+    declaredIds().map((id) => {
+      const node = element(id)
+      node.hidden = hiddenIds.has(id)
+      return [id, node]
+    }),
+  )
   const radios = declaredKindRadios().map((radio) => {
     const node = element(`kind-${radio.value}`)
     node.value = radio.value
@@ -111,6 +144,8 @@ async function load(onSave: SaveOutcome): Promise<Renderer> {
     },
   }
 
+  let progressListener: ((line: string) => void) | undefined
+  let updateListener: ((latest: string) => void) | undefined
   const settings = {
     read: vi.fn(async () => ({
       configured: true,
@@ -118,6 +153,12 @@ async function load(onSave: SaveOutcome): Promise<Renderer> {
     })),
     pickFolder: vi.fn(async () => undefined),
     save: vi.fn(onSave),
+    onProgress: vi.fn((listener: (line: string) => void) => {
+      progressListener = listener
+    }),
+    onUpdateAvailable: vi.fn((listener: (latest: string) => void) => {
+      updateListener = listener
+    }),
   }
 
   const context: { window: { settings: unknown }; document: unknown } = {
@@ -134,6 +175,11 @@ async function load(onSave: SaveOutcome): Promise<Renderer> {
     save: async () => {
       await elements.get('save')?.listeners.get('click')?.()
     },
+    useLatest: async () => {
+      await elements.get('use-latest')?.listeners.get('click')?.()
+    },
+    pushProgress: (line) => progressListener?.(line),
+    pushUpdateAvailable: (latest) => updateListener?.(latest),
   }
 }
 
@@ -151,6 +197,10 @@ describe('the page it runs against', () => {
 
   it('matches the field list the script hard-codes', () => {
     expect(/const FIELDS = \[([^\]]+)\]/.exec(SOURCE)?.[1].match(/'([^']+)'/g)?.length).toBe(FIELDS.length)
+  })
+
+  it('declares a managed source radio, not the old npx one', () => {
+    expect(declaredKindRadios().map((radio) => radio.value)).toEqual(['local', 'managed'])
   })
 })
 
@@ -184,5 +234,49 @@ describe('save', () => {
     await renderer.save()
     expect(status?.classes.has('status-failed')).toBe(false)
     expect(status?.textContent).toBe('Settings saved.')
+  })
+})
+
+describe('install progress', () => {
+  it('appends each pushed line and reveals the progress node', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+    const progress = renderer.elements.get('progress')
+    expect(progress?.hidden).toBe(true)
+
+    renderer.pushProgress('added 455 packages')
+    renderer.pushProgress('found 0 vulnerabilities')
+
+    expect(progress?.hidden).toBe(false)
+    expect(progress?.textContent).toBe('added 455 packages\nfound 0 vulnerabilities')
+  })
+
+  it('clears previous progress when a new save starts', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+    renderer.pushProgress('added 455 packages')
+    await renderer.save()
+
+    expect(renderer.elements.get('progress')?.textContent).toBe('')
+    expect(renderer.elements.get('progress')?.hidden).toBe(true)
+  })
+})
+
+describe('update available', () => {
+  it('reveals the hint with the pushed version', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+    renderer.pushUpdateAvailable('0.2.0')
+
+    expect(renderer.elements.get('update-hint')?.hidden).toBe(false)
+    expect(renderer.elements.get('latest-version')?.textContent).toBe('0.2.0')
+  })
+
+  it('using it fills in the version and saves', async () => {
+    const save = vi.fn(async () => ({ ok: true, warnings: [] }))
+    const renderer = await load(save)
+    renderer.pushUpdateAvailable('0.2.0')
+
+    await renderer.useLatest()
+
+    expect(renderer.elements.get('version')?.value).toBe('0.2.0')
+    expect(save).toHaveBeenCalled()
   })
 })
