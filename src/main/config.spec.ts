@@ -27,16 +27,16 @@ describe('loadConfig', () => {
     })
   })
 
-  it('reads an npx harness source', () => {
+  it('reads a managed harness source', () => {
     const file = writeConfigFile(
       JSON.stringify({
-        harness: { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+        harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
       }),
     )
     const result = loadConfig(file)
     expect(result.configured).toBe(true)
     expect(result.configured && result.config.harness).toEqual({
-      kind: 'npx',
+      kind: 'managed',
       package: '@deepseek-ai/dsh',
       version: 'latest',
       workspace: '/tmp/ws',
@@ -57,18 +57,18 @@ describe('loadConfig', () => {
     expect(result.configured && result.config.hotkey).toBe('Alt+D')
   })
 
-  it('keeps an explicit npxPath alongside pnpmPath', () => {
+  it('keeps an explicit npmPath alongside pnpmPath', () => {
     const file = writeConfigFile(
       JSON.stringify({
         harness: { kind: 'local', repo: '/tmp/h' },
         pnpmPath: '/opt/pnpm',
-        npxPath: '/opt/npx',
+        npmPath: '/opt/npm',
       }),
     )
     const result = loadConfig(file)
     expect(result.configured).toBe(true)
     expect(result.configured && result.config.pnpmPath).toBe('/opt/pnpm')
-    expect(result.configured && result.config.npxPath).toBe('/opt/npx')
+    expect(result.configured && result.config.npmPath).toBe('/opt/npm')
   })
 
   it('throws a message naming the file when harness is missing', () => {
@@ -77,9 +77,9 @@ describe('loadConfig', () => {
     expect(() => loadConfig(file)).toThrow(file)
   })
 
-  it('throws when harness.kind is neither local nor npx', () => {
+  it('throws when harness.kind is neither local nor managed', () => {
     const file = writeConfigFile(JSON.stringify({ harness: { kind: 'ftp', repo: '/tmp/h' } }))
-    expect(() => loadConfig(file)).toThrow(/harness\.kind must be "local" or "npx"/)
+    expect(() => loadConfig(file)).toThrow(/harness\.kind must be "local" or "managed"/)
   })
 
   it('throws when a local harness has an empty repo', () => {
@@ -87,9 +87,9 @@ describe('loadConfig', () => {
     expect(() => loadConfig(file)).toThrow(/non-empty "repo"/)
   })
 
-  it('throws when an npx harness has an empty package', () => {
+  it('throws when a managed harness has an empty package', () => {
     const file = writeConfigFile(
-      JSON.stringify({ harness: { kind: 'npx', package: '', version: 'latest', workspace: '/tmp' } }),
+      JSON.stringify({ harness: { kind: 'managed', package: '', version: 'latest', workspace: '/tmp' } }),
     )
     expect(() => loadConfig(file)).toThrow(/non-empty "package"/)
   })
@@ -138,7 +138,7 @@ describe('loadConfig', () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-desktop-config-'))
     const file = join(dir, 'nested', 'desktop.json')
     const config = {
-      harness: { kind: 'npx' as const, package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+      harness: { kind: 'managed' as const, package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
       notifyPort: 5000,
       hotkey: 'Alt+D',
     }

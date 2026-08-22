@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { join } from 'node:path'
+import { managedBin, managedDir } from './harness-source'
 import { dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
 
 const FIXTURE = join(__dirname, '..', '..', 'tests', 'fixtures', 'fake-server.mjs')
+const DSH_HOME = '/tmp/dsh-home'
 
 function fakeSpec(mode: string, port = '54321') {
   return {
@@ -30,6 +32,7 @@ describe('dshWebCommand', () => {
         pnpmPath: '/usr/local/bin/pnpm',
       },
       '/tmp/desktop.patch.yml',
+      DSH_HOME,
     )
     expect(spec.command).toBe('/usr/local/bin/pnpm')
     // `dsh web` is a subcommand alias that rejects any parent-level flag, `--patch`
@@ -43,21 +46,23 @@ describe('dshWebCommand', () => {
     expect(spec.env?.PATH).toContain(process.env.PATH ?? '')
   })
 
-  it('runs npx against the published package for an npx source', () => {
+  it('runs the installed binary directly for a managed source, with the PATH from npmPath', () => {
     const spec = dshWebCommand(
       {
-        harness: { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+        harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
         notifyPort: 1,
         hotkey: 'x',
-        npxPath: '/usr/local/bin/npx',
+        npmPath: '/usr/local/bin/npm',
       },
       '/tmp/desktop.patch.yml',
+      DSH_HOME,
     )
-    expect(spec.command).toBe('/usr/local/bin/npx')
-    expect(spec.args).toEqual([
-      '-y', '@deepseek-ai/dsh@latest', '--', '--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open',
-    ])
+    expect(spec.command).toBe(managedBin(managedDir(DSH_HOME, '@deepseek-ai/dsh', 'latest')))
+    expect(spec.args).toEqual(['--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open'])
     expect(spec.cwd).toBe('/tmp/ws')
+    // The managed binary lives under $DSH_HOME/runtimes, where no `node` was
+    // installed; the directory prepended must be npm's own (see
+    // `envWithLauncherDir`), not the managed binary's own directory.
     expect(spec.env?.PATH).toMatch(/^\/usr\/local\/bin:/)
     expect(spec.env?.PATH).toContain(process.env.PATH ?? '')
   })
@@ -72,6 +77,7 @@ describe('dshWebCommand', () => {
         // which needs no directory injected.
       },
       '/tmp/desktop.patch.yml',
+      DSH_HOME,
     )
     expect(spec.command).toBe('pnpm')
     expect(spec.env).toBeUndefined()
@@ -94,8 +100,8 @@ describe('dshWebCommand', () => {
 
     it('succeeds in local mode when only pnpmPath is set, the exact reported failure', () => {
       // This is the regression case: before the fix, dshWebCommand resolved
-      // BOTH launchers eagerly, so the unused npx resolution threw even
-      // though local mode never spawns npx.
+      // BOTH launchers eagerly, so the unused resolution threw even though
+      // local mode never spawns the other one.
       const spec = dshWebCommand(
         {
           harness: { kind: 'local', repo: '/tmp/harness' },
@@ -104,21 +110,27 @@ describe('dshWebCommand', () => {
           pnpmPath: '/opt/pnpm',
         },
         '/tmp/desktop.patch.yml',
+        DSH_HOME,
       )
       expect(spec.command).toBe('/opt/pnpm')
     })
 
-    it('succeeds in npx mode when only npxPath is set, the mirror case', () => {
+    it('succeeds in managed mode when only npmPath is set, the mirror case', () => {
+      // spec.command for a managed source never depends on npmPath at all —
+      // only the PATH prepend does — so this also proves that resolution
+      // does not eagerly touch pnpmPath.
       const spec = dshWebCommand(
         {
-          harness: { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+          harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
           notifyPort: 1,
           hotkey: 'x',
-          npxPath: '/opt/npx',
+          npmPath: '/opt/npm',
         },
         '/tmp/desktop.patch.yml',
+        DSH_HOME,
       )
-      expect(spec.command).toBe('/opt/npx')
+      expect(spec.command).toBe(managedBin(managedDir(DSH_HOME, '@deepseek-ai/dsh', 'latest')))
+      expect(spec.env?.PATH).toMatch(/^\/opt:/)
     })
   })
 })
@@ -138,9 +150,9 @@ describe('resolveBinary', () => {
     )
   })
 
-  it('names the right binary and config key for npx', () => {
-    expect(() => resolveBinary(undefined, 'npx', { PATH: '/usr/bin:/bin' })).toThrow(
-      /npx is not on PATH.*"npxPath"/s,
+  it('names the right binary and config key for npm', () => {
+    expect(() => resolveBinary(undefined, 'npm', { PATH: '/usr/bin:/bin' })).toThrow(
+      /npm is not on PATH.*"npmPath"/s,
     )
   })
 })

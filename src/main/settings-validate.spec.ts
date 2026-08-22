@@ -14,7 +14,7 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
     notifyPort: '43117',
     hotkey: 'CommandOrControl+Shift+D',
     pnpmPath: '',
-    npxPath: '',
+    npmPath: '',
     ...overrides,
   }
 }
@@ -54,20 +54,20 @@ describe('validateSettings — local source', () => {
     if (!result.ok) expect(result.errors.repo).toMatch(/not a folder/i)
   })
 
-  it('ignores npx fields when the source is local', () => {
+  it('ignores managed fields when the source is local', () => {
     const result = validateSettings(form({ package: '', version: '', workspace: '' }))
     expect(result.ok).toBe(true)
   })
 })
 
-describe('validateSettings — npx source', () => {
+describe('validateSettings — managed source', () => {
   it('accepts a package and workspace', () => {
-    const input = form({ kind: 'npx' })
+    const input = form({ kind: 'managed' })
     const result = validateSettings(input)
     expect(result).toEqual({
       ok: true,
       config: {
-        harness: { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: input.workspace },
+        harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: input.workspace },
         notifyPort: 43117,
         hotkey: 'CommandOrControl+Shift+D',
       },
@@ -75,27 +75,27 @@ describe('validateSettings — npx source', () => {
   })
 
   it('rejects an empty package', () => {
-    const result = validateSettings(form({ kind: 'npx', package: '  ' }))
+    const result = validateSettings(form({ kind: 'managed', package: '  ' }))
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errors.package).toMatch(/required/i)
   })
 
   it('defaults an empty version to latest', () => {
-    const result = validateSettings(form({ kind: 'npx', version: '' }))
+    const result = validateSettings(form({ kind: 'managed', version: '' }))
     expect(result.ok).toBe(true)
-    if (result.ok && result.config.harness.kind === 'npx') {
+    if (result.ok && result.config.harness.kind === 'managed') {
       expect(result.config.harness.version).toBe('latest')
     }
   })
 
   it('rejects a workspace that does not exist', () => {
-    const result = validateSettings(form({ kind: 'npx', workspace: '/definitely/not/here' }))
+    const result = validateSettings(form({ kind: 'managed', workspace: '/definitely/not/here' }))
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errors.workspace).toMatch(/not a folder|does not exist/i)
   })
 
-  it('ignores the repo field when the source is npx', () => {
-    const result = validateSettings(form({ kind: 'npx', repo: '/definitely/not/here' }))
+  it('ignores the repo field when the source is managed', () => {
+    const result = validateSettings(form({ kind: 'managed', repo: '/definitely/not/here' }))
     expect(result.ok).toBe(true)
   })
 })
@@ -127,11 +127,11 @@ describe('validateSettings — port and hotkey', () => {
   })
 
   it('omits blank binary paths rather than storing empty strings', () => {
-    const result = validateSettings(form({ pnpmPath: '  ', npxPath: '' }))
+    const result = validateSettings(form({ pnpmPath: '  ', npmPath: '' }))
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect('pnpmPath' in result.config).toBe(false)
-      expect('npxPath' in result.config).toBe(false)
+      expect('npmPath' in result.config).toBe(false)
     }
   })
 
@@ -165,14 +165,14 @@ describe('formFor', () => {
     expect(filled.hotkey).toBe('Alt+D')
   })
 
-  it('round-trips a stored npx config', () => {
+  it('round-trips a stored managed config', () => {
     const config = {
-      harness: { kind: 'npx' as const, package: '@acme/dsh', version: '1.2.3', workspace: '/tmp/ws' },
+      harness: { kind: 'managed' as const, package: '@acme/dsh', version: '1.2.3', workspace: '/tmp/ws' },
       notifyPort: 43117,
       hotkey: 'Alt+D',
     }
     const filled = formFor({ configured: true, config })
-    expect(filled.kind).toBe('npx')
+    expect(filled.kind).toBe('managed')
     expect(filled.package).toBe('@acme/dsh')
     expect(filled.version).toBe('1.2.3')
     expect(filled.workspace).toBe('/tmp/ws')

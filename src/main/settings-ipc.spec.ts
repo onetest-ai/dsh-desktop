@@ -12,7 +12,7 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
   return {
     kind: 'local', repo: REPO, package: '@deepseek-ai/dsh', version: 'latest',
     workspace: '', notifyPort: '43117', hotkey: 'CommandOrControl+Shift+D',
-    pnpmPath: '', npxPath: '', ...overrides,
+    pnpmPath: '', npmPath: '', ...overrides,
   }
 }
 

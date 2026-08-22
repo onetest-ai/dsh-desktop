@@ -364,13 +364,13 @@ describe('configuration-class boot failures', () => {
     // Mirrors what `dshWebCommand` throws when `resolveBinary` fails: a
     // ConfigurationError, not a startServer rejection.
     dshWebCommandMock.mockImplementationOnce(() => {
-      throw new FreshConfigurationError('dsh-desktop: npx is not on PATH')
+      throw new FreshConfigurationError('dsh-desktop: npm is not on PATH')
     })
     await readyHandler()
     expect(showError).toHaveBeenCalledWith(
       fake.window,
       'The harness failed to start',
-      expect.stringContaining('npx is not on PATH'),
+      expect.stringContaining('npm is not on PATH'),
     )
     expect(openSettingsMock).toHaveBeenCalled()
     expect(startServer).not.toHaveBeenCalled()
@@ -622,10 +622,10 @@ describe('applySettings', () => {
     expect(startServer).toHaveBeenCalledTimes(1)
   })
 
-  it('restarts when the npx binary path changes, since it is resolved at spawn', async () => {
+  it('restarts when the npm binary path changes, since it is resolved at spawn', async () => {
     await bootReady()
     startServer.mockClear()
-    await applySettingsReady(STORED, { ...STORED, npxPath: '/opt/npx' })
+    await applySettingsReady(STORED, { ...STORED, npmPath: '/opt/npm' })
     expect(startServer).toHaveBeenCalledTimes(1)
   })
 

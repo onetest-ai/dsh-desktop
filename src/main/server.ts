@@ -64,12 +64,12 @@ export function resolveBinary(configured: string | undefined, name: string, env:
 }
 
 /**
- * Extend the child's `PATH` with a resolved launcher's own directory.
+ * Extend the child's `PATH` with a resolved binary's own directory.
  *
- * Under nvm, Homebrew, Volta, and similar layouts, an installed `pnpm`/`npx`
+ * Under nvm, Homebrew, Volta, and similar layouts, an installed `pnpm`/`npm`
  * is itself a script with a `#!/usr/bin/env node` (or similar) shebang, and
  * `node` normally sits beside it in the same directory. An explicit
- * `pnpmPath`/`npxPath` fixes *finding* the launcher under a Finder-minimal
+ * `pnpmPath`/`npmPath` fixes *finding* the launcher under a Finder-minimal
  * PATH, but the shebang interpreter lookup happens again, one level down, in
  * the *spawned child's* environment — so without this, a correctly
  * configured absolute path still fails to spawn, just with a different
@@ -79,7 +79,7 @@ export function resolveBinary(configured: string | undefined, name: string, env:
  * A bare name (no directory component) came from `PATH` already resolving
  * it, so nothing needs adding — this returns `undefined` and the caller
  * spawns with the inherited environment unchanged.
- * @param command - the resolved launcher, as returned by `resolveBinary` (absolute path or bare name).
+ * @param command - the resolved binary, as returned by `resolveBinary` (absolute path or bare name).
  * @param env - the app's own environment; never mutated, only read.
  * @returns a copy of `env` with `command`'s directory prepended to `PATH`, or `undefined` for a bare name.
  */
@@ -92,31 +92,30 @@ function envWithLauncherDir(command: string, env: NodeJS.ProcessEnv): NodeJS.Pro
 /**
  * Build the spawn specification for the configured harness source.
  *
- * Each launcher is passed as a thunk rather than a resolved string, so
- * `spawnFor` only resolves the binary the chosen source actually needs — a
- * local source must never fail to start because `npxPath` cannot be
- * resolved, and vice versa.
+ * `spawnFor` only resolves `pnpmPath`, and only for a local source — a local
+ * source must never fail to start because `npmPath` cannot be resolved, and
+ * vice versa.
  *
- * When the resolved launcher is an absolute path, the spawn spec's `PATH`
- * also gets that launcher's own directory prepended (see
- * `envWithLauncherDir`), so the shebang interpreter a script-based `pnpm`/
- * `npx` needs is findable too.
+ * The directory prepended to the spawned child's `PATH` (see
+ * `envWithLauncherDir`) differs by source: for a local source it is the
+ * resolved `pnpm` launcher's own directory, since `pnpm` itself is typically
+ * a shebang script needing `node` beside it. For a managed source, the
+ * spawned binary lives under `$DSH_HOME/runtimes`, where no `node` was
+ * installed — the directory that must be prepended instead is the resolved
+ * `npm` binary's own directory, since `node` sits beside `npm` in every
+ * layout this app supports.
  * @param config - the desktop settings.
  * @param patchFile - absolute path to this project's cordis patch overlay.
+ * @param dshHome - the resolved `$DSH_HOME` directory.
  * @returns the command, arguments, and working directory.
  */
-export function dshWebCommand(config: DesktopConfig, patchFile: string): SpawnSpec {
-  const spec = spawnFor(
-    config.harness,
-    {
-      pnpm: () => resolveBinary(config.pnpmPath, 'pnpm', process.env),
-      npx: () => resolveBinary(config.npxPath, 'npx', process.env),
-    },
-    patchFile,
-  )
+export function dshWebCommand(config: DesktopConfig, patchFile: string, dshHome: string): SpawnSpec {
+  const spec = spawnFor(config.harness, { pnpm: () => resolveBinary(config.pnpmPath, 'pnpm', process.env) }, patchFile, dshHome)
+  const launcherDir =
+    config.harness.kind === 'managed' ? resolveBinary(config.npmPath, 'npm', process.env) : spec.command
   // Only the process about to be spawned gets the extended PATH; the app's
   // own process.env is never touched.
-  const env = envWithLauncherDir(spec.command, process.env)
+  const env = envWithLauncherDir(launcherDir, process.env)
   return env === undefined ? spec : { ...spec, env }
 }
 

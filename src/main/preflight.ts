@@ -16,16 +16,16 @@ function isDirectory(path: string): boolean {
 
 /**
  * Check that a local harness checkout exists and its frontend has been built.
- * An npx source has no checkout to validate: the published package ships its
- * own built frontend, so npx availability is reported by the spawn failure
- * instead.
+ * A managed source has no checkout to validate here: the published package
+ * ships its own built frontend, and install/availability is reported by the
+ * installer or the spawn failure instead.
  * A pulled-but-unbuilt checkout serves an empty page, so the missing
  * `apps/web/dist` is reported as a build instruction rather than a blank window.
  * @param source - the configured harness source.
  * @returns ok, or a message naming the exact remedy.
  */
 export function preflight(source: HarnessSource): PreflightResult {
-  if (source.kind === 'npx') {
+  if (source.kind === 'managed') {
     return { ok: true }
   }
   if (!isDirectory(source.repo)) {

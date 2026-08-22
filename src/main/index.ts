@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, globalShortcut, Notification } from 'electr
 import { join } from 'node:path'
 import { loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
 import { ConfigurationError } from './configuration-error'
-import { configPath, type HarnessSource } from './harness-source'
+import { configPath, resolveDshHome, type HarnessSource } from './harness-source'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { preflight } from './preflight'
 import { writeRuntimeFiles } from './runtime-files'
@@ -16,6 +16,9 @@ import type { ServerStatus } from './status'
 
 /** The config lives under `$DSH_HOME` (see `configPath`), beside the harness's own state. */
 const CONFIG_PATH = configPath(process.env)
+
+/** Where a managed harness install lives; see `managedDir`. */
+const DSH_HOME = resolveDshHome(process.env)
 
 /** How long the harness may take to report its URL. */
 const READY_TIMEOUT_MS = 60_000
@@ -47,8 +50,8 @@ function harnessSourceChanged(previous: HarnessSource, next: HarnessSource): boo
       const prev = previous as Extract<HarnessSource, { kind: 'local' }>
       return prev.repo !== next.repo
     }
-    case 'npx': {
-      const prev = previous as Extract<HarnessSource, { kind: 'npx' }>
+    case 'managed': {
+      const prev = previous as Extract<HarnessSource, { kind: 'managed' }>
       return prev.package !== next.package || prev.version !== next.version || prev.workspace !== next.workspace
     }
     default: {
@@ -68,7 +71,7 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
     previous.notifyPort !== next.notifyPort ||
     // Both binaries are resolved when the child is spawned.
     previous.pnpmPath !== next.pnpmPath ||
-    previous.npxPath !== next.npxPath
+    previous.npmPath !== next.npmPath
   )
 }
 
@@ -296,7 +299,7 @@ async function bootNow(): Promise<void> {
 
   try {
     const handle = await startServer({
-      spec: dshWebCommand(config, patchPath),
+      spec: dshWebCommand(config, patchPath, DSH_HOME),
       timeoutMs: READY_TIMEOUT_MS,
       onSpawned: (stop) => {
         child = { generation: mine, stop }

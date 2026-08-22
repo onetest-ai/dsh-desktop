@@ -24,9 +24,14 @@ describe('preflight', () => {
     expect(preflight({ kind: 'local', repo })).toEqual({ ok: true })
   })
 
-  it('passes an npx source without touching the filesystem', () => {
+  it('passes a managed source without touching the filesystem', () => {
     expect(
-      preflight({ kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/definitely/not/here' }),
+      preflight({
+        kind: 'managed',
+        package: '@deepseek-ai/dsh',
+        version: 'latest',
+        workspace: '/definitely/not/here',
+      }),
     ).toEqual({ ok: true })
   })
 })

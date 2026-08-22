@@ -5,7 +5,7 @@ import type { HarnessSource } from './harness-source'
 
 /** The settings form's raw values. Every field is a string because HTML forms yield strings. */
 export interface SettingsForm {
-  kind: 'local' | 'npx'
+  kind: 'local' | 'managed'
   repo: string
   package: string
   version: string
@@ -13,7 +13,7 @@ export interface SettingsForm {
   notifyPort: string
   hotkey: string
   pnpmPath: string
-  npxPath: string
+  npmPath: string
 }
 
 /** Per-field messages for a rejected form; absent keys validated cleanly. */
@@ -69,7 +69,7 @@ export function validateSettings(form: SettingsForm): ValidationResult {
     }
     if (errors.package === undefined && errors.workspace === undefined) {
       harness = {
-        kind: 'npx',
+        kind: 'managed',
         package: pkg,
         version: form.version.trim() === '' ? DEFAULT_VERSION : form.version.trim(),
         workspace: workspace === '' ? homedir() : workspace,
@@ -90,7 +90,7 @@ export function validateSettings(form: SettingsForm): ValidationResult {
   }
 
   const pnpmPath = form.pnpmPath.trim()
-  const npxPath = form.npxPath.trim()
+  const npmPath = form.npmPath.trim()
   return {
     ok: true,
     config: {
@@ -98,7 +98,7 @@ export function validateSettings(form: SettingsForm): ValidationResult {
       notifyPort,
       hotkey,
       ...(pnpmPath === '' ? {} : { pnpmPath }),
-      ...(npxPath === '' ? {} : { npxPath }),
+      ...(npmPath === '' ? {} : { npmPath }),
     },
   }
 }
@@ -118,11 +118,11 @@ export function formFor(result: ConfigResult): SettingsForm {
     notifyPort: String(DEFAULT_NOTIFY_PORT),
     hotkey: DEFAULT_HOTKEY,
     pnpmPath: '',
-    npxPath: '',
+    npmPath: '',
   }
   if (!result.configured) return base
 
-  const { harness, notifyPort, hotkey, pnpmPath, npxPath } = result.config
+  const { harness, notifyPort, hotkey, pnpmPath, npmPath } = result.config
   return {
     ...base,
     kind: harness.kind,
@@ -132,6 +132,6 @@ export function formFor(result: ConfigResult): SettingsForm {
     notifyPort: String(notifyPort),
     hotkey,
     pnpmPath: pnpmPath ?? '',
-    npxPath: npxPath ?? '',
+    npmPath: npmPath ?? '',
   }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { configPath, spawnFor } from './harness-source'
+import { configPath, managedBin, managedDir, spawnFor } from './harness-source'
 
 describe('configPath', () => {
   it('uses $DSH_HOME when set', () => {
@@ -25,8 +25,46 @@ describe('configPath', () => {
   })
 })
 
+describe('managedDir', () => {
+  const home = '/home/dshuser/.dsh'
+
+  it('produces distinct directories for different packages', () => {
+    const a = managedDir(home, '@deepseek-ai/dsh', '1.0.0')
+    const b = managedDir(home, '@acme/dsh', '1.0.0')
+    expect(a).not.toBe(b)
+  })
+
+  it('produces distinct directories for different versions of the same package', () => {
+    const a = managedDir(home, '@deepseek-ai/dsh', '1.0.0')
+    const b = managedDir(home, '@deepseek-ai/dsh', '2.0.0')
+    expect(a).not.toBe(b)
+  })
+
+  it('never emits a path segment containing a slash', () => {
+    // The scoped package name itself contains a slash; every segment of the
+    // resulting path must still be a single path component.
+    const dir = managedDir(home, '@deepseek-ai/dsh', '0.1.1-rc.2')
+    for (const segment of dir.split('/')) {
+      expect(segment).not.toContain('/')
+    }
+  })
+
+  it('nests under a runtimes folder inside $DSH_HOME', () => {
+    const dir = managedDir(home, '@deepseek-ai/dsh', 'latest')
+    expect(dir.startsWith(join(home, 'runtimes'))).toBe(true)
+  })
+})
+
+describe('managedBin', () => {
+  it('resolves to node_modules/.bin/dsh inside the install directory', () => {
+    const dir = '/dsh-home/runtimes/pkg/1.0.0'
+    expect(managedBin(dir)).toBe(join(dir, 'node_modules', '.bin', 'dsh'))
+  })
+})
+
 describe('spawnFor', () => {
   const patch = '/tmp/desktop.patch.yml'
+  const dshHome = '/tmp/dsh-home'
 
   /** A launcher thunk that fails the test if the unused branch ever calls it. */
   function unused(label: string): () => string {
@@ -36,53 +74,42 @@ describe('spawnFor', () => {
   }
 
   it('runs pnpm dsh inside the checkout for a local source', () => {
-    const spec = spawnFor(
-      { kind: 'local', repo: '/tmp/harness' },
-      { pnpm: () => '/usr/local/bin/pnpm', npx: unused('npx') },
-      patch,
-    )
+    const spec = spawnFor({ kind: 'local', repo: '/tmp/harness' }, { pnpm: () => '/usr/local/bin/pnpm' }, patch, dshHome)
     expect(spec.command).toBe('/usr/local/bin/pnpm')
     expect(spec.args).toEqual(['dsh', '--profile', 'web', '--patch', patch, '--no-open'])
     expect(spec.cwd).toBe('/tmp/harness')
   })
 
-  it('runs npx against the published package for an npx source, with a -- separator', () => {
+  it('runs the installed binary directly for a managed source', () => {
     const spec = spawnFor(
-      { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
-      { pnpm: unused('pnpm'), npx: () => '/usr/local/bin/npx' },
+      { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+      { pnpm: unused('pnpm') },
       patch,
+      dshHome,
     )
-    expect(spec.command).toBe('/usr/local/bin/npx')
-    // `npm exec` (what modern `npx` is) consumes `--profile`/`--patch`/`--no-open`
-    // as its own CLI config unless a `--` separator marks the end of npm's own
-    // arguments, so the separator must sit between the package spec and them.
-    expect(spec.args).toEqual([
-      '-y', '@deepseek-ai/dsh@latest', '--', '--profile', 'web', '--patch', patch, '--no-open',
-    ])
+    expect(spec.command).toBe(managedBin(managedDir(dshHome, '@deepseek-ai/dsh', 'latest')))
+    expect(spec.args).toEqual(['--profile', 'web', '--patch', patch, '--no-open'])
     expect(spec.cwd).toBe('/tmp/ws')
   })
 
-  it('pins an exact version when one is configured', () => {
+  it('resolves the install directory from the exact configured version', () => {
     const spec = spawnFor(
-      { kind: 'npx', package: '@deepseek-ai/dsh', version: '0.1.1-rc.2', workspace: '/tmp/ws' },
-      { pnpm: unused('pnpm'), npx: () => 'npx' },
+      { kind: 'managed', package: '@deepseek-ai/dsh', version: '0.1.1-rc.2', workspace: '/tmp/ws' },
+      { pnpm: unused('pnpm') },
       patch,
+      dshHome,
     )
-    expect(spec.args[1]).toBe('@deepseek-ai/dsh@0.1.1-rc.2')
-  })
-
-  it('does not add a -- separator for a local source, since pnpm dsh needs none', () => {
-    const spec = spawnFor({ kind: 'local', repo: '/r' }, { pnpm: () => 'pnpm', npx: unused('npx') }, patch)
-    expect(spec.args).not.toContain('--')
+    expect(spec.command).toBe(managedBin(managedDir(dshHome, '@deepseek-ai/dsh', '0.1.1-rc.2')))
   })
 
   it('puts launcher flags before the profile in both modes', () => {
     for (const spec of [
-      spawnFor({ kind: 'local', repo: '/r' }, { pnpm: () => 'pnpm', npx: unused('npx') }, patch),
+      spawnFor({ kind: 'local', repo: '/r' }, { pnpm: () => 'pnpm' }, patch, dshHome),
       spawnFor(
-        { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/w' },
-        { pnpm: unused('pnpm'), npx: () => 'npx' },
+        { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/w' },
+        { pnpm: unused('pnpm') },
         patch,
+        dshHome,
       ),
     ]) {
       // `dsh web --patch F` fails with "unknown option '--patch'"; the launcher's
@@ -96,18 +123,18 @@ describe('spawnFor', () => {
 
   it('never calls the unused launcher for a local source, even when it would throw', () => {
     // The exact reported bug: local mode with only pnpmPath set, and PATH so
-    // minimal that resolving npx would throw. spawnFor must not even try.
-    expect(() =>
-      spawnFor({ kind: 'local', repo: '/r' }, { pnpm: () => '/opt/pnpm', npx: unused('npx') }, patch),
-    ).not.toThrow()
+    // minimal that resolving the other binary would throw. spawnFor must not
+    // even try.
+    expect(() => spawnFor({ kind: 'local', repo: '/r' }, { pnpm: () => '/opt/pnpm' }, patch, dshHome)).not.toThrow()
   })
 
-  it('never calls the unused launcher for an npx source, even when it would throw', () => {
+  it('never calls pnpm for a managed source, even when it would throw', () => {
     expect(() =>
       spawnFor(
-        { kind: 'npx', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/w' },
-        { pnpm: unused('pnpm'), npx: () => '/opt/npx' },
+        { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/w' },
+        { pnpm: unused('pnpm') },
         patch,
+        dshHome,
       ),
     ).not.toThrow()
   })

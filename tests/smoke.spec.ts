@@ -12,7 +12,7 @@ const APP = join(APP_DIR, 'Contents', 'MacOS', 'DeepSeek Harness')
  *
  * The marker is the generated overlay's path, which every harness child this
  * app spawns receives as `--patch <path>` (see `spawnFor` in
- * `src/main/harness-source.ts`) in both local and npx source modes. It is
+ * `src/main/harness-source.ts`) in both local and managed source modes. It is
  * unique to this app's own `userData` directory, so a `pgrep -f` match on it
  * cannot pick up a harness session the user launched separately. It is read
  * from the running app rather than reconstructed here, so the check cannot

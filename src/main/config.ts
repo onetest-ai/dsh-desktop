@@ -3,13 +3,13 @@ import { dirname } from 'node:path'
 import { ConfigurationError } from './configuration-error'
 import type { HarnessSource } from './harness-source'
 
-/** Resolved desktop settings. `pnpmPath`/`npxPath` pin binaries when PATH cannot find them. */
+/** Resolved desktop settings. `pnpmPath`/`npmPath` pin binaries when PATH cannot find them. */
 export interface DesktopConfig {
   harness: HarnessSource
   notifyPort: number
   hotkey: string
   pnpmPath?: string
-  npxPath?: string
+  npmPath?: string
 }
 
 export const DEFAULT_NOTIFY_PORT = 43117
@@ -63,18 +63,18 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
   const record = parsed as Partial<DesktopConfig>
   const harness = record.harness
   if (harness === undefined) {
-    throw new ConfigurationError(`dsh-desktop: ${filePath} must set "harness" to a local or npx source`)
+    throw new ConfigurationError(`dsh-desktop: ${filePath} must set "harness" to a local or managed source`)
   }
   if (harness.kind === 'local') {
     if (typeof harness.repo !== 'string' || harness.repo === '') {
       throw new ConfigurationError(`dsh-desktop: ${filePath} local harness must set a non-empty "repo"`)
     }
-  } else if (harness.kind === 'npx') {
+  } else if (harness.kind === 'managed') {
     if (typeof harness.package !== 'string' || harness.package === '') {
-      throw new ConfigurationError(`dsh-desktop: ${filePath} npx harness must set a non-empty "package"`)
+      throw new ConfigurationError(`dsh-desktop: ${filePath} managed harness must set a non-empty "package"`)
     }
   } else {
-    throw new ConfigurationError(`dsh-desktop: ${filePath} harness.kind must be "local" or "npx"`)
+    throw new ConfigurationError(`dsh-desktop: ${filePath} harness.kind must be "local" or "managed"`)
   }
 
   return {
@@ -82,7 +82,7 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     notifyPort: record.notifyPort ?? DEFAULT_NOTIFY_PORT,
     hotkey: record.hotkey ?? DEFAULT_HOTKEY,
     ...(record.pnpmPath === undefined ? {} : { pnpmPath: record.pnpmPath }),
-    ...(record.npxPath === undefined ? {} : { npxPath: record.npxPath }),
+    ...(record.npmPath === undefined ? {} : { npmPath: record.npmPath }),
   }
 }
 
