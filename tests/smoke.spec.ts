@@ -41,6 +41,15 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
   // getAppPath() already resolves to the app.asar path on this build (verified
   // by printing it during development), so it is used directly rather than
   // the dirname(...)/app.asar wrapping the brief describes as a fallback.
+  const appPath: string = await app.evaluate(({ app: electronApp }) => electronApp.getAppPath())
+  // The whole point of this check is reading through app.asar rather than a
+  // plain directory; assert that assumption explicitly so a future Electron
+  // version, platform, or unpacked build fails loudly here instead of
+  // silently checking the wrong location (and reporting a false pass).
+  expect(appPath, `expected getAppPath() to resolve inside app.asar, got: ${appPath}`).toMatch(
+    /app\.asar$/,
+  )
+
   const shipped = await app.evaluate(({ app: electronApp }) => {
     const { existsSync } = process.getBuiltinModule('node:fs')
     const { join } = process.getBuiltinModule('node:path')
