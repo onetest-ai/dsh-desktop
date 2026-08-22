@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Settings</title>
+<link rel="stylesheet" href="settings.css">
+<main>
+  <h1>DeepSeek Harness</h1>
+  <p id="intro" class="hint"></p>
+
+  <fieldset>
+    <legend>Where the harness runs from</legend>
+    <label><input type="radio" name="kind" value="local" checked> A local checkout</label>
+    <label><input type="radio" name="kind" value="npx"> The published package (npx)</label>
+  </fieldset>
+
+  <section id="local-fields">
+    <label for="repo">Checkout folder</label>
+    <div class="row">
+      <input id="repo" type="text" placeholder="/path/to/deepseek-harness">
+      <button id="browse" type="button">Choose…</button>
+    </div>
+    <p class="error" id="error-repo"></p>
+  </section>
+
+  <section id="npx-fields" hidden>
+    <label for="package">Package</label>
+    <input id="package" type="text">
+    <p class="error" id="error-package"></p>
+    <label for="version">Version</label>
+    <input id="version" type="text">
+    <label for="workspace">Workspace folder</label>
+    <div class="row">
+      <input id="workspace" type="text" placeholder="defaults to your home folder">
+      <button id="browse-workspace" type="button">Choose…</button>
+    </div>
+    <p class="error" id="error-workspace"></p>
+  </section>
+
+  <label for="notifyPort">Notification port</label>
+  <input id="notifyPort" type="text" inputmode="numeric">
+  <p class="error" id="error-notifyPort"></p>
+
+  <label for="hotkey">Show/hide shortcut</label>
+  <input id="hotkey" type="text">
+  <p class="error" id="error-hotkey"></p>
+
+  <details>
+    <summary>Advanced</summary>
+    <label for="pnpmPath">pnpm path</label>
+    <input id="pnpmPath" type="text" placeholder="found on PATH by default">
+    <label for="npxPath">npx path</label>
+    <input id="npxPath" type="text" placeholder="found on PATH by default">
+  </details>
+
+  <p class="error" id="error-kind"></p>
+  <div class="actions"><button id="save" type="button">Save</button></div>
+</main>
+<script src="settings.js"></script>

@@ -1,0 +1,13 @@
+:root { color-scheme: light dark; }
+body { font: 13px/1.5 -apple-system, system-ui, sans-serif; margin: 0; padding: 1.5rem; }
+main { max-width: 34rem; margin: 0 auto; display: grid; gap: .5rem; }
+h1 { font-size: 1.1rem; margin: 0; }
+.hint { margin: 0 0 .5rem; opacity: .75; }
+label { font-weight: 500; margin-top: .5rem; }
+fieldset label { font-weight: 400; display: block; }
+input[type="text"] { width: 100%; box-sizing: border-box; padding: .4rem; }
+.row { display: flex; gap: .5rem; }
+.row input { flex: 1; }
+.error { color: #d33; margin: .15rem 0 0; min-height: 1em; }
+.actions { margin-top: 1rem; display: flex; justify-content: flex-end; }
+button { padding: .4rem 1rem; }

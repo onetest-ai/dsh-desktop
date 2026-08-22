@@ -5,7 +5,8 @@
   "description": "Desktop shell for a local DeepSeek Harness checkout",
   "main": "dist/main/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run build:renderer",
+    "build:renderer": "mkdir -p dist/renderer && cp src/renderer/settings.html src/renderer/settings.css src/renderer/settings.js dist/renderer/",
     "test": "vitest run",
     "start": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
