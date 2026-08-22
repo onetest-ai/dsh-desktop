@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { expect, test, _electron as electron } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
@@ -6,6 +6,38 @@ import { join } from 'node:path'
 
 const APP_DIR = join(__dirname, '..', 'release', 'mac-arm64', 'DeepSeek Harness.app')
 const APP = join(APP_DIR, 'Contents', 'MacOS', 'DeepSeek Harness')
+
+/**
+ * The harness checkout this test points the packaged app at.
+ *
+ * `dsh-desktop` and `deepseek-harness` are sibling checkouts under the same
+ * parent directory (see `docs/superpowers/plans/2026-08-21-dsh-desktop.md`),
+ * so the path is derived from this test file's own location rather than
+ * hardcoded, keeping it portable across machines that follow that layout.
+ */
+const HARNESS_REPO = join(__dirname, '..', '..', 'deepseek-harness')
+
+/**
+ * Build a `desktop.json` pointing at a local harness checkout, in a fresh
+ * `$DSH_HOME` this test owns.
+ *
+ * Without this, the app falls back to the developer's real `~/.dsh`: on a
+ * machine where that directory has been cleared for a first-run test, the
+ * app correctly opens Settings instead of booting a harness, and the test
+ * times out waiting for a `127.0.0.1` URL. Provisioning `$DSH_HOME` here
+ * makes the test depend on nothing about the machine's real state, so it
+ * passes whether or not `~/.dsh` exists.
+ * @returns the `$DSH_HOME` directory this run should use.
+ */
+function provisionDshHome(): string {
+  const dshHome = mkdtempSync(join(tmpdir(), 'dsh-desktop-smoke-home-'))
+  const config = {
+    harness: { kind: 'local', repo: HARNESS_REPO },
+    pnpmPath: execFileSync('which', ['pnpm']).toString().trim(),
+  }
+  writeFileSync(join(dshHome, 'desktop.json'), `${JSON.stringify(config, undefined, 2)}\n`)
+  return dshHome
+}
 
 /**
  * Processes still carrying this app's `--patch` marker on their command line.
@@ -37,9 +69,11 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
   // whenever the developer has the app open; and the runtime files the app
   // generates land there, keeping the real installation untouched.
   const userDataDir = mkdtempSync(join(tmpdir(), 'dsh-desktop-smoke-'))
+  const dshHome = provisionDshHome()
   const app = await electron.launch({
     executablePath: APP,
     args: [`--user-data-dir=${userDataDir}`],
+    env: { ...process.env, DSH_HOME: dshHome },
   })
   let marker: string
   try {

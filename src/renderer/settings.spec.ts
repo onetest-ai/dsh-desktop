@@ -47,6 +47,23 @@ function declaredHiddenIds(): Set<string> {
 }
 
 /**
+ * The `aria-selected` value each tag declares in the markup itself, so the
+ * fixture's initial state matches what a real DOM parse would give before
+ * any script runs.
+ * @returns each id's declared `aria-selected` value, for tags that declare one.
+ */
+function declaredAriaSelected(): Map<string, string> {
+  const values = new Map<string, string>()
+  for (const match of MARKUP.matchAll(/<[a-z]+\b[^>]*>/g)) {
+    const tag = match[0]
+    const id = /\bid="([^"]+)"/.exec(tag)?.[1]
+    const selected = /\baria-selected="([^"]+)"/.exec(tag)?.[1]
+    if (id !== undefined && selected !== undefined) values.set(id, selected)
+  }
+  return values
+}
+
+/**
  * The `kind` radios the page declares, in document order.
  * @returns each radio's value and whether the markup marks it checked.
  */
@@ -72,18 +89,24 @@ interface FakeElement {
   scrollTop: number
   scrollHeight: number
   type: string
+  tabIndex: number
   classes: Set<string>
   classList: { add(name: string): void; remove(name: string): void }
   children: FakeElement[]
   append(child: FakeElement): void
-  addEventListener(name: string, handler: () => unknown): void
+  addEventListener(name: string, handler: (event?: unknown) => unknown): void
   setAttribute(name: string, value: string): void
-  listeners: Map<string, () => unknown>
+  getAttribute(name: string): string | null
+  attributes: Map<string, string>
+  listeners: Map<string, (event?: unknown) => unknown>
+  focus(): void
+  focused: boolean
 }
 
 function element(id: string): FakeElement {
   const classes = new Set<string>()
-  const listeners = new Map<string, () => unknown>()
+  const listeners = new Map<string, (event?: unknown) => unknown>()
+  const attributes = new Map<string, string>()
   let children: FakeElement[] = []
   let text = ''
   const node = {
@@ -97,6 +120,7 @@ function element(id: string): FakeElement {
     scrollTop: 0,
     scrollHeight: 0,
     type: '',
+    tabIndex: 0,
     classes,
     classList: {
       add: (name: string) => classes.add(name),
@@ -117,8 +141,14 @@ function element(id: string): FakeElement {
     },
     append: (child: FakeElement) => children.push(child),
     listeners,
-    addEventListener: (name: string, handler: () => unknown) => listeners.set(name, handler),
-    setAttribute: () => {},
+    addEventListener: (name: string, handler: (event?: unknown) => unknown) => listeners.set(name, handler),
+    attributes,
+    setAttribute: (name: string, value: string) => attributes.set(name, value),
+    getAttribute: (name: string) => attributes.get(name) ?? null,
+    focused: false,
+    focus() {
+      this.focused = true
+    },
   } as FakeElement
   return node
 }
@@ -182,6 +212,23 @@ interface Renderer {
   acceptPluginUpdateCalls: Array<[string, string]>
   /** Calls made to `settings.validatePlugin`, as `[spec, existingPackages]` pairs. */
   validatePluginCalls: Array<[string, string[]]>
+  /** Clicks the tab button for `id`. */
+  clickTab(id: string): void
+  /** Fires a `keydown` for `key` on the tab button for `id`, as a real key press would. */
+  pressTabKey(id: string, key: string): void
+  /** The tab id whose button reports `aria-selected="true"`. */
+  activeTab(): string | undefined
+  /** Whether the panel for `id` is hidden. */
+  panelHidden(id: string): boolean | undefined
+  /** The tab button's roving `tabIndex` for `id`. */
+  tabTabIndex(id: string): number | undefined
+  /** Whether the error dot on the tab button for `id` is showing. */
+  tabErrorDotVisible(id: string): boolean | undefined
+}
+
+/** The tab ids declared in `settings.html`'s tab bar, in document order. */
+function declaredTabIds(): string[] {
+  return [...MARKUP.matchAll(/\bid="tab-([a-z]+)"/g)].map((match) => match[1])
 }
 
 /** Default read result: a configured local source with an empty plugin list. */
@@ -209,10 +256,13 @@ async function load(
   onValidatePlugin?: ValidatePluginOutcome,
 ): Promise<Renderer> {
   const hiddenIds = declaredHiddenIds()
+  const ariaSelected = declaredAriaSelected()
   const elements = new Map(
     declaredIds().map((id) => {
       const node = element(id)
       node.hidden = hiddenIds.has(id)
+      const selected = ariaSelected.get(id)
+      if (selected !== undefined) node.setAttribute('aria-selected', selected)
       return [id, node]
     }),
   )
@@ -341,6 +391,26 @@ async function load(
     renderedPluginRows: () => rows().map((row) => textOf(row)),
     acceptPluginUpdateCalls,
     validatePluginCalls,
+    clickTab: (id) => {
+      elements.get(`tab-${id}`)?.listeners.get('click')?.()
+    },
+    pressTabKey: (id, key) => {
+      let prevented = false
+      elements.get(`tab-${id}`)?.listeners.get('keydown')?.({
+        key,
+        preventDefault: () => {
+          prevented = true
+        },
+      })
+      void prevented
+    },
+    activeTab: () => declaredTabIds().find((id) => elements.get(`tab-${id}`)?.getAttribute('aria-selected') === 'true'),
+    panelHidden: (id) => elements.get(`panel-${id}`)?.hidden,
+    tabTabIndex: (id) => elements.get(`tab-${id}`)?.tabIndex,
+    tabErrorDotVisible: (id) => {
+      const hidden = elements.get(`tab-${id}-error-dot`)?.hidden
+      return hidden === undefined ? undefined : !hidden
+    },
   }
 }
 
@@ -703,6 +773,106 @@ describe('load', () => {
     await renderer.save()
 
     expect(renderer.elements.get('status')?.textContent).toBe('Settings saved.')
+  })
+})
+
+describe('tabs', () => {
+  it('declares real tab semantics: role, aria-selected, and tabpanels', () => {
+    expect(MARKUP).toMatch(/role="tablist"/)
+    expect((MARKUP.match(/role="tab"/g) ?? []).length).toBe(4)
+    expect((MARKUP.match(/role="tabpanel"/g) ?? []).length).toBe(4)
+    expect(declaredTabIds()).toEqual(['harness', 'plugins', 'notifications', 'advanced'])
+  })
+
+  it('starts on the harness tab, with the rest hidden', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+    expect(renderer.activeTab()).toBe('harness')
+    expect(renderer.panelHidden('harness')).toBe(false)
+    expect(renderer.panelHidden('plugins')).toBe(true)
+    expect(renderer.panelHidden('notifications')).toBe(true)
+    expect(renderer.panelHidden('advanced')).toBe(true)
+  })
+
+  it('clicking a tab shows its panel and hides the others', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+
+    renderer.clickTab('plugins')
+
+    expect(renderer.activeTab()).toBe('plugins')
+    expect(renderer.panelHidden('plugins')).toBe(false)
+    expect(renderer.panelHidden('harness')).toBe(true)
+    expect(renderer.panelHidden('notifications')).toBe(true)
+    expect(renderer.panelHidden('advanced')).toBe(true)
+  })
+
+  it('moves the roving tabIndex to the selected tab', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+
+    renderer.clickTab('advanced')
+
+    expect(renderer.tabTabIndex('advanced')).toBe(0)
+    expect(renderer.tabTabIndex('harness')).toBe(-1)
+    expect(renderer.tabTabIndex('plugins')).toBe(-1)
+    expect(renderer.tabTabIndex('notifications')).toBe(-1)
+  })
+
+  it('ArrowRight/ArrowLeft move between tabs, wrapping at the ends', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+
+    renderer.pressTabKey('harness', 'ArrowRight')
+    expect(renderer.activeTab()).toBe('plugins')
+
+    renderer.pressTabKey('plugins', 'ArrowLeft')
+    expect(renderer.activeTab()).toBe('harness')
+
+    renderer.pressTabKey('harness', 'ArrowLeft')
+    expect(renderer.activeTab()).toBe('advanced')
+  })
+
+  it('Home and End jump to the first and last tab', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+
+    renderer.pressTabKey('harness', 'End')
+    expect(renderer.activeTab()).toBe('advanced')
+
+    renderer.pressTabKey('advanced', 'Home')
+    expect(renderer.activeTab()).toBe('harness')
+  })
+
+  it('a validation error on a field in an inactive tab switches to that tab and marks it', async () => {
+    const renderer = await load(async () => ({ ok: false, errors: { hotkey: 'A shortcut is required.' } }))
+    expect(renderer.activeTab()).toBe('harness')
+
+    await renderer.save()
+
+    expect(renderer.activeTab()).toBe('notifications')
+    expect(renderer.panelHidden('notifications')).toBe(false)
+    expect(renderer.elements.get('error-hotkey')?.textContent).toBe('A shortcut is required.')
+    expect(renderer.tabErrorDotVisible('notifications')).toBe(true)
+  })
+
+  it('does not switch tabs when the erroring field is already on the active tab', async () => {
+    const renderer = await load(async () => ({ ok: false, errors: { repo: 'That path is not a folder.' } }))
+
+    await renderer.save()
+
+    expect(renderer.activeTab()).toBe('harness')
+    expect(renderer.elements.get('error-repo')?.textContent).toBe('That path is not a folder.')
+  })
+
+  it('a fresh save clears a stale error dot from a previous attempt', async () => {
+    const save = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, errors: { hotkey: 'A shortcut is required.' } })
+      .mockResolvedValueOnce({ ok: true, warnings: [] })
+    const renderer = await load(save)
+
+    await renderer.save()
+    expect(renderer.tabErrorDotVisible('notifications')).toBe(true)
+
+    renderer.clickTab('harness')
+    await renderer.save()
+    expect(renderer.tabErrorDotVisible('notifications')).toBe(false)
   })
 })
 

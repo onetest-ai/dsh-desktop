@@ -4,6 +4,58 @@ const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey
 const el = (id) => document.getElementById(id)
 const kindOf = () => document.querySelector('input[name="kind"]:checked').value
 
+// The tab ids, in tab-bar order, and which panel each field's error belongs
+// to. A field absent here (`plugin-spec`, validated on Add rather than Save)
+// never drives a tab switch.
+const TABS = ['harness', 'plugins', 'notifications', 'advanced']
+const FIELD_TAB = {
+  repo: 'harness',
+  package: 'harness',
+  version: 'harness',
+  workspace: 'harness',
+  notifyPort: 'notifications',
+  hotkey: 'notifications',
+  pnpmPath: 'advanced',
+  npmPath: 'advanced',
+}
+
+let activeTab = 'harness'
+
+/**
+ * Activate one tab: show its panel, hide the rest, move the roving
+ * `tabIndex`, and set `aria-selected` for assistive tech. Real semantics —
+ * not a div that only reacts to clicks — so a screen reader announces the
+ * selection change and arrow-key navigation (wired below) works natively.
+ * @param {string} id - the tab id to activate.
+ * @param {{ focus?: boolean }} [options] - `focus: false` activates without
+ *   moving keyboard focus, used when Save redirects the user to the tab that
+ *   holds the field it rejected without stealing focus from the Save button.
+ */
+function selectTab(id, options) {
+  const focus = options === undefined || options.focus !== false
+  activeTab = id
+  for (const tab of TABS) {
+    const button = el(`tab-${tab}`)
+    const panel = el(`panel-${tab}`)
+    const isActive = tab === id
+    button.setAttribute('aria-selected', String(isActive))
+    button.tabIndex = isActive ? 0 : -1
+    panel.hidden = !isActive
+  }
+  if (focus) el(`tab-${id}`).focus()
+}
+
+/**
+ * Show or clear the error dot on one tab's button, so a field error on a
+ * panel that is not currently shown stays discoverable instead of vanishing
+ * behind the inactive tab.
+ * @param {string} id - the tab id.
+ * @param {boolean} hasError - whether that tab's panel holds a live error.
+ */
+function markTabError(id, hasError) {
+  el(`tab-${id}-error-dot`).hidden = !hasError
+}
+
 // The plugin rows currently shown, in display order, each `{ spec, package,
 // pinned, version }` — `version` is undefined until a save has installed the
 // entry at least once. Populated from `read()` on load and appended to by
@@ -212,6 +264,7 @@ async function performSave() {
   clearStatus()
   clearProgress()
   hideUpdateHint()
+  for (const tab of TABS) markTabError(tab, false)
   el('save').disabled = true
   try {
     const result = await window.settings.save(collect())
@@ -224,6 +277,11 @@ async function performSave() {
         status.classList.add('status-warning')
       }
     } else {
+      // Every rejected field's tab is marked with a dot, and the tab holding
+      // the first one (in field order) becomes active, so a validation error
+      // on a field whose tab is not currently open is never left undiscoverable
+      // — the whole reason this loop tracks tabs rather than only field names.
+      const errorTabs = new Set()
       for (const [name, message] of Object.entries(result.errors)) {
         if (name === 'kind') {
           // Not a field the user corrects — the source is a radio pair — and a
@@ -238,6 +296,15 @@ async function performSave() {
         }
         const target = el(`error-${name}`)
         if (target !== null) target.textContent = message
+        const tab = FIELD_TAB[name]
+        if (tab !== undefined) errorTabs.add(tab)
+      }
+      for (const tab of errorTabs) markTabError(tab, true)
+      if (errorTabs.size > 0 && !errorTabs.has(activeTab)) {
+        const firstErrorField = FIELDS.find(
+          (name) => result.errors[name] !== undefined && errorTabs.has(FIELD_TAB[name]),
+        )
+        if (firstErrorField !== undefined) selectTab(FIELD_TAB[firstErrorField], { focus: false })
       }
     }
   } catch (error) {
@@ -290,6 +357,24 @@ async function load() {
 
 for (const radio of document.querySelectorAll('input[name="kind"]')) {
   radio.addEventListener('change', showKind)
+}
+
+// WAI-ARIA "automatic activation" tabs: clicking or arrowing to a tab
+// selects it immediately, matching what a native segmented control does.
+// Home/End jump to the first/last tab; arrows wrap around.
+for (const tab of TABS) {
+  el(`tab-${tab}`).addEventListener('click', () => selectTab(tab))
+  el(`tab-${tab}`).addEventListener('keydown', (event) => {
+    const from = TABS.indexOf(tab)
+    let target
+    if (event.key === 'ArrowRight') target = TABS[(from + 1) % TABS.length]
+    else if (event.key === 'ArrowLeft') target = TABS[(from - 1 + TABS.length) % TABS.length]
+    else if (event.key === 'Home') target = TABS[0]
+    else if (event.key === 'End') target = TABS[TABS.length - 1]
+    else return
+    event.preventDefault()
+    selectTab(target)
+  })
 }
 
 el('browse').addEventListener('click', async () => {

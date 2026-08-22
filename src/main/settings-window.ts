@@ -73,8 +73,12 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
   }
 
   settingsWindow = new BrowserWindow({
-    width: 620,
-    height: 640,
+    // Sized for the busiest tab without scrolling: a managed harness source
+    // with an update offered (its tallest state) measures ~546px of content;
+    // 640x720 clears that with room to spare in both themes, verified by
+    // rendering every tab (see docs/notes/settings-tabs.md).
+    width: 640,
+    height: 720,
     title: 'DeepSeek Harness Settings',
     webPreferences: {
       contextIsolation: true,
