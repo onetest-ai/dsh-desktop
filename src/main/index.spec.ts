@@ -132,9 +132,12 @@ vi.mock('./notify', () => ({
 
 vi.mock('./config', () => ({
   loadConfig: vi.fn(() => ({
-    harness: { kind: 'local', repo: '/tmp/harness' },
-    notifyPort: 44444,
-    hotkey: 'CommandOrControl+Shift+D',
+    configured: true,
+    config: {
+      harness: { kind: 'local', repo: '/tmp/harness' },
+      notifyPort: 44444,
+      hotkey: 'CommandOrControl+Shift+D',
+    },
   })),
 }))
 

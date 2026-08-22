@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { defaultSource, type HarnessSource } from './harness-source'
+import type { HarnessSource } from './harness-source'
 
 /** Resolved desktop settings. `pnpmPath`/`npxPath` pin binaries when PATH cannot find them. */
 export interface DesktopConfig {
@@ -11,39 +11,47 @@ export interface DesktopConfig {
   npxPath?: string
 }
 
-const DEFAULT_NOTIFY_PORT = 43117
-const DEFAULT_HOTKEY = 'CommandOrControl+Shift+D'
+export const DEFAULT_NOTIFY_PORT = 43117
+export const DEFAULT_HOTKEY = 'CommandOrControl+Shift+D'
+
+/** Either the stored settings, or the first-run state where none exist yet. */
+export type ConfigResult =
+  | { configured: true; config: DesktopConfig }
+  | { configured: false }
 
 /**
- * Read the desktop config, creating it with defaults on first run.
+ * Read the desktop config.
+ *
+ * A missing file is the first-run state, reported rather than guessed at:
+ * the app has no way to know where a harness checkout lives on this machine,
+ * so the user is asked instead (see the settings window).
  * @param filePath - absolute path to `desktop.json`.
- * @param candidateRepo - checkout to prefer when writing a first-run default.
- * @returns the resolved settings.
+ * @returns the stored settings, or the not-configured state.
  */
-export function loadConfig(filePath: string, candidateRepo: string): DesktopConfig {
+export function loadConfig(filePath: string): ConfigResult {
   let raw: string
   try {
     raw = readFileSync(filePath, 'utf8')
   } catch (error) {
-    // Only ENOENT (first run: nothing at filePath yet) is safe to treat as
-    // "seed a default config". Anything else — EACCES, EISDIR from a
-    // directory sitting where the file should be, etc. — means a real config
-    // may already exist and is merely unreadable right now; seeding over it
-    // would silently destroy the user's settings, so it is rethrown loud
-    // instead.
+    // Only ENOENT means "nothing stored yet". Anything else — EACCES, or
+    // EISDIR from a directory sitting where the file should be — means a real
+    // config may exist and merely be unreadable, so it is rethrown loud rather
+    // than being mistaken for a first run.
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       throw new Error(`dsh-desktop: cannot read ${filePath}`, { cause: error })
     }
-    const seeded: DesktopConfig = {
-      harness: defaultSource(candidateRepo),
-      notifyPort: DEFAULT_NOTIFY_PORT,
-      hotkey: DEFAULT_HOTKEY,
-    }
-    mkdirSync(dirname(filePath), { recursive: true })
-    writeFileSync(filePath, `${JSON.stringify(seeded, undefined, 2)}\n`)
-    return seeded
+    return { configured: false }
   }
+  return { configured: true, config: parseConfig(filePath, raw) }
+}
 
+/**
+ * Parse and validate the desktop config contents.
+ * @param filePath - absolute path to `desktop.json`, used only in error messages.
+ * @param raw - the file's contents.
+ * @returns the resolved settings.
+ */
+function parseConfig(filePath: string, raw: string): DesktopConfig {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -75,4 +83,14 @@ export function loadConfig(filePath: string, candidateRepo: string): DesktopConf
     ...(record.pnpmPath === undefined ? {} : { pnpmPath: record.pnpmPath }),
     ...(record.npxPath === undefined ? {} : { npxPath: record.npxPath }),
   }
+}
+
+/**
+ * Persist the desktop config, creating its directory if needed.
+ * @param filePath - absolute path to `desktop.json`.
+ * @param config - settings to store.
+ */
+export function writeConfig(filePath: string, config: DesktopConfig): void {
+  mkdirSync(dirname(filePath), { recursive: true })
+  writeFileSync(filePath, `${JSON.stringify(config, undefined, 2)}\n`)
 }

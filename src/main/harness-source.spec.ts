@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { configPath, defaultSource, spawnFor } from './harness-source'
+import { configPath, spawnFor } from './harness-source'
 
 describe('configPath', () => {
   it('uses $DSH_HOME when set', () => {
@@ -22,17 +22,6 @@ describe('configPath', () => {
     // untrimmed string. configPath must agree, or the two config systems
     // resolve different paths for the same env var.
     expect(configPath({ DSH_HOME: '  /custom/home  ' })).toBe('  /custom/home  /desktop.json')
-  })
-})
-
-describe('defaultSource', () => {
-  it('prefers a local checkout when the path exists', () => {
-    expect(defaultSource(process.cwd())).toEqual({ kind: 'local', repo: process.cwd() })
-  })
-
-  it('falls back to npx when the checkout is absent', () => {
-    const source = defaultSource('/definitely/not/here')
-    expect(source.kind).toBe('npx')
   })
 })
 

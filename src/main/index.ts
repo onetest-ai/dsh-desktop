@@ -13,8 +13,6 @@ import type { ServerStatus } from './status'
 
 /** The config lives under `$DSH_HOME` (see `configPath`), beside the harness's own state. */
 const CONFIG_PATH = configPath(process.env)
-/** Preferred local checkout when seeding a first-run config; falls back to npx when absent. */
-const CANDIDATE_REPO = '/Users/arozumenko/Development/deepseek-harness'
 
 /** How long the harness may take to report its URL. */
 const READY_TIMEOUT_MS = 60_000
@@ -125,7 +123,13 @@ async function bootNow(): Promise<void> {
 
   let config: DesktopConfig
   try {
-    config = loadConfig(CONFIG_PATH, CANDIDATE_REPO)
+    const result = loadConfig(CONFIG_PATH)
+    // FIXME(task-5): open the settings window instead of treating this as unconfigured-and-unusable
+    if (!result.configured) {
+      fail('Configuration problem', 'No harness is configured yet.')
+      return
+    }
+    config = result.config
   } catch (error) {
     fail('Configuration problem', (error as Error).message)
     return
@@ -238,7 +242,8 @@ function onTurnEnd(): void {
  */
 function safeHotkey(): string | undefined {
   try {
-    return loadConfig(CONFIG_PATH, CANDIDATE_REPO).hotkey
+    const result = loadConfig(CONFIG_PATH)
+    return result.configured ? result.config.hotkey : undefined
   } catch {
     // boot() reports config failures in the window; the hotkey just goes unbound.
     return undefined
@@ -291,7 +296,10 @@ if (!app.requestSingleInstanceLock()) {
       console.warn(`dsh-desktop: the hotkey ${hotkey} could not be registered; another app already owns it.`)
     }
     try {
-      notifier = await startNotifyListener(loadConfig(CONFIG_PATH, CANDIDATE_REPO).notifyPort, onTurnEnd)
+      const result = loadConfig(CONFIG_PATH)
+      if (result.configured) {
+        notifier = await startNotifyListener(result.config.notifyPort, onTurnEnd)
+      }
     } catch (error) {
       console.warn((error as Error).message)
     }

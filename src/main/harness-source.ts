@@ -1,4 +1,3 @@
-import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -23,8 +22,6 @@ export interface SpawnSpec {
 
 /** The harness home directory name, mirroring `dsh`'s own convention. */
 const HOME_DIR_NAME = '.dsh'
-/** Published package used when no local checkout is configured. */
-const DEFAULT_PACKAGE = '@deepseek-ai/dsh'
 
 /**
  * Absolute path of the desktop config file.
@@ -41,30 +38,6 @@ export function configPath(env: NodeJS.ProcessEnv): string {
   const isSet = raw !== undefined && raw.trim().length > 0
   const home = isSet ? raw : join(homedir(), HOME_DIR_NAME)
   return join(home, 'desktop.json')
-}
-
-/**
- * Pick a source for a machine with no config yet.
- * @param candidateRepo - checkout path to prefer when it exists.
- * @returns the local source if the checkout is present, otherwise npx.
- */
-export function defaultSource(candidateRepo: string): HarnessSource {
-  let isRepo = false
-  try {
-    isRepo = statSync(candidateRepo).isDirectory()
-  } catch (error) {
-    // Only ENOENT means "nothing at that path, so npx is the answer": any
-    // other error (e.g. EACCES on an ancestor) means the presence of a
-    // checkout is genuinely unknown, not that it is absent, so it is
-    // rethrown rather than silently steered into a wrong default.
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw new Error(`dsh-desktop: cannot check ${candidateRepo} for a harness checkout`, { cause: error })
-    }
-    isRepo = false
-  }
-  return isRepo
-    ? { kind: 'local', repo: candidateRepo }
-    : { kind: 'npx', package: DEFAULT_PACKAGE, version: 'latest', workspace: homedir() }
 }
 
 /**
