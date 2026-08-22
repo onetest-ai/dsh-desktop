@@ -47,3 +47,16 @@ export function startNotifyListener(port: number, onTurnEnd: () => void): Promis
     })
   })
 }
+
+/**
+ * Whether `port` can currently be bound on loopback.
+ * @param port - the port to test.
+ * @returns true when a listener could bind it right now.
+ */
+export function portIsFree(port: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const probe = createServer()
+    probe.once('error', () => resolve(false))
+    probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(true)))
+  })
+}

@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ConfigResult, DesktopConfig } from './config'
 import type { StartOptions } from './server'
+
+/** The stored config used by tests that need a configured first run. */
+const STORED: DesktopConfig = {
+  harness: { kind: 'local', repo: '/tmp/harness' },
+  notifyPort: 44444,
+  hotkey: 'CommandOrControl+Shift+D',
+}
 
 /**
  * Orchestration tests for the main entry point.
@@ -104,6 +112,7 @@ vi.mock('electron', () => ({
   app: fake.app,
   BrowserWindow: class {},
   globalShortcut: fake.globalShortcut,
+  dialog: { showOpenDialog: vi.fn() },
   Notification: class {
     show(): void {}
   },
@@ -118,9 +127,16 @@ vi.mock('./window', () => ({
 }))
 
 const setTrayStatus = vi.fn()
-let trayActions: { toggleWindow(): void; restart(): void; quit(): void } | undefined
+let trayActions:
+  | { toggleWindow(): void; restart(): void; quit(): void; openSettings(): void }
+  | undefined
 vi.mock('./tray', () => ({
-  createTray: (actions: { toggleWindow(): void; restart(): void; quit(): void }) => {
+  createTray: (actions: {
+    toggleWindow(): void
+    restart(): void
+    quit(): void
+    openSettings(): void
+  }) => {
     trayActions = actions
     return { setStatus: setTrayStatus, destroy: vi.fn() }
   },
@@ -128,18 +144,36 @@ vi.mock('./tray', () => ({
 
 vi.mock('./notify', () => ({
   startNotifyListener: vi.fn(async () => ({ port: 1, close: async () => {} })),
+  portIsFree: vi.fn(async () => true),
 }))
 
+/** Mutated by settings tests to switch between first-run and configured states. */
+let configResult: ConfigResult = { configured: true, config: STORED }
+const loadConfigMock = vi.fn((): ConfigResult => configResult)
+const writeConfigMock = vi.fn()
 vi.mock('./config', () => ({
-  loadConfig: vi.fn(() => ({
-    configured: true,
-    config: {
-      harness: { kind: 'local', repo: '/tmp/harness' },
-      notifyPort: 44444,
-      hotkey: 'CommandOrControl+Shift+D',
-    },
-  })),
+  loadConfig: (...args: unknown[]) => loadConfigMock(...(args as [])),
+  writeConfig: (...args: unknown[]) => writeConfigMock(...(args as [])),
 }))
+
+/** `createSettingsHandlers` has its own tests; here it only needs to exist. */
+vi.mock('./settings-ipc', () => ({
+  createSettingsHandlers: vi.fn(() => ({ read: vi.fn(), pickFolder: vi.fn(), save: vi.fn() })),
+}))
+
+/** Captures the `onClosed` callback so tests can fire it via `closeSettings()`. */
+let settingsOnClosed: (() => void) | undefined
+const openSettingsMock = vi.fn((_handlers: unknown, onClosed: () => void) => {
+  settingsOnClosed = onClosed
+})
+vi.mock('./settings-window', () => ({
+  openSettings: (...args: unknown[]) => openSettingsMock(...(args as [unknown, () => void])),
+}))
+
+/** Invoke the settings window's close callback, as the real window does on `closed`. */
+function closeSettings(): void {
+  settingsOnClosed?.()
+}
 
 vi.mock('./preflight', () => ({ preflight: vi.fn(() => ({ ok: true })) }))
 
@@ -236,6 +270,13 @@ async function bootReady(): Promise<FakeChild> {
   return children[0]
 }
 
+/** Drive the app through `whenReady`, for cases (first run) where no child boots. */
+async function readyHandler(): Promise<void> {
+  await loadIndex()
+  fake.ready()
+  await settle()
+}
+
 beforeEach(() => {
   vi.resetModules()
   children.length = 0
@@ -244,6 +285,8 @@ beforeEach(() => {
   fake.quitEvents.length = 0
   trayActions = undefined
   hangStop = false
+  configResult = { configured: true, config: STORED }
+  settingsOnClosed = undefined
   vi.clearAllMocks()
   fake.resetReady()
   fake.app.requestSingleInstanceLock.mockReturnValue(true)
@@ -399,5 +442,36 @@ describe('hotkey', () => {
     await bootReady()
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not be registered'))
     warn.mockRestore()
+  })
+})
+
+describe('settings', () => {
+  it('opens settings and does not boot when no config exists', async () => {
+    configResult = { configured: false }
+    await readyHandler()
+    expect(openSettingsMock).toHaveBeenCalled()
+    expect(startServer).not.toHaveBeenCalled()
+  })
+
+  it('boots without opening settings when a config exists', async () => {
+    configResult = { configured: true, config: STORED }
+    await bootReady()
+    expect(openSettingsMock).not.toHaveBeenCalled()
+    expect(startServer).toHaveBeenCalled()
+  })
+
+  it('quits when first-run settings close without a config being saved', async () => {
+    configResult = { configured: false }
+    await readyHandler()
+    closeSettings()
+    expect(fake.app.quit).toHaveBeenCalled()
+  })
+
+  it('does not quit when settings close and a config exists', async () => {
+    configResult = { configured: true, config: STORED }
+    await readyHandler()
+    trayActions?.openSettings()
+    closeSettings()
+    expect(fake.app.quit).not.toHaveBeenCalled()
   })
 })

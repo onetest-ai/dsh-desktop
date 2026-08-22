@@ -1,11 +1,13 @@
-import { app, BrowserWindow, globalShortcut, Notification } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, Notification } from 'electron'
 import { join } from 'node:path'
-import { loadConfig, type DesktopConfig } from './config'
+import { loadConfig, writeConfig, type DesktopConfig } from './config'
 import { configPath } from './harness-source'
-import { startNotifyListener, type NotifyServer } from './notify'
+import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { preflight } from './preflight'
 import { writeRuntimeFiles } from './runtime-files'
 import { dshWebCommand, startServer } from './server'
+import { createSettingsHandlers } from './settings-ipc'
+import { openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
 import { createWindow, installMenu, showError } from './window'
@@ -23,6 +25,24 @@ let tray: TrayController | undefined
 let notifier: NotifyServer | undefined
 /** A deep link that arrived before the window existed; see the `open-url` handler. */
 let deepLinkPending = false
+
+/**
+ * Apply a saved settings change to the running app.
+ * FIXME(task-6): restart the harness / rebind the listener / re-register the hotkey
+ */
+const applySettings = async (): Promise<string[]> => []
+
+const settingsHandlers = createSettingsHandlers({
+  readConfig: () => loadConfig(CONFIG_PATH),
+  writeConfig: (config) => writeConfig(CONFIG_PATH, config),
+  pickFolder: async () => {
+    const chosen = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+    return chosen.canceled ? undefined : chosen.filePaths[0]
+  },
+  probePort: portIsFree,
+  apply: applySettings,
+  isQuitting: () => quitting,
+})
 
 /**
  * The harness child this app owns, from `spawn()` until it is stopped.
@@ -124,9 +144,10 @@ async function bootNow(): Promise<void> {
   let config: DesktopConfig
   try {
     const result = loadConfig(CONFIG_PATH)
-    // FIXME(task-5): open the settings window instead of treating this as unconfigured-and-unusable
     if (!result.configured) {
-      fail('Configuration problem', 'No harness is configured yet.')
+      // The config was removed or never saved; settings is the only useful
+      // thing to show until the user configures a harness.
+      showSettings()
       return
     }
     config = result.config
@@ -218,6 +239,13 @@ async function shutdown(): Promise<void> {
 /** Serialized entry point for the tray's "Restart harness" action; see `restart`. */
 const restartOnce = singleFlight(restart)
 
+/** Open settings, quitting if a first run closes it without configuring anything. */
+function showSettings(): void {
+  openSettings(settingsHandlers, () => {
+    if (!loadConfig(CONFIG_PATH).configured) app.quit()
+  })
+}
+
 /** Show the window if hidden or unfocused, otherwise hide it. */
 function toggleWindow(): void {
   if (window === undefined || window.isDestroyed()) return
@@ -274,7 +302,7 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   void app.whenReady().then(async () => {
-    installMenu()
+    installMenu(showSettings)
     window = createWindow()
     window.on('close', (event) => {
       // Closing the window leaves the app running in the tray; only a quit,
@@ -289,6 +317,7 @@ if (!app.requestSingleInstanceLock()) {
     tray = createTray({
       toggleWindow,
       restart: () => void restartOnce(),
+      openSettings: showSettings,
       quit: () => app.quit(),
     })
     const hotkey = safeHotkey()
@@ -306,6 +335,13 @@ if (!app.requestSingleInstanceLock()) {
     if (deepLinkPending) {
       deepLinkPending = false
       revealWindow()
+    }
+    const stored = loadConfig(CONFIG_PATH)
+    if (!stored.configured) {
+      // Nothing to boot and nothing to show until the user says where the
+      // harness lives, so settings is the whole app until it is saved.
+      showSettings()
+      return
     }
     await enqueue(bootNow)
   })

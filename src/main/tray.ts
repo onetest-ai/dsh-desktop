@@ -6,6 +6,7 @@ import type { ServerStatus } from './status'
 export interface TrayActions {
   toggleWindow(): void
   restart(): void
+  openSettings(): void
   quit(): void
 }
 
@@ -46,6 +47,7 @@ export function createTray(actions: TrayActions): TrayController {
         { type: 'separator' },
         { label: 'Show / Hide', click: () => actions.toggleWindow() },
         { label: 'Restart harness', click: () => actions.restart() },
+        { label: 'Settings…', click: () => actions.openSettings() },
         { type: 'separator' },
         { label: 'Quit', click: () => actions.quit() },
       ]),

@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, shell } from 'electron'
+import { app, BrowserWindow, Menu, shell } from 'electron'
 import { errorPage } from './error-page'
 
 /**
@@ -41,12 +41,26 @@ export function showError(window: BrowserWindow, title: string, detail: string):
 /**
  * Install the application menu.
  * Electron ships no usable default for a custom app, and without an Edit menu
- * the standard clipboard shortcuts do not reach the renderer.
+ * the standard clipboard shortcuts do not reach the renderer. Settings appears
+ * both in the File menu (explicitly requested) and the app menu (macOS
+ * convention), so `onSettings` is wired to both.
+ * @param onSettings - opens the settings window.
  */
-export function installMenu(): void {
+export function installMenu(onSettings: () => void): void {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
-      { role: 'appMenu' },
+      {
+        label: app.name,
+        submenu: [
+          { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: onSettings },
+          { type: 'separator' },
+          { role: 'quit' },
+        ],
+      },
+      {
+        label: 'File',
+        submenu: [{ label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: onSettings }],
+      },
       { role: 'editMenu' },
       {
         label: 'View',
