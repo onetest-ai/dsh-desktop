@@ -14,6 +14,12 @@ function clearErrors() {
   for (const name of [...FIELDS, 'kind']) el(`error-${name}`).textContent = ''
 }
 
+function clearStatus() {
+  const status = el('status')
+  status.textContent = ''
+  status.classList.remove('status-warning')
+}
+
 function collect() {
   const form = { kind: kindOf() }
   for (const name of FIELDS) form[name] = el(name).value
@@ -49,11 +55,18 @@ el('browse-workspace').addEventListener('click', async () => {
 
 el('save').addEventListener('click', async () => {
   clearErrors()
+  clearStatus()
   el('save').disabled = true
   try {
     const result = await window.settings.save(collect())
     if (result.ok) {
-      el('error-kind').textContent = result.warnings.join(' ')
+      const status = el('status')
+      if (result.warnings.length === 0) {
+        status.textContent = 'Settings saved.'
+      } else {
+        status.textContent = ['Settings saved.', ...result.warnings].join(' ')
+        status.classList.add('status-warning')
+      }
     } else {
       for (const [name, message] of Object.entries(result.errors)) {
         const target = el(`error-${name}`)

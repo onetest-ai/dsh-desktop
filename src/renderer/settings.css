@@ -9,5 +9,7 @@ input[type="text"] { width: 100%; box-sizing: border-box; padding: .4rem; }
 .row { display: flex; gap: .5rem; }
 .row input { flex: 1; }
 .error { color: #d33; margin: .15rem 0 0; min-height: 1em; }
+.status { color: #2a8a3e; margin: .15rem 0 0; min-height: 1em; }
+.status.status-warning { color: #b8860b; }
 .actions { margin-top: 1rem; display: flex; justify-content: flex-end; }
 button { padding: .4rem 1rem; }
