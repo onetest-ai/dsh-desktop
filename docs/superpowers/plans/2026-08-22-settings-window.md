@@ -541,7 +541,7 @@ export function formFor(result: ConfigResult): SettingsForm {
 - [ ] **Step 4: Run the tests**
 
 Run: `npx vitest run src/main/settings-validate.spec.ts`
-Expected: PASS, 21 tests.
+Expected: PASS, 24 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -808,7 +808,6 @@ git commit -m "feat: settings IPC handlers over injected dependencies"
 - Consumes: `SettingsHandlers` (Task 3).
 - Produces:
   - `function openSettings(handlers: SettingsHandlers, onClosed: () => void): void`
-  - `function settingsWindowOpen(): boolean`
   - Preload API on `window.settings`: `{ read(): Promise<ConfigResult>; pickFolder(): Promise<string | undefined>; save(form: SettingsForm): Promise<SaveResult> }`
 
 - [ ] **Step 1: Make the build emit the preload and renderer**
@@ -858,8 +857,7 @@ import type { SettingsForm } from './settings-validate'
 let settingsWindow: BrowserWindow | undefined
 let channelsRegistered = false
 
-/** Whether a settings window is currently open. */
-export function settingsWindowOpen(): boolean {
+function isOpen(): boolean {
   return settingsWindow !== undefined && !settingsWindow.isDestroyed()
 }
 
@@ -872,7 +870,7 @@ export function settingsWindowOpen(): boolean {
  * @param onClosed - called when the window closes, however it closes.
  */
 export function openSettings(handlers: SettingsHandlers, onClosed: () => void): void {
-  if (settingsWindowOpen()) {
+  if (isOpen()) {
     settingsWindow?.focus()
     return
   }
