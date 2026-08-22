@@ -15,6 +15,11 @@ function isOpen(): boolean {
  *
  * The preload lives only on this window: the main window loads the harness
  * Web UI, which must never reach an IPC bridge.
+ *
+ * The IPC channels are registered once and close over the `handlers` of the
+ * first call for the process lifetime; a later call passing a different set is
+ * ignored. The app has a single construction site, so this is never observable
+ * today.
  * @param handlers - the operations the renderer may invoke.
  * @param onClosed - called when the window closes, however it closes.
  */

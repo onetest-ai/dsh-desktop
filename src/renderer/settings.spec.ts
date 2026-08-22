@@ -131,7 +131,7 @@ describe('save', () => {
 
   it('shows a visible failure when the save rejects instead of silently looking saved', async () => {
     const renderer = await load(() =>
-      Promise.reject(new Error("EACCES: permission denied, open '/Users/x/.dsh/desktop.json'")),
+      Promise.reject(new Error("EACCES: permission denied, open 'desktop.json'")),
     )
     await renderer.save()
 

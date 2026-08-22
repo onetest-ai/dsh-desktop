@@ -52,7 +52,7 @@ Three `invoke`/`handle` channels. Every one validates in main.
 |---|---|---|
 | `settings:read` | none | `{ configured: true, config } \| { configured: false }` |
 | `settings:pick-folder` | none | absolute path, or `undefined` if cancelled |
-| `settings:save` | form values | `{ ok: true } \| { ok: false, errors: FieldErrors }` |
+| `settings:save` | form values | `{ ok: true, warnings: string[] } \| { ok: false, errors: FieldErrors }` |
 
 The renderer never touches `fs`, never constructs a path it did not receive from main, and cannot write anything. All validation lives in main.
 
@@ -94,7 +94,8 @@ A save arriving during an in-flight boot is safe: it goes through `enqueue`. A s
 | Port already bound | Inline field error naming the port; nothing written |
 | Hotkey rejected by the OS | Config saves; the Settings window shows a non-blocking warning naming the accelerator, carried back on the save result. The tray label does not report it — that needs a main-to-renderer push channel for a message the user just saw, so it is dropped as unnecessary. |
 | Config valid but harness fails to boot | Config stays written; the existing failure pane shows, Settings still reachable |
-| Non-ENOENT read failure on `desktop.json` | Throws loudly, as today — never silently replaced |
+| Non-ENOENT read failure on `desktop.json` | Reported in the failure pane and Settings is opened, so the unreadable config can be repaired; the app never boots on a guess |
+| Write of `desktop.json` fails (ENOSPC, EACCES) | The Settings window shows a failure naming the reason; a rejected save is never left looking successful |
 
 Validation runs before the write, so a rejected save never leaves a partial config on disk.
 
@@ -108,7 +109,7 @@ Main-process logic is unit-tested with `vi.mock('electron')`, extending the 12 o
 - A save during quit is refused.
 - The first-run branch opens Settings and does not boot.
 
-The three IPC handlers are tested as plain functions, separate from channel registration. The renderer form gets no unit tests — it holds no logic, which is the point of keeping it dumb.
+The three IPC handlers are tested as plain functions, separate from channel registration. The renderer form is tested only for what the user is shown per save outcome — success, warning, and a rejected save — over a fake document; it holds no other logic, which is the point of keeping it dumb.
 
 ## Build changes
 
