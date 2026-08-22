@@ -212,3 +212,82 @@ suite green again.
 - `grep -rn "/Users/" src/ tests/` — empty.
 - `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain` —
   empty throughout.
+
+## Review follow-up 2: the reload was still not actually safe
+
+One finding left after the previous round. `performSave`'s `await load()` on
+success was justified with "safe here specifically because nothing is
+pending" — but nothing enforced that. Only the Save button was disabled
+during a save; Add, each row's Remove, and each row's "Use it" stayed live.
+A save can run for minutes (a cold managed install), so clicking Add or
+Remove mid-save was likely, not exotic — and the reload would silently drop
+an in-flight Add or resurrect a row an in-flight Remove had just taken out:
+the exact bug this whole line of work set out to close, relocated from
+`acceptPluginUpdate` into `performSave`.
+
+**Fix:** a module-level `saveInFlight` flag, set at the start of
+`performSave` (before its `await window.settings.save(...)`) and cleared in
+its `finally`, however the save ends — success, a rejected field, or a
+thrown error. `addPlugin`, `removePlugin`, and `acceptPluginUpdate` all
+refuse outright while it is true, the same way a second `performSave` call
+already refused itself only through the Save button's own `disabled`. Each
+row's Remove and "Use it" buttons are rendered `disabled` for the same
+duration (`renderPluginRows` now reads `saveInFlight`), and the Add button's
+disabled state is centralized in `refreshAddDisabled()` so it correctly
+reflects *either* reason it can be disabled (`addingPlugin` or
+`saveInFlight`) rather than one clobbering the other.
+
+### The resolved-version question
+
+Reviewer also flagged: `acceptPluginUpdate` set the row's version to the
+*requested* string, but main resolves and persists a concrete version that
+the old `SaveResult` type never returned — the prior reload path incidentally
+read disk truth for this; the in-place update traded that away without
+replacing it.
+
+**Chose: return the resolved version.** Rather than document an assumption
+that the requested and resolved strings always match (true in every path
+today, since the offer pushed to the renderer is already a concrete version,
+not a dist-tag — but coupled across three files with nothing enforcing it),
+`acceptPluginUpdate`'s success result now carries the concrete `version`
+`installPlugin` actually resolved and wrote. Added `AcceptPluginUpdateResult`
+(distinct from `SaveResult`, which `save` still uses unchanged) in
+`settings-ipc.ts`; `performAcceptPluginUpdate` returns `{ ok: true, warnings,
+version: concrete }`; the renderer sets the row from `result.version`, never
+from the `version` it sent. A new `settings-ipc.spec.ts` test drives
+`installPlugin` to resolve a *different* version than requested and asserts
+the result and the written config both carry the resolved one, not the
+requested one — proving this isn't just a passthrough that happens to work
+when they coincide.
+
+### New tests
+
+Two in `settings.spec.ts`, under `plugins > gated while a save is in flight`:
+an Add attempted mid-save is refused (Add button disabled, no
+`validatePlugin` call, no row) and works normally once the save finishes; a
+Remove attempted mid-save is refused (row count unchanged) and the row is
+still there — not because the reload happened to keep it, but because Remove
+was never allowed to touch it. One in `settings-ipc.spec.ts` for the
+resolved-vs-requested version, described above.
+
+### Non-vacuity
+
+Reverted the gating: removed the `saveInFlight = true` block `performSave`
+sets before its own save call (leaving the guards in `addPlugin` /
+`removePlugin` intact but permanently unarmed, since the flag they check
+never becomes true). Ran
+`npx vitest run src/renderer/settings.spec.ts -t "mid-save"`: both new tests
+failed — the Add test on `expected false to be true` (the Add button was not
+disabled), the Remove test on `expected [...] to have a length of 2 but got
+1` (the row was actually removed). Restored; full suite green again.
+
+### Verification
+
+- `npm run build` — clean.
+- `npx vitest run` — 321 passed (was 318; +3: two gating tests, one
+  resolved-version test).
+- `npm run pack && npm run test:smoke` — packaged and the smoke test passed
+  genuinely, with `~/.dsh` absent throughout.
+- `grep -rn "/Users/" src/ tests/` — empty.
+- `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain` —
+  empty throughout.

@@ -430,10 +430,27 @@ describe('acceptPluginUpdate', () => {
 
     const result = await createSettingsHandlers(d).acceptPluginUpdate(DECK, '0.3.0')
 
-    expect(result).toEqual({ ok: true, warnings: [] })
+    expect(result).toEqual({ ok: true, warnings: [], version: '0.3.0' })
     expect(installPlugin).toHaveBeenCalledWith(DECK, '0.3.0', undefined, expect.any(Function))
     expect(d.writeConfig).toHaveBeenCalledWith(
       expect.objectContaining({ plugins: [{ spec: DECK, version: '0.3.0' }] }),
+    )
+  })
+
+  it("returns the resolved version, not the requested one, when they differ", async () => {
+    // `installPlugin` resolves its `version` argument through the same
+    // `resolveVersion` a fresh `npm view` call always is — a real mismatch
+    // is unlikely for an already-concrete version, but the caller must never
+    // assume it: this is what lets `settings.js` show the row what actually
+    // got written instead of echoing back what it asked for.
+    const installPlugin = vi.fn(async () => '0.3.1')
+    const d = deps({ installPlugin, readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }) })
+
+    const result = await createSettingsHandlers(d).acceptPluginUpdate(DECK, '0.3.0')
+
+    expect(result).toEqual({ ok: true, warnings: [], version: '0.3.1' })
+    expect(d.writeConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ plugins: [{ spec: DECK, version: '0.3.1' }] }),
     )
   })
 

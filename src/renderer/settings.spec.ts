@@ -322,7 +322,10 @@ async function load(
     save: vi.fn(onSave),
     acceptPluginUpdate: vi.fn(async (pkg: string, version: string) => {
       acceptPluginUpdateCalls.push([pkg, version])
-      return (onAcceptPluginUpdate ?? (async () => ({ ok: true, warnings: [] })))(pkg, version)
+      return (onAcceptPluginUpdate ?? (async (_pkg, acceptedVersion) => ({ ok: true, warnings: [], version: acceptedVersion })))(
+        pkg,
+        version,
+      )
     }),
     validatePlugin: vi.fn(async (spec: string, existingPackages: string[]) => {
       validatePluginCalls.push([spec, existingPackages])
@@ -844,6 +847,80 @@ describe('plugins', () => {
       expect(rows).toHaveLength(2)
       expect(rows.some((row) => row.includes(DECK) && row.includes('not installed yet'))).toBe(true)
       expect(rows.find((row) => row.includes(HOOKS))).toContain('v0.2.0 installed')
+    })
+  })
+
+  describe('gated while a save is in flight', () => {
+    /**
+     * A `save` bridge call that never resolves on its own, so a test can
+     * drive Save into its in-flight state, probe it, and only then let it
+     * finish by calling the returned resolver.
+     * @returns the bridge function to pass as `onSave`, and a function that
+     *   resolves the save it produced.
+     */
+    function deferredSave(): {
+      save: SaveOutcome
+      resolve: (outcome: { ok: true; warnings: string[] }) => void
+    } {
+      let resolve: (outcome: { ok: true; warnings: string[] }) => void = () => {
+        throw new Error('resolve called before save() was invoked')
+      }
+      const save: SaveOutcome = () =>
+        new Promise((res) => {
+          resolve = res as (outcome: { ok: true; warnings: string[] }) => void
+        })
+      return { save, resolve: (outcome) => resolve(outcome) }
+    }
+
+    it('an Add attempted mid-save is refused, not silently lost once the save reloads the list', async () => {
+      const { save, resolve } = deferredSave()
+      const renderer = await load(save)
+
+      const savePromise = renderer.save()
+      // Let `performSave` run up to its own `await window.settings.save(...)`.
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(renderer.elements.get('add-plugin')?.disabled).toBe(true)
+
+      await renderer.addPlugin(DECK)
+      expect(renderer.renderedPluginRows()).toEqual([])
+      expect(renderer.validatePluginCalls).toEqual([])
+
+      resolve({ ok: true, warnings: [] })
+      await savePromise
+
+      // Add works normally again once the save has finished, and nothing
+      // from the refused attempt was silently kept either.
+      expect(renderer.elements.get('add-plugin')?.disabled).toBe(false)
+      expect(renderer.renderedPluginRows()).toEqual([])
+      await renderer.addPlugin(DECK)
+      expect(renderer.renderedPluginRows()).toEqual([expect.stringContaining(DECK)])
+    })
+
+    it('a Remove attempted mid-save is refused, not silently undone once the save reloads the list', async () => {
+      const { save, resolve } = deferredSave()
+      const renderer = await load(save, READ_WITH_PLUGINS)
+      expect(renderer.renderedPluginRows()).toHaveLength(2)
+
+      const savePromise = renderer.save()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      renderer.removePlugin(DECK)
+      // Refused outright: the row is still there, not silently queued.
+      expect(renderer.renderedPluginRows()).toHaveLength(2)
+
+      resolve({ ok: true, warnings: [] })
+      await savePromise
+
+      // The reload re-reads the same two entries `READ_WITH_PLUGINS` always
+      // reports; DECK's row surviving here is not "the reload happened to
+      // keep it" — the point is that Remove was never allowed to touch it
+      // while the save was in flight, so there was nothing to lose.
+      const rows = renderer.renderedPluginRows()
+      expect(rows).toHaveLength(2)
+      expect(rows.some((row) => row.includes(DECK))).toBe(true)
+      expect(rows.some((row) => row.includes(HOOKS))).toBe(true)
     })
   })
 })

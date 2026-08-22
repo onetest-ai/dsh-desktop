@@ -71,6 +71,20 @@ let pluginRows = []
 // first, leaving one update unreachable until Settings is reopened.
 let pluginUpdates = new Map()
 
+// True for the duration of a `performSave` call. `performSave` reloads the
+// whole plugin list from disk on success (see its own comment), which is
+// only actually safe when nothing local can diverge from disk while it
+// awaits — so Add, Remove, and "Use it" are all refused while this is true,
+// the same way Save disables itself against a second Save. Without this, an
+// Add or Remove landing during the minutes a managed install can take is
+// silently lost or resurrected once the reload overwrites `pluginRows`.
+let saveInFlight = false
+
+/** Keep the Add button's disabled state in sync with both reasons it can be disabled. */
+function refreshAddDisabled() {
+  el('add-plugin').disabled = addingPlugin || saveInFlight
+}
+
 function showKind() {
   const managed = kindOf() === 'managed'
   el('local-fields').hidden = managed
@@ -181,6 +195,7 @@ function renderPluginRows() {
       use.type = 'button'
       use.className = 'plugin-update-use'
       use.textContent = 'Use it'
+      use.disabled = saveInFlight
       use.addEventListener('click', () => acceptPluginUpdate(plugin.package, latest))
       actions.append(use)
     }
@@ -190,6 +205,7 @@ function renderPluginRows() {
     remove.className = 'plugin-remove'
     remove.setAttribute('aria-label', `Remove ${plugin.package}`)
     remove.textContent = 'Remove'
+    remove.disabled = saveInFlight
     remove.addEventListener('click', () => removePlugin(plugin.package))
     actions.append(remove)
 
@@ -212,9 +228,9 @@ let addingPlugin = false
  * here, in main over `settings.validatePlugin`, not deferred to Save.
  */
 async function addPlugin() {
-  if (addingPlugin) return
+  if (addingPlugin || saveInFlight) return
   addingPlugin = true
-  el('add-plugin').disabled = true
+  refreshAddDisabled()
   try {
     const input = el('plugin-spec')
     const errorNode = el('error-plugin-spec')
@@ -237,15 +253,18 @@ async function addPlugin() {
     renderPluginRows()
   } finally {
     addingPlugin = false
-    el('add-plugin').disabled = false
+    refreshAddDisabled()
   }
 }
 
 /**
  * Remove exactly the row naming `pkg`, and any pending update offered for it.
+ * A no-op while `saveInFlight`, matching the row's own Remove button, which
+ * is rendered disabled for the same reason at the same time.
  * @param {string} pkg - the package name of the row to remove.
  */
 function removePlugin(pkg) {
+  if (saveInFlight) return
   pluginRows = pluginRows.filter((plugin) => plugin.package !== pkg)
   pluginUpdates.delete(pkg)
   renderPluginRows()
@@ -263,10 +282,19 @@ function removePlugin(pkg) {
  * not yet saved (a `load()` re-reads *disk*, which still has the old list).
  * This call only ever changes the one entry named by `pkg`, so it is the only
  * row that needs to change.
+ *
+ * The row is set to `result.version` — the concrete version main actually
+ * resolved and wrote — never to the `version` argument: main's own
+ * `resolveVersion` treats that argument as a spec to re-resolve, not a
+ * final answer, so trusting it here would show the row something that might
+ * not be what got installed. A no-op while `saveInFlight`, matching the
+ * row's own "Use it" button, which is rendered disabled for the same reason
+ * at the same time.
  * @param {string} pkg - the package name.
- * @param {string} version - the version to install and store.
+ * @param {string} version - the version to request installing.
  */
 async function acceptPluginUpdate(pkg, version) {
+  if (saveInFlight) return
   clearStatus()
   clearProgress()
   el('save').disabled = true
@@ -276,7 +304,7 @@ async function acceptPluginUpdate(pkg, version) {
     if (result.ok) {
       pluginUpdates.delete(pkg)
       const plugin = pluginRows.find((candidate) => candidate.package === pkg)
-      if (plugin !== undefined) plugin.version = version
+      if (plugin !== undefined) plugin.version = result.version
       status.textContent =
         result.warnings.length === 0 ? 'Settings saved.' : ['Settings saved.', ...result.warnings].join(' ')
       if (result.warnings.length > 0) status.classList.add('status-warning')
@@ -315,6 +343,13 @@ async function performSave() {
   hideUpdateHint()
   for (const tab of TABS) markTabError(tab, false)
   el('save').disabled = true
+  // Add, Remove, and "Use it" are all refused for the duration (see
+  // `saveInFlight`'s own comment) — that refusal is what makes the reload
+  // below actually safe, rather than merely claimed to be: nothing local can
+  // diverge from disk while this call is in flight.
+  saveInFlight = true
+  refreshAddDisabled()
+  renderPluginRows()
   try {
     const result = await window.settings.save(collect())
     if (result.ok) {
@@ -322,8 +357,7 @@ async function performSave() {
       // `save` reports only ok/warnings, never the resolved config — so the
       // only way the rows on screen learn the versions this save just
       // installed (turning "not installed yet" into "vX installed") is a
-      // fresh read. Safe here specifically because nothing is pending: this
-      // read reflects exactly the rows that were just submitted.
+      // fresh read.
       await load()
       // `load()` touches `status` only on its own failure; a save that just
       // succeeded must keep saying so regardless, so the success message is
@@ -380,6 +414,12 @@ async function performSave() {
     status.classList.add('status-failed')
   } finally {
     el('save').disabled = false
+    // Re-enabled unconditionally, however the save ended — success, a
+    // rejected field, or a thrown error — so a failed save never leaves Add,
+    // Remove, and "Use it" stuck disabled.
+    saveInFlight = false
+    refreshAddDisabled()
+    renderPluginRows()
   }
 }
 

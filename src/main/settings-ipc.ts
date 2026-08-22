@@ -73,6 +73,21 @@ export const SAVE_IN_PROGRESS = 'A save is already running; wait for it to finis
 /** Outcome of a save attempt. `warnings` carries non-blocking problems, such as a rejected hotkey. */
 export type SaveResult = { ok: true; warnings: string[] } | { ok: false; errors: FieldErrors }
 
+/**
+ * Outcome of accepting one plugin's offered update.
+ *
+ * On success, `version` is the concrete version `installPlugin` actually
+ * resolved and wrote to config — not assumed to equal the version the
+ * renderer requested. `resolveVersion` treats its input as a spec to
+ * re-resolve, not an already-final answer, so the two can differ if the
+ * registry moves between the update check and the accept; returning it
+ * explicitly is what lets the row on screen show what was actually
+ * installed rather than an assumption about the wire round-trip.
+ */
+export type AcceptPluginUpdateResult =
+  | { ok: true; warnings: string[]; version: string }
+  | { ok: false; errors: FieldErrors }
+
 /** The operations the settings renderer can invoke. */
 export interface SettingsHandlers {
   /**
@@ -113,9 +128,9 @@ export interface SettingsHandlers {
    * @param version - the concrete version to install and store, from the
    *   update-available push this answers.
    * @param onProgress - called with each line of `npm install` output.
-   * @returns the outcome, in the same shape as `save`.
+   * @returns the outcome; on success, carries the concrete version actually installed and stored.
    */
-  acceptPluginUpdate(pkg: string, version: string, onProgress?: (line: string) => void): Promise<SaveResult>
+  acceptPluginUpdate(pkg: string, version: string, onProgress?: (line: string) => void): Promise<AcceptPluginUpdateResult>
   /**
    * Validate one freshly typed plugin spec for the Settings window's
    * row-based Add control, synchronously and without installing anything.
@@ -293,7 +308,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     pkg: string,
     version: string,
     onProgress?: (line: string) => void,
-  ): Promise<SaveResult> {
+  ): Promise<AcceptPluginUpdateResult> {
     if (deps.isQuitting()) {
       return { ok: false, errors: { kind: 'The app is shutting down; settings were not saved.' } }
     }
@@ -332,7 +347,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     const config: DesktopConfig = { ...previous, plugins: updatedEntries }
     deps.writeConfig(config)
     const warnings = await deps.apply(previous, config)
-    return { ok: true, warnings }
+    return { ok: true, warnings, version: concrete }
   }
 
   return {
