@@ -24,10 +24,20 @@ const LABELS: Record<ServerStatus, string> = {
   failed: 'Harness: failed',
 }
 
-const ICONS: Record<ServerStatus, string> = {
-  starting: 'tray-starting.png',
-  running: 'tray-running.png',
-  failed: 'tray-failed.png',
+/**
+ * Menu-bar art per status, as 16pt images with `@2x` companions beside them
+ * (`nativeImage` picks the retina file by that naming convention).
+ *
+ * The DeepSeek mark carries fine internal detail that turns to mush at 16pt
+ * once anything is layered over it, so a failed harness is distinguished by
+ * colour rather than by a badge or slash: `Template` art is recoloured by
+ * macOS to match the menu bar, while the failed icon is deliberately NOT a
+ * template so its red survives.
+ */
+const ICONS: Record<ServerStatus, { file: string; template: boolean }> = {
+  starting: { file: 'tray-startingTemplate.png', template: true },
+  running: { file: 'tray-runningTemplate.png', template: true },
+  failed: { file: 'tray-failed.png', template: false },
 }
 
 /**
@@ -63,7 +73,8 @@ export function createTray(actions: TrayActions): TrayController {
 }
 
 function icon(status: ServerStatus) {
-  const image = nativeImage.createFromPath(join(ASSETS, ICONS[status]))
-  image.setTemplateImage(true)
+  const { file, template } = ICONS[status]
+  const image = nativeImage.createFromPath(join(ASSETS, file))
+  image.setTemplateImage(template)
   return image
 }

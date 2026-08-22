@@ -1,5 +1,7 @@
+import { mkdtempSync } from 'node:fs'
 import { expect, test, _electron as electron } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const APP_DIR = join(__dirname, '..', 'release', 'mac-arm64', 'DeepSeek Harness.app')
@@ -30,7 +32,15 @@ function findLeakedChildren(marker: string): string {
 }
 
 test('launches, renders the harness UI, and leaves no orphans', async () => {
-  const app = await electron.launch({ executablePath: APP })
+  // Its own user-data directory, for two reasons: Electron's single-instance
+  // lock is keyed on that path, so without this the test fails outright
+  // whenever the developer has the app open; and the runtime files the app
+  // generates land there, keeping the real installation untouched.
+  const userDataDir = mkdtempSync(join(tmpdir(), 'dsh-desktop-smoke-'))
+  const app = await electron.launch({
+    executablePath: APP,
+    args: [`--user-data-dir=${userDataDir}`],
+  })
   let marker: string
   try {
     const userData: string = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'))
