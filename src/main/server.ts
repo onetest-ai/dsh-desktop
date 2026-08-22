@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { delimiter, dirname } from 'node:path'
 import type { DesktopConfig } from './config'
 import { ConfigurationError } from './configuration-error'
 import { spawnFor, type SpawnSpec } from './harness-source'
@@ -63,18 +64,49 @@ export function resolveBinary(configured: string | undefined, name: string, env:
 }
 
 /**
+ * Extend the child's `PATH` with a resolved launcher's own directory.
+ *
+ * Under nvm, Homebrew, Volta, and similar layouts, an installed `pnpm`/`npx`
+ * is itself a script with a `#!/usr/bin/env node` (or similar) shebang, and
+ * `node` normally sits beside it in the same directory. An explicit
+ * `pnpmPath`/`npxPath` fixes *finding* the launcher under a Finder-minimal
+ * PATH, but the shebang interpreter lookup happens again, one level down, in
+ * the *spawned child's* environment — so without this, a correctly
+ * configured absolute path still fails to spawn, just with a different
+ * error (`env: node: No such file or directory`) than the one `resolveBinary`
+ * guards against.
+ *
+ * A bare name (no directory component) came from `PATH` already resolving
+ * it, so nothing needs adding — this returns `undefined` and the caller
+ * spawns with the inherited environment unchanged.
+ * @param command - the resolved launcher, as returned by `resolveBinary` (absolute path or bare name).
+ * @param env - the app's own environment; never mutated, only read.
+ * @returns a copy of `env` with `command`'s directory prepended to `PATH`, or `undefined` for a bare name.
+ */
+function envWithLauncherDir(command: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
+  const dir = dirname(command)
+  if (dir === '.') return undefined
+  return { ...env, PATH: `${dir}${delimiter}${env.PATH ?? ''}` }
+}
+
+/**
  * Build the spawn specification for the configured harness source.
  *
  * Each launcher is passed as a thunk rather than a resolved string, so
  * `spawnFor` only resolves the binary the chosen source actually needs — a
  * local source must never fail to start because `npxPath` cannot be
  * resolved, and vice versa.
+ *
+ * When the resolved launcher is an absolute path, the spawn spec's `PATH`
+ * also gets that launcher's own directory prepended (see
+ * `envWithLauncherDir`), so the shebang interpreter a script-based `pnpm`/
+ * `npx` needs is findable too.
  * @param config - the desktop settings.
  * @param patchFile - absolute path to this project's cordis patch overlay.
  * @returns the command, arguments, and working directory.
  */
 export function dshWebCommand(config: DesktopConfig, patchFile: string): SpawnSpec {
-  return spawnFor(
+  const spec = spawnFor(
     config.harness,
     {
       pnpm: () => resolveBinary(config.pnpmPath, 'pnpm', process.env),
@@ -82,6 +114,10 @@ export function dshWebCommand(config: DesktopConfig, patchFile: string): SpawnSp
     },
     patchFile,
   )
+  // Only the process about to be spawned gets the extended PATH; the app's
+  // own process.env is never touched.
+  const env = envWithLauncherDir(spec.command, process.env)
+  return env === undefined ? spec : { ...spec, env }
 }
 
 /**

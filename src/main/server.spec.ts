@@ -36,6 +36,11 @@ describe('dshWebCommand', () => {
     // included, so the real CLI invocation goes through `--profile web` instead.
     expect(spec.args).toEqual(['dsh', '--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open'])
     expect(spec.cwd).toBe('/tmp/harness')
+    // An absolute pnpmPath is typically a script needing `node` on PATH (see
+    // `envWithLauncherDir`); its own directory must be searched first, with
+    // the inherited PATH still honoured afterward.
+    expect(spec.env?.PATH).toMatch(/^\/usr\/local\/bin:/)
+    expect(spec.env?.PATH).toContain(process.env.PATH ?? '')
   })
 
   it('runs npx against the published package for an npx source', () => {
@@ -53,6 +58,23 @@ describe('dshWebCommand', () => {
       '-y', '@deepseek-ai/dsh@latest', '--', '--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open',
     ])
     expect(spec.cwd).toBe('/tmp/ws')
+    expect(spec.env?.PATH).toMatch(/^\/usr\/local\/bin:/)
+    expect(spec.env?.PATH).toContain(process.env.PATH ?? '')
+  })
+
+  it('leaves the environment alone for a bare-name launcher resolved from PATH', () => {
+    const spec = dshWebCommand(
+      {
+        harness: { kind: 'local', repo: '/tmp/harness' },
+        notifyPort: 1,
+        hotkey: 'x',
+        // No pnpmPath: resolveBinary falls back to the bare name from PATH,
+        // which needs no directory injected.
+      },
+      '/tmp/desktop.patch.yml',
+    )
+    expect(spec.command).toBe('pnpm')
+    expect(spec.env).toBeUndefined()
   })
 
   describe('with a Finder-minimal PATH', () => {

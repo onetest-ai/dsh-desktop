@@ -74,6 +74,8 @@ For npx mode, `harness` takes this form instead:
 
 `pnpmPath` and `npxPath` are optional. Set them when a launch from Finder cannot find the binary — a Finder launch inherits a minimal `PATH` with no Homebrew or Corepack shim, so a packaged app often needs the absolute path from `which pnpm`. Running from a terminal usually does not.
 
+Setting the path is enough on its own: under nvm, Homebrew, Volta, and similar layouts, an installed `pnpm`/`npx` is itself a script that needs `node` on `PATH` to run (a `#!/usr/bin/env node` shebang), and a Finder launch has no `node` on `PATH` either. The app handles this for you — when a launcher resolves to an absolute path, it prepends that path's own directory to the *spawned harness's* `PATH` (not the app's), since `node` normally lives right beside `pnpm`/`npx` in the same directory. You do not need to add anything to your own shell `PATH` or otherwise make `node` reachable for this to work.
+
 ## Tray, shortcut, and notifications
 
 The tray shows harness status and offers show/hide, restart, Settings, and quit. The default shortcut is **⌘⇧D**.
