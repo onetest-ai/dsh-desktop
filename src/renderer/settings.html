@@ -6,11 +6,11 @@
   <h1>DeepSeek Harness</h1>
   <p id="intro" class="hint"></p>
 
-  <fieldset>
-    <legend>Where the harness runs from</legend>
+  <p class="group-label" id="source-label">Where the harness runs from</p>
+  <section class="group choices" role="radiogroup" aria-labelledby="source-label">
     <label><input type="radio" name="kind" value="local" checked> A local checkout</label>
     <label><input type="radio" name="kind" value="npx"> The published package (npx)</label>
-  </fieldset>
+  </section>
 
   <section id="local-fields" class="group">
     <label for="repo">Checkout folder</label>

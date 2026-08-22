@@ -77,7 +77,6 @@ h1 {
 }
 
 /* Grouped rows, the way the harness groups settings into cards. */
-fieldset,
 section.group {
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -88,8 +87,11 @@ section.group {
   gap: 10px;
 }
 
-legend {
-  padding: 0 6px;
+/* The caption sits above its card rather than inside it: a native fieldset
+   legend cuts a notch through the card's top border. Grouping for assistive
+   tech comes from role="radiogroup" + aria-labelledby instead. */
+.group-label {
+  margin: 0 0 -10px;
   color: var(--label-secondary);
   font-size: 12px;
   line-height: 18px;
@@ -97,7 +99,7 @@ legend {
   letter-spacing: 0.06em;
 }
 
-fieldset label {
+.choices label {
   display: flex;
   align-items: center;
   gap: 8px;
