@@ -31,37 +31,45 @@ function findLeakedChildren(marker: string): string {
 
 test('launches, renders the harness UI, and leaves no orphans', async () => {
   const app = await electron.launch({ executablePath: APP })
-  const userData: string = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'))
-  const marker = join(userData, 'runtime', 'desktop.patch.yml')
-  const window = await app.firstWindow()
-  await window.waitForLoadState('domcontentloaded', { timeout: 90_000 })
-  expect(window.url()).toMatch(/^http:\/\/127\.0\.0\.1:\d+/)
+  let marker: string
+  try {
+    const userData: string = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'))
+    marker = join(userData, 'runtime', 'desktop.patch.yml')
+    const window = await app.firstWindow()
+    await window.waitForLoadState('domcontentloaded', { timeout: 90_000 })
+    expect(window.url()).toMatch(/^http:\/\/127\.0\.0\.1:\d+/)
 
-  // Asked of the Electron main process, whose fs understands app.asar.
-  // getAppPath() already resolves to the app.asar path on this build (verified
-  // by printing it during development), so it is used directly rather than
-  // the dirname(...)/app.asar wrapping the brief describes as a fallback.
-  const appPath: string = await app.evaluate(({ app: electronApp }) => electronApp.getAppPath())
-  // The whole point of this check is reading through app.asar rather than a
-  // plain directory; assert that assumption explicitly so a future Electron
-  // version, platform, or unpacked build fails loudly here instead of
-  // silently checking the wrong location (and reporting a false pass).
-  expect(appPath, `expected getAppPath() to resolve inside app.asar, got: ${appPath}`).toMatch(
-    /app\.asar$/,
-  )
+    // Asked of the Electron main process, whose fs understands app.asar.
+    // getAppPath() already resolves to the app.asar path on this build (verified
+    // by printing it during development), so it is used directly rather than
+    // the dirname(...)/app.asar wrapping the brief describes as a fallback.
+    const appPath: string = await app.evaluate(({ app: electronApp }) => electronApp.getAppPath())
+    // The whole point of this check is reading through app.asar rather than a
+    // plain directory; assert that assumption explicitly so a future Electron
+    // version, platform, or unpacked build fails loudly here instead of
+    // silently checking the wrong location (and reporting a false pass).
+    expect(appPath, `expected getAppPath() to resolve inside app.asar, got: ${appPath}`).toMatch(
+      /app\.asar$/,
+    )
 
-  const shipped = await app.evaluate(({ app: electronApp }) => {
-    const { existsSync } = process.getBuiltinModule('node:fs')
-    const { join } = process.getBuiltinModule('node:path')
-    const dist = join(electronApp.getAppPath(), 'dist')
-    return {
-      preload: existsSync(join(dist, 'preload', 'settings.js')),
-      renderer: existsSync(join(dist, 'renderer', 'settings.html')),
-    }
-  })
-  expect(shipped).toEqual({ preload: true, renderer: true })
-
-  await app.close()
+    const shipped = await app.evaluate(({ app: electronApp }) => {
+      const { existsSync } = process.getBuiltinModule('node:fs')
+      const { join } = process.getBuiltinModule('node:path')
+      const dist = join(electronApp.getAppPath(), 'dist')
+      return {
+        preload: existsSync(join(dist, 'preload', 'settings.js')),
+        renderer: existsSync(join(dist, 'renderer', 'settings.html')),
+      }
+    })
+    expect(shipped).toEqual({ preload: true, renderer: true })
+  } finally {
+    // Every assertion above sits between launch and close, and one of them —
+    // the app.asar path check — is written to fail on a future Electron or
+    // platform. Without this the failing run would leave the app, its harness
+    // child, and the node-pty grandchildren alive: exactly the leak the final
+    // assertion exists to catch.
+    await app.close()
+  }
   await new Promise((r) => setTimeout(r, 2000))
 
   expect(findLeakedChildren(marker)).toBe('')
