@@ -145,4 +145,46 @@ describe('loadConfig', () => {
     writeConfig(file, config)
     expect(loadConfig(file)).toEqual({ configured: true, config })
   })
+
+  describe('plugins', () => {
+    it('accepts a well-shaped floating and pinned entry', () => {
+      const file = writeConfigFile(
+        JSON.stringify({
+          harness: { kind: 'local', repo: '/tmp/harness' },
+          plugins: [{ spec: '@onetest/dsh-deck' }, { spec: '@onetest/other@0.2.1', version: '0.2.1' }],
+        }),
+      )
+      const result = loadConfig(file)
+      expect(result.configured).toBe(true)
+      expect(result.configured && result.config.plugins).toEqual([
+        { spec: '@onetest/dsh-deck' },
+        { spec: '@onetest/other@0.2.1', version: '0.2.1' },
+      ])
+    })
+
+    it('rejects a hand-edited spec shaped like a path traversal', () => {
+      // The Settings form can never produce this: `parsePluginsField`
+      // rejects it before it is ever written. A hand-edited `desktop.json`
+      // has no such gate, and an unvalidated spec here reaches
+      // `packageDirIn`'s raw `join(..., ...pkg.split('/'))` and lands in the
+      // generated overlay's import.
+      const file = writeConfigFile(
+        JSON.stringify({
+          harness: { kind: 'local', repo: '/tmp/harness' },
+          plugins: [{ spec: '../../etc' }],
+        }),
+      )
+      expect(() => loadConfig(file)).toThrow(/plugin spec/)
+    })
+
+    it('rejects a hand-edited pinned entry with a traversal-shaped version', () => {
+      const file = writeConfigFile(
+        JSON.stringify({
+          harness: { kind: 'local', repo: '/tmp/harness' },
+          plugins: [{ spec: '@onetest/dsh-deck@../../etc' }],
+        }),
+      )
+      expect(() => loadConfig(file)).toThrow(/plugin spec/)
+    })
+  })
 })

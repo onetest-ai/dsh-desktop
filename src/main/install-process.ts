@@ -29,7 +29,9 @@ export interface InstallRunner {
    */
   run(command: string, args: string[], options: RunOptions): Promise<RunResult>
   /**
-   * Terminate every run still in flight, process group included.
+   * Terminate every run still in flight, process group included, and refuse
+   * every `run()` call from here on — this runner never resumes accepting
+   * work after `stopAll`, so it is a shutdown signal, not a pause.
    * @returns a promise that settles once none of them is left running.
    */
   stopAll(): Promise<void>
@@ -48,9 +50,22 @@ export interface InstallRunner {
  */
 export function createInstallRunner(): InstallRunner {
   const running = new Set<ChildProcess>()
+  // Set once by `stopAll` and never cleared: quitting is a one-way trip, and
+  // a `run()` call arriving afterward — the settings save's plugin-install
+  // loop keeps going unless it separately checks `isQuitting()` between every
+  // entry — must never spawn a detached `npm` that nothing will ever reap
+  // again. The check and the `spawn()` call below it are both synchronous,
+  // with no `await` between them, so no call can observe `stopped` as false
+  // here and then have `stopAll` flip it before its own `spawn()` runs.
+  let stopped = false
 
   return {
     run(command: string, args: string[], options: RunOptions): Promise<RunResult> {
+      if (stopped) {
+        return Promise.reject(
+          new Error(`dsh-desktop: ${command} was not started; the app is shutting down.`),
+        )
+      }
       return new Promise<RunResult>((resolve, reject) => {
         const proc = spawn(command, args, {
           cwd: options.cwd,
@@ -115,6 +130,7 @@ export function createInstallRunner(): InstallRunner {
     },
 
     async stopAll(): Promise<void> {
+      stopped = true
       const children = [...running]
       running.clear()
       await Promise.all(children.map((proc) => stopGroup(proc)))

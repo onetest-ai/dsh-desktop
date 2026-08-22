@@ -109,6 +109,29 @@ describe('stopAll', () => {
     expect(result).toEqual({ code: 0, stdout: 'done\n', stderr: '' })
     await expect(runner.stopAll()).resolves.toBeUndefined()
   })
+
+  it('refuses every run() from then on, so nothing spawned afterward is ever left unreaped', async () => {
+    // This is the guard `settings-ipc.ts`'s plugin-install loop relies on: a
+    // quit's `stopAll()` must not just kill what is already running, it must
+    // make every later `run()` call in the same process a no-op, or a loop
+    // unaware that quitting started midway would keep spawning fresh
+    // `npm` trees nothing ever reaps again. Proven against a real spawn, not
+    // a mock: the process-count assertion below would not move if `run()`
+    // silently still spawned and only synchronously "looked" refused.
+    const runner = createInstallRunner()
+    await runner.stopAll()
+
+    const before = started.length
+    await expect(runner.run(process.execPath, ['-e', LONG_RUNNING], {})).rejects.toThrow(
+      /was not started; the app is shutting down/,
+    )
+
+    // Real proof nothing spawned: give a real child every chance to report
+    // its pid (it does so within milliseconds when it actually starts), then
+    // confirm none arrived.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(started.length).toBe(before)
+  })
 })
 
 describe('timeoutMs', () => {

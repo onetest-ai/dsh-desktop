@@ -94,6 +94,21 @@ export interface SettingsHandlers {
    * @returns the save outcome.
    */
   save(form: SettingsForm, onProgress?: (line: string) => void): Promise<SaveResult>
+  /**
+   * Move one already-configured floating plugin entry to a specific,
+   * explicitly accepted version, without pinning it: the entry's `spec`
+   * stays exactly what it was, so it keeps being offered future updates the
+   * same as before. Serialized with `save` through the same lock — this
+   * still installs and writes config, so two of these (or one of these and a
+   * `save`) running at once would race the same two hazards `save`'s own
+   * lock exists to prevent.
+   * @param pkg - the package name (not the raw spec) naming which entry to update.
+   * @param version - the concrete version to install and store, from the
+   *   update-available push this answers.
+   * @param onProgress - called with each line of `npm install` output.
+   * @returns the outcome, in the same shape as `save`.
+   */
+  acceptPluginUpdate(pkg: string, version: string, onProgress?: (line: string) => void): Promise<SaveResult>
 }
 
 /**
@@ -122,6 +137,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
    * while a managed install was applied — dropping the user's intent and
    * removing the very cue that would make them retry.
    */
+  // Shared by `save` and `acceptPluginUpdate`: both install and write config, so either one running blocks the other the same way it blocks a second of itself.
   let saving = false
 
   /**
@@ -153,6 +169,17 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     const warnings: string[] = []
     const resolved: PluginEntry[] = []
     for (const entry of entries) {
+      // Checked before every entry, not just once before the loop starts: a
+      // quit can land between any two entries, and each `deps.installPlugin`
+      // call spawns a detached `npm` that only `shutdown`'s own
+      // `installs.stopAll()` — called once, before this loop could possibly
+      // still be running — would ever reap. Without this check the loop
+      // would keep spawning fresh, never-reaped installs behind that reap's
+      // back for as long as entries remain. `installPlugin`'s own runner
+      // additionally refuses to spawn at all once stopped (see
+      // `install-process.ts`), so a quit landing between this check and the
+      // spawn it guards is still caught there.
+      if (deps.isQuitting()) break
       const { package: pkg, pinnedVersion } = parseSpec(entry.spec)
       const prior = previous.find((candidate) => parseSpec(candidate.spec).package === pkg)
       const versionToInstall = pinnedVersion ?? prior?.version ?? 'latest'
@@ -231,6 +258,62 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     return { ok: true, warnings: [...pluginWarnings, ...applyWarnings] }
   }
 
+  /**
+   * Install `version` for `pkg`'s already-configured floating entry, then
+   * persist and apply just that one field change — `spec` is never touched,
+   * which is what keeps the entry floating rather than silently pinning it
+   * the way writing `pkg@version` into its spec would.
+   * @param pkg - the package name identifying which entry to update.
+   * @param version - the version to install and store.
+   * @param onProgress - receives `npm install` output lines.
+   * @returns the outcome.
+   */
+  async function performAcceptPluginUpdate(
+    pkg: string,
+    version: string,
+    onProgress?: (line: string) => void,
+  ): Promise<SaveResult> {
+    if (deps.isQuitting()) {
+      return { ok: false, errors: { kind: 'The app is shutting down; settings were not saved.' } }
+    }
+
+    const stored = deps.readConfig()
+    if (!stored.configured) {
+      return { ok: false, errors: { kind: `${pkg} is not configured yet.` } }
+    }
+    const previous = stored.config
+    const entries = previous.plugins ?? []
+    const index = entries.findIndex((entry) => parseSpec(entry.spec).package === pkg)
+    if (index === -1) {
+      return { ok: false, errors: { kind: `${pkg} is not a configured plugin.` } }
+    }
+    if (parseSpec(entries[index].spec).pinnedVersion !== undefined) {
+      // Never reachable through the update hint (pinned entries are never
+      // checked for updates), guarded anyway since this method is a distinct
+      // entry point a future caller could reach some other way.
+      return { ok: false, errors: { kind: `${pkg} is pinned; edit its line in Settings to change its version.` } }
+    }
+
+    let concrete: string
+    try {
+      concrete = await deps.installPlugin(pkg, version, previous.npmPath, onProgress ?? (() => {}))
+    } catch (error) {
+      return { ok: false, errors: { kind: `${pkg} could not be updated: ${(error as Error).message}` } }
+    }
+
+    // An install can run for minutes; a quit landing during it must not still
+    // land a write and an apply behind the quit's back once it finishes.
+    if (deps.isQuitting()) {
+      return { ok: false, errors: { kind: 'The app is shutting down; settings were not saved.' } }
+    }
+
+    const updatedEntries = entries.map((entry, i) => (i === index ? { spec: entry.spec, version: concrete } : entry))
+    const config: DesktopConfig = { ...previous, plugins: updatedEntries }
+    deps.writeConfig(config)
+    const warnings = await deps.apply(previous, config)
+    return { ok: true, warnings }
+  }
+
   return {
     read: (onUpdateAvailable, onPluginUpdateAvailable) => {
       const stored = deps.readConfig()
@@ -294,6 +377,17 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       saving = true
       try {
         return await performSave(form, onProgress)
+      } finally {
+        saving = false
+      }
+    },
+    acceptPluginUpdate: async (pkg, version, onProgress) => {
+      if (saving) {
+        return { ok: false, errors: { kind: SAVE_IN_PROGRESS } }
+      }
+      saving = true
+      try {
+        return await performAcceptPluginUpdate(pkg, version, onProgress)
       } finally {
         saving = false
       }

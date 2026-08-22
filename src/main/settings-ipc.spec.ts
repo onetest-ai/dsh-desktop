@@ -390,6 +390,119 @@ describe('save', () => {
       expect(result.ok).toBe(true)
       expect(d.apply).toHaveBeenCalled()
     })
+
+    it('stops installing further entries once quitting lands mid-loop, leaving them unattempted', async () => {
+      // Five entries queued; quitting flips true right after the first
+      // install call resolves. Without the per-entry `isQuitting()` check
+      // the loop would keep calling `installPlugin` for every remaining
+      // entry — each one a detached `npm` that `shutdown`'s single, already-
+      // finished `installs.stopAll()` would never reap again.
+      let quitting = false
+      const installPlugin = vi.fn(async (pkg: string) => {
+        quitting = true
+        return pkg === '@onetest/a' ? '1.0.0' : 'unreachable'
+      })
+      const d = deps({ installPlugin, isQuitting: () => quitting })
+
+      const result = await createSettingsHandlers(d).save(
+        form({ plugins: '@onetest/a\n@onetest/b\n@onetest/c\n@onetest/d\n@onetest/e' }),
+      )
+
+      expect(installPlugin).toHaveBeenCalledTimes(1)
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.errors.kind).toMatch(/quitting|shutting down/i)
+      expect(d.writeConfig).not.toHaveBeenCalled()
+      expect(d.apply).not.toHaveBeenCalled()
+    })
+  })
+})
+
+describe('acceptPluginUpdate', () => {
+  const CONFIG_WITH_FLOATING_DECK: DesktopConfig = { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }] }
+
+  it('installs the accepted version and stores it, keeping the entry\'s spec bare — still floating', async () => {
+    // This is the behavior "Use it" relies on: writing `pkg@version` into the
+    // spec is what pins an entry, so accepting an update must move `version`
+    // alone and leave `spec` exactly as it was, or the plugin would silently
+    // stop being offered any future update.
+    const installPlugin = vi.fn(async () => '0.3.0')
+    const d = deps({ installPlugin, readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }) })
+
+    const result = await createSettingsHandlers(d).acceptPluginUpdate(DECK, '0.3.0')
+
+    expect(result).toEqual({ ok: true, warnings: [] })
+    expect(installPlugin).toHaveBeenCalledWith(DECK, '0.3.0', undefined, expect.any(Function))
+    expect(d.writeConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ plugins: [{ spec: DECK, version: '0.3.0' }] }),
+    )
+  })
+
+  it('never rewrites spec to pkg@version, even though the concrete version resolved matches', async () => {
+    const installPlugin = vi.fn(async () => '0.3.0')
+    const d = deps({ installPlugin, readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }) })
+
+    await createSettingsHandlers(d).acceptPluginUpdate(DECK, '0.3.0')
+
+    const written = d.writeConfig.mock.calls[0][0] as DesktopConfig
+    const deck = written.plugins?.find((entry) => entry.spec.startsWith(DECK))
+    expect(deck?.spec).toBe(DECK)
+    expect(deck?.spec).not.toContain('@0.3.0')
+  })
+
+  it('refuses a pinned entry rather than reinstalling it', async () => {
+    const installPlugin = vi.fn(async () => '0.3.0')
+    const d = deps({
+      installPlugin,
+      readConfig: () => ({ configured: true, config: { ...STORED, plugins: [{ spec: `${DECK}@0.2.1`, version: '0.2.1' }] } }),
+    })
+
+    const result = await createSettingsHandlers(d).acceptPluginUpdate(DECK, '0.3.0')
+
+    expect(result.ok).toBe(false)
+    expect(installPlugin).not.toHaveBeenCalled()
+    expect(d.writeConfig).not.toHaveBeenCalled()
+  })
+
+  it('refuses an unknown package', async () => {
+    const d = deps({ readConfig: () => ({ configured: true, config: STORED }) })
+
+    const result = await createSettingsHandlers(d).acceptPluginUpdate(DECK, '0.3.0')
+
+    expect(result.ok).toBe(false)
+    expect(d.writeConfig).not.toHaveBeenCalled()
+  })
+
+  it('refuses while quitting, before installing anything', async () => {
+    const installPlugin = vi.fn(async () => '0.3.0')
+    const d = deps({
+      installPlugin,
+      isQuitting: () => true,
+      readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }),
+    })
+
+    const result = await createSettingsHandlers(d).acceptPluginUpdate(DECK, '0.3.0')
+
+    expect(result.ok).toBe(false)
+    expect(installPlugin).not.toHaveBeenCalled()
+  })
+
+  it('is serialized with save through the same lock', async () => {
+    let release: (version: string) => void = () => {}
+    const installPlugin = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          release = resolve
+        }),
+    )
+    const d = deps({ installPlugin, readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }) })
+    const handlers = createSettingsHandlers(d)
+
+    const first = handlers.acceptPluginUpdate(DECK, '0.3.0')
+    const second = await handlers.save(form())
+    release('0.3.0')
+    await first
+
+    expect(second).toEqual({ ok: false, errors: { kind: SAVE_IN_PROGRESS } })
   })
 })
 

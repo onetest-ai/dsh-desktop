@@ -79,6 +79,7 @@ function handlers(overrides: Partial<SettingsHandlers> = {}): SettingsHandlers {
     read: vi.fn(() => ({ configured: true, form: {} as never, plugins: [] })),
     pickFolder: vi.fn(async () => undefined),
     save: vi.fn(async () => ({ ok: true, warnings: [] })),
+    acceptPluginUpdate: vi.fn(async () => ({ ok: true, warnings: [] })),
     ...overrides,
   }
 }
@@ -153,6 +154,25 @@ describe('the save channel', () => {
     capturedOnProgress?.('a line after the window closed')
 
     expect(fake.sent.find((entry) => entry.payload === 'a line after the window closed')).toBeUndefined()
+  })
+})
+
+describe('the accept-plugin-update channel', () => {
+  it('forwards the package and version, and streams progress the same way save does', async () => {
+    const { openSettings } = await import('./settings-window')
+    const acceptPluginUpdate = vi.fn(async (_pkg: string, _version: string, onProgress?: (line: string) => void) => {
+      onProgress?.('added 3 packages')
+      return { ok: true, warnings: [] }
+    })
+    openSettings(handlers({ acceptPluginUpdate }), () => {})
+
+    const acceptHandler = fake.ipcHandlers.get('settings:accept-plugin-update')
+    const first = fake.sender('first')
+    const result = await acceptHandler?.(event(first), '@onetest/dsh-deck', '0.3.0')
+
+    expect(acceptPluginUpdate).toHaveBeenCalledWith('@onetest/dsh-deck', '0.3.0', expect.any(Function))
+    expect(result).toEqual({ ok: true, warnings: [] })
+    expect(fake.sent).toEqual([{ to: 'first', channel: 'settings:progress', payload: 'added 3 packages' }])
   })
 })
 

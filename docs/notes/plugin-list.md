@@ -161,3 +161,89 @@ then booted the real local harness checkout (`pnpm dsh --profile web --patch
 to run the packaged `npm run test:smoke`, which needs a real configured
 harness to reach a running URL; removed immediately after. It does not exist
 at the end of this work.
+
+## Review round 2: quit-mid-install, floating updates, and cleanup
+
+Six findings from review, all addressed.
+
+**1. CRITICAL — quitting mid-install leaked detached npm trees.** `installPlugins`'
+loop in `settings-ipc.ts` had no `isQuitting()` check, so a quit landing between
+two of several queued plugin installs let the loop keep calling
+`deps.installPlugin` — each a fresh detached `npm` — after `shutdown()`'s single
+`installs.stopAll()` had already run and would never reap again. Fixed two ways,
+per the review's own guidance that the loop check alone still races a quit
+landing between the check and the spawn:
+- `settings-ipc.ts`: `installPlugins` now checks `deps.isQuitting()` at the top
+  of every iteration and stops queuing further entries.
+- `install-process.ts`: `createInstallRunner`'s `stopAll()` now also flips a
+  `stopped` flag that every later `run()` call checks synchronously before
+  spawning, refusing outright with no `await` between the check and `spawn()` —
+  closing the exact race the loop-level check alone cannot.
+
+**2. IMPORTANT — "Use it" silently pinned a floating entry.** The old renderer
+code rewrote the plugin's textarea line to `pkg@version` and saved, which is
+literally what makes an entry pinned per this feature's own spec grammar — from
+then on it would never be offered another update, silently, with nothing telling
+the user their entry's nature had changed. Fixed by adding a dedicated
+`acceptPluginUpdate(pkg, version)` IPC method, distinct from `save`, that
+installs the version and updates only that entry's stored `version` — its
+`spec` text is never touched, so a floating entry stays floating. Shares the
+same `saving` lock as `save` (both install and write config).
+
+**3. IMPORTANT — one shared hint element served every plugin.** `settings.html`
+had a single `plugin-update-hint`; a second floating plugin's update push
+silently overwrote the first's until Settings was reopened. Replaced with a
+`#plugin-updates` container that renders one row (and one "Use it" button) per
+pending update, keyed by package name, so any number of simultaneous updates
+stay independently reachable.
+
+**4. IMPORTANT — README described the old hardcoded-bridge workflow.** Rewrote
+the "Tray, shortcut, and notifications" section (no more
+`pnpm dsh plugin --profile web add …`) and added a "Plugins" section describing
+the list as it actually works now; replaced the stale pnpm-store/profile
+limitation bullet with an accurate one about a plugin whose own required config
+this app cannot supply — see the next point — and corrected the stale test
+count.
+
+**5. MINOR — stale JSDoc.** `harness-source.ts`'s `managedStagingDir` doc still
+attributed the `.partial`-suffix non-collision guarantee to `%2E` escaping,
+false since `encodeSegment` moved to `base64url`. Reworded to name the actual
+current reason (the `base64url` alphabet contains no `.`).
+
+**6. MINOR — `parseConfig` bypassed the spec validator.** The Settings form's
+`parsePluginsField` validated a freshly typed spec, but a hand-edited
+`desktop.json` reached `pluginStatus`/`packageDirIn` with no check at all.
+Extracted the shape check into `plugin-entries.ts`'s `validSpecShape` (shared
+by both `settings-validate.ts` and `config.ts`'s `parseConfig`, which now
+rejects a malformed spec — traversal-shaped package name or version — at load,
+naming the offending file).
+
+**Also noted, as requested:** the `base64url` switch orphans any pre-existing
+`runtimes/<old-percent-encoded-segment>/` tree from before this change — the
+directory name changes, so the next install of the same package/version is a
+full reinstall rather than a cache hit, once. Moot for this session (`~/.dsh`
+is absent throughout), but real for an upgrade of an existing install.
+
+### Vacuity checks
+
+**"No npm child survives when quitting with several plugins queued":** two
+independent reverts, both proven to fail before restoring.
+- Removed the `if (deps.isQuitting()) break` line from `installPlugins`'
+  loop. `settings-ipc.spec.ts`'s `stops installing further entries once
+  quitting lands mid-loop` failed: `installPlugin` was called 5 times instead
+  of the expected 1 (all 5 queued entries installed despite quitting flipping
+  true after the first).
+- Removed the `stopped` guard from `install-process.ts`'s `run()`. The new
+  real-process test `refuses every run() from then on, so nothing spawned
+  afterward is ever left unreaped` timed out at 30s: `run()` genuinely
+  re-spawned a long-running child after `stopAll()`, which the test's
+  `startLongRunning` helper then waited forever for a pid line it never
+  needed to check the timeout path for.
+Both reverts restored; suite green again.
+
+**"An accepted update leaves a floating entry floating":** reverted
+`performAcceptPluginUpdate`'s `updatedEntries` map to write
+`` `${pkg}@${concrete}` `` instead of the original `entry.spec`.
+`settings-ipc.spec.ts`'s two directly relevant tests both failed —
+`writeConfig` was called with `spec: '@onetest/dsh-deck@0.3.0'` instead of the
+expected bare `'@onetest/dsh-deck'`. Restored; suite green again.

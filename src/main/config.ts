@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { ConfigurationError } from './configuration-error'
 import type { HarnessSource } from './harness-source'
-import type { PluginEntry } from './plugin-entries'
+import { validSpecShape, type PluginEntry } from './plugin-entries'
 
 /** Resolved desktop settings. `pnpmPath`/`npmPath` pin binaries when PATH cannot find them. */
 export interface DesktopConfig {
@@ -88,6 +88,19 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
   if (record.plugins !== undefined) {
     if (!Array.isArray(record.plugins) || record.plugins.some((entry) => typeof entry?.spec !== 'string')) {
       throw new ConfigurationError(`dsh-desktop: ${filePath} "plugins" must be a list of {spec, version?} entries`)
+    }
+    // The Settings form validates a freshly typed spec before it is ever
+    // written (see `settings-validate.ts`'s `parsePluginsField`), but this
+    // file can also be hand-edited directly — a spec shaped like a path
+    // (e.g. `../../x`) would otherwise reach `packageDirIn`'s raw
+    // `join(..., ...pkg.split('/'))` unchecked and land in the overlay's
+    // import. Every entry is re-validated here so a spec that reaches
+    // `pluginStatus` has always passed this check, regardless of which path
+    // it arrived by.
+    for (const entry of record.plugins) {
+      if (!validSpecShape(entry.spec)) {
+        throw new ConfigurationError(`dsh-desktop: ${filePath} plugin spec "${entry.spec}" is not a valid package name or package@version`)
+      }
     }
   }
 

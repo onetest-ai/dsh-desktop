@@ -53,6 +53,40 @@ export function parseSpec(spec: string): ParsedSpec {
 }
 
 /**
+ * Shape of a valid (optionally scoped) npm package name.
+ * Deliberately narrower than npm's full grammar: it exists to keep a spec
+ * from reaching `packageDirIn`'s raw `join(..., ...pkg.split('/'))` as a
+ * path-traversal or multi-segment string, not to validate every legal npm
+ * name.
+ */
+const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
+
+/**
+ * Shape of a valid version (e.g. `1.2.3`, `0.1.1-rc.2`). Like
+ * `PACKAGE_NAME_PATTERN`, this exists to keep a pinned version from reaching
+ * `managedDir` as a traversal or multi-segment string.
+ */
+const VERSION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.+-]*$/
+
+/**
+ * Whether a spec's package name and, if present, its pinned version are
+ * shaped safely enough to reach `managedDir`/`packageDirIn`.
+ *
+ * The Settings form validates a freshly typed spec before it is ever stored
+ * (see `settings-validate.ts`'s `parsePluginsField`), but a `desktop.json`
+ * can also be hand-edited directly — `config.ts`'s `parseConfig` calls this
+ * too, so a spec that reaches `pluginStatus`/`resolvePluginEntry` has always
+ * passed through here, regardless of which path it arrived by.
+ * @param spec - as typed or as stored, e.g. `@onetest/dsh-deck@0.2.1`.
+ * @returns whether the spec is safe to store and later resolve.
+ */
+export function validSpecShape(spec: string): boolean {
+  const { package: pkg, pinnedVersion } = parseSpec(spec)
+  if (!PACKAGE_NAME_PATTERN.test(pkg)) return false
+  return pinnedVersion === undefined || VERSION_PATTERN.test(pinnedVersion)
+}
+
+/**
  * The directory a scoped or unscoped package occupies inside an
  * `npm install --prefix <installDir>` tree.
  * @param installDir - the `npm install --prefix` directory.

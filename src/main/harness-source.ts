@@ -127,9 +127,9 @@ export function managedDir(dshHome: string, pkg: string, version: string): strin
  * renaming makes the final directory appear only once the install has
  * succeeded, which is a filesystem-atomic step rather than a check.
  *
- * The suffix cannot collide with a real version's directory: `encodeSegment`
- * escapes every `.` as `%2E`, so no encoded segment ever contains a literal
- * dot, let alone ends with `.partial`.
+ * The suffix cannot collide with a real version's directory: `encodeSegment`'s
+ * `base64url` alphabet (`A-Za-z0-9-_`) contains no `.`, so no encoded segment
+ * ever contains a literal dot, let alone ends with `.partial`.
  * @param dshHome - the resolved `$DSH_HOME` directory.
  * @param pkg - the package name.
  * @param version - the exact version being installed.

@@ -2,7 +2,7 @@ import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { DEFAULT_HOTKEY, DEFAULT_NOTIFY_PORT, type ConfigResult, type DesktopConfig } from './config'
 import type { HarnessSource } from './harness-source'
-import { defaultPlugins, parseSpec, type PluginEntry } from './plugin-entries'
+import { defaultPlugins, parseSpec, validSpecShape, type PluginEntry } from './plugin-entries'
 
 /** The settings form's raw values. Every field is a string because HTML forms yield strings. */
 export interface SettingsForm {
@@ -69,13 +69,10 @@ function parsePluginsField(text: string): { ok: true; entries: PluginEntry[] } |
   for (const raw of text.split('\n')) {
     const spec = raw.trim()
     if (spec === '') continue
-    const { package: pkg, pinnedVersion } = parseSpec(spec)
-    if (!PACKAGE_NAME_PATTERN.test(pkg)) {
-      return { ok: false, message: `"${spec}" does not look like a package name or package@version.` }
+    if (!validSpecShape(spec)) {
+      return { ok: false, message: `"${spec}" does not look like a package name, package@version, or a valid version.` }
     }
-    if (pinnedVersion !== undefined && !VERSION_PATTERN.test(pinnedVersion)) {
-      return { ok: false, message: `"${spec}" does not look like a valid version.` }
-    }
+    const { package: pkg } = parseSpec(spec)
     if (seen.has(pkg)) {
       return { ok: false, message: `${pkg} is listed more than once.` }
     }

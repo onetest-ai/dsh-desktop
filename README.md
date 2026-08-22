@@ -68,7 +68,8 @@ Settings are stored at `~/.dsh/desktop.json`, beside the harness's own state. Th
 {
   "harness": { "kind": "local", "repo": "/path/to/deepseek-harness" },
   "notifyPort": 43117,
-  "hotkey": "CommandOrControl+Shift+D"
+  "hotkey": "CommandOrControl+Shift+D",
+  "plugins": [{ "spec": "@deepseek-ai/dsh-hooks-claude-code", "version": "0.1.1" }]
 }
 ```
 
@@ -86,21 +87,26 @@ Setting the path is enough on its own, but which directory the app derives `node
 
 The tray shows harness status and offers show/hide, restart, Settings, and quit. The default shortcut is **⌘⇧D**.
 
-Turn-completion notifications need one extra step — the harness must be told to run the hook the app listens for:
+Turn-completion notifications need the notification hook bridge, `@deepseek-ai/dsh-hooks-claude-code` — it is pre-seeded as the first entry in the **Plugins** list below, and installs the first time you save Settings. Nothing needs to be run by hand, and nothing is written into your checkout: the bridge installs under `$DSH_HOME/runtimes`, and the app generates its hook configuration and points the harness at it at every boot. The hook is non-blocking: it exits successfully whether or not the app is listening, so it cannot disturb a running agent.
 
-```bash
-cd /path/to/deepseek-harness
-pnpm dsh plugin --profile web add @deepseek-ai/dsh-hooks-claude-code
+## Plugins
+
+Settings has a **Plugins** field: one package per line, typed the way you would on a command line.
+
+```
+@deepseek-ai/dsh-hooks-claude-code
+@onetest/dsh-deck@0.2.1
 ```
 
-That writes into `~/.dsh`, not into your checkout. The app generates the hook configuration itself at boot and points the harness at it. The hook is non-blocking: it exits successfully whether or not the app is listening, so it cannot disturb a running agent.
+- `pkg` — **floating**: resolves to the registry's current version the first time it installs, and Settings later offers an update (with its own "Use it" button) without ever applying one on its own.
+- `pkg@version` — **pinned**: installs exactly that version and is never offered an update.
 
-Note this applies to **every** `dsh web` you run afterwards, not only this app. To undo it, `pnpm dsh plugin --profile web remove @deepseek-ai/dsh-hooks-claude-code`.
+Each entry installs under `$DSH_HOME/runtimes` and is inserted into the harness overlay at its own resolved entry file — the same managed-install machinery a managed harness source uses, so an install is a cache hit on every later save that does not change it. A plugin that fails to install, or that cannot actually be loaded once installed (a missing dependency, most commonly), is left out of that boot's overlay with the reason shown in the tray status; it never stops the harness from starting. A plugin that requires its own configuration is a separate case the app cannot protect against yet — see Known limitations. Removing a line removes that plugin from the next boot; it does not uninstall its files from `$DSH_HOME`.
 
 ## Development
 
 ```bash
-npm test           # 181 unit tests
+npm test           # 280 unit tests
 npm run test:smoke # Playwright, against a packaged build (run `npm run pack` first)
 npm run build      # compile only
 ```
@@ -111,7 +117,7 @@ Design notes and the decisions taken while building this live in [`docs/`](docs/
 
 ## Known limitations
 
-- **Notifications may be unavailable under a managed source.** `dsh plugin --profile web add …` forwards to pnpm, which links dependencies through its own store; a managed install is a plain `npm` tree and cannot follow those links, so the notification hook bridge may not load. The app checks before it boots and simply leaves the hook out when it cannot load, so the harness still starts and the tray says notifications are off — it is not a failure. To get notifications working under a managed source, install the bridge's missing dependency into the profile with npm: `cd $DSH_HOME/profiles/web && npm install @deepseek-ai/dsh-hook-protocol`. A local source is unaffected.
+- **A plugin that requires its own configuration can crash the whole boot, not just itself.** The app's own loadability check only confirms the entry file and its declared dependencies resolve — it cannot know a plugin also requires config this version has no way to supply (the way `@onetest/dsh-deck` requires a `base` route-mount path with no default). Such a plugin installs and passes that check, but cordis's own config resolution then rejects it at boot, and that rejection currently takes the whole harness process down rather than just omitting the one plugin. There is no per-plugin configuration yet, so a plugin with a required config field of its own cannot be listed safely.
 - **`dsh://` links only focus the app.** The harness Web UI has no per-session URLs, so there is no address to deep-link to.
 - **Unsigned and macOS-only.** No Windows or Linux packaging target is configured.
 - The tray icon, menus, and shortcut have not been verified visually by an automated test — only their behavior in code.

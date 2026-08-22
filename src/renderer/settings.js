@@ -9,6 +9,12 @@ const kindOf = () => document.querySelector('input[name="kind"]:checked').value
 // round trip. Reset on every `load`.
 let pluginsByPackage = new Map()
 
+// Updates offered but not yet accepted, keyed by package name so any number
+// of floating plugins can each carry their own pending update at once — a
+// single shared hint element would let a second push silently overwrite the
+// first, leaving one update unreachable until Settings is reopened.
+let pluginUpdates = new Map()
+
 function showKind() {
   const managed = kindOf() === 'managed'
   el('local-fields').hidden = managed
@@ -49,7 +55,8 @@ function appendProgress(line) {
 
 function hideUpdateHint() {
   el('update-hint').hidden = true
-  el('plugin-update-hint').hidden = true
+  pluginUpdates.clear()
+  renderPluginUpdates()
 }
 
 function collect() {
@@ -62,24 +69,6 @@ function messageOf(error) {
   return error && error.message ? error.message : String(error)
 }
 
-/**
- * Replace one line of the `plugins` textarea — the one for `pkg` — with a
- * pinned spec at `version`, and save.
- * @param {string} pkg - the package name whose line is being updated.
- * @param {string} version - the version to pin the line to.
- */
-function acceptPluginUpdate(pkg, version) {
-  const lines = el('plugins').value.split('\n')
-  const updated = lines.map((line) => {
-    const trimmed = line.trim()
-    const atVersion = trimmed.indexOf('@', trimmed.startsWith('@') ? 1 : 0)
-    const linePkg = atVersion === -1 ? trimmed : trimmed.slice(0, atVersion)
-    return linePkg === pkg ? `${pkg}@${version}` : line
-  })
-  el('plugins').value = updated.join('\n')
-  void performSave()
-}
-
 /** Render the plugin status block from `pluginsByPackage`, one line per entry. */
 function renderPluginStatus() {
   const lines = [...pluginsByPackage.values()].map((plugin) => {
@@ -87,6 +76,62 @@ function renderPluginStatus() {
     return `${plugin.package} — ${plugin.pinned ? 'pinned, ' : ''}${state}`
   })
   el('plugin-status').textContent = lines.join('\n')
+}
+
+/**
+ * Render one hint row per pending update in `pluginUpdates`, each with its
+ * own "Use it" button — never one shared element, so a second plugin's
+ * update is never overwritten and left unreachable by the first's.
+ */
+function renderPluginUpdates() {
+  const container = el('plugin-updates')
+  container.textContent = ''
+  for (const [pkg, latest] of pluginUpdates) {
+    const row = document.createElement('p')
+    row.className = 'hint update-hint'
+    row.textContent = `${pkg}: version ${latest} is available. `
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = 'Use it'
+    button.addEventListener('click', () => acceptPluginUpdate(pkg, latest))
+    row.append(button)
+    container.append(row)
+  }
+}
+
+/**
+ * Install `version` for `pkg`'s already-configured floating entry and store
+ * it, without touching the entry's spec text — that is what keeps it
+ * floating rather than silently pinning it the way rewriting the textarea to
+ * `pkg@version` would.
+ * @param {string} pkg - the package name.
+ * @param {string} version - the version to install and store.
+ */
+async function acceptPluginUpdate(pkg, version) {
+  clearStatus()
+  clearProgress()
+  el('save').disabled = true
+  try {
+    const result = await window.settings.acceptPluginUpdate(pkg, version)
+    const status = el('status')
+    if (result.ok) {
+      pluginUpdates.delete(pkg)
+      renderPluginUpdates()
+      status.textContent =
+        result.warnings.length === 0 ? 'Settings saved.' : ['Settings saved.', ...result.warnings].join(' ')
+      if (result.warnings.length > 0) status.classList.add('status-warning')
+      await load()
+    } else {
+      status.textContent = result.errors.kind ?? 'The update could not be applied.'
+      status.classList.add('status-failed')
+    }
+  } catch (error) {
+    const status = el('status')
+    status.textContent = `The update could not be applied. ${messageOf(error)}`
+    status.classList.add('status-failed')
+  } finally {
+    el('save').disabled = false
+  }
 }
 
 async function performSave() {
@@ -162,6 +207,13 @@ async function load() {
   showKind()
   pluginsByPackage = new Map(result.plugins.map((plugin) => [plugin.package, plugin]))
   renderPluginStatus()
+  // A freshly loaded plugin's version may already reflect an update that was
+  // pending; drop any hint whose package no longer has a stale version.
+  for (const pkg of [...pluginUpdates.keys()]) {
+    const plugin = pluginsByPackage.get(pkg)
+    if (plugin === undefined || plugin.version === pluginUpdates.get(pkg)) pluginUpdates.delete(pkg)
+  }
+  renderPluginUpdates()
 }
 
 for (const radio of document.querySelectorAll('input[name="kind"]')) {
@@ -185,10 +237,6 @@ el('use-latest').addEventListener('click', () => {
   void performSave()
 })
 
-el('use-latest-plugin').addEventListener('click', () => {
-  acceptPluginUpdate(el('plugin-update-name').textContent, el('latest-plugin-version').textContent)
-})
-
 // Receive-only: the main process pushes progress lines while a managed
 // install runs, and a later update-available result once the background
 // registry lookup finishes. Neither adds a way to call into main.
@@ -201,9 +249,8 @@ window.settings.onUpdateAvailable((latest) => {
 window.settings.onPluginUpdateAvailable((pkg, latest) => {
   const plugin = pluginsByPackage.get(pkg)
   if (plugin === undefined || plugin.version === latest) return
-  el('plugin-update-name').textContent = pkg
-  el('latest-plugin-version').textContent = latest
-  el('plugin-update-hint').hidden = false
+  pluginUpdates.set(pkg, latest)
+  renderPluginUpdates()
 })
 
 void load()

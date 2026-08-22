@@ -62,15 +62,20 @@ const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey
 
 interface FakeElement {
   id: string
+  tagName: string
   value: string
   textContent: string
+  className: string
   hidden: boolean
   disabled: boolean
   checked: boolean
   scrollTop: number
   scrollHeight: number
+  type: string
   classes: Set<string>
   classList: { add(name: string): void; remove(name: string): void }
+  children: FakeElement[]
+  append(child: FakeElement): void
   addEventListener(name: string, handler: () => unknown): void
   listeners: Map<string, () => unknown>
 }
@@ -78,27 +83,49 @@ interface FakeElement {
 function element(id: string): FakeElement {
   const classes = new Set<string>()
   const listeners = new Map<string, () => unknown>()
-  return {
+  let children: FakeElement[] = []
+  let text = ''
+  const node = {
     id,
+    tagName: 'div',
     value: '',
-    textContent: '',
+    className: '',
     hidden: false,
     disabled: false,
     checked: false,
     scrollTop: 0,
     scrollHeight: 0,
+    type: '',
     classes,
     classList: {
       add: (name: string) => classes.add(name),
       remove: (name: string) => classes.delete(name),
     },
+    // Setting `textContent`, like in a real DOM, replaces every child node —
+    // `renderPluginUpdates` relies on exactly this to clear a stale row list
+    // before re-rendering it.
+    get textContent(): string {
+      return text
+    },
+    set textContent(value: string) {
+      text = value
+      children = []
+    },
+    get children(): FakeElement[] {
+      return children
+    },
+    append: (child: FakeElement) => children.push(child),
     listeners,
     addEventListener: (name: string, handler: () => unknown) => listeners.set(name, handler),
-  }
+  } as FakeElement
+  return node
 }
 
 /** A save result or a rejection for the bridge to produce. */
 type SaveOutcome = () => Promise<unknown>
+
+/** What `settings.acceptPluginUpdate` does, keyed by test; defaults to success. */
+type AcceptPluginUpdateOutcome = (pkg: string, version: string) => Promise<unknown>
 
 /** The loaded renderer, plus the handles a test needs to drive and read it. */
 interface Renderer {
@@ -109,9 +136,18 @@ interface Renderer {
   pushProgress(line: string): void
   /** Fires the preload's `onUpdateAvailable` subscription as main would push a result. */
   pushUpdateAvailable(latest: string): void
-  useLatestPlugin(): Promise<void>
   /** Fires the preload's `onPluginUpdateAvailable` subscription as main would push a result. */
   pushPluginUpdateAvailable(pkg: string, latest: string): void
+  /**
+   * Clicks the "Use it" button of the rendered update row naming `pkg`, or
+   * does nothing if no such row is rendered.
+   * @param pkg - the package name the row's text must contain.
+   */
+  useLatestPlugin(pkg: string): Promise<void>
+  /** The package names with a rendered update row, in render order. */
+  renderedPluginUpdateRows(): string[]
+  /** Calls made to `settings.acceptPluginUpdate`, as `[pkg, version]` pairs. */
+  acceptPluginUpdateCalls: Array<[string, string]>
 }
 
 /** Default read result: a configured local source with an empty plugin list. */
@@ -127,9 +163,14 @@ function defaultRead(): Promise<unknown> {
  * Load `settings.js` over a fake document.
  * @param onSave - what the `settings.save` bridge call does.
  * @param onRead - what the `settings.read` bridge call does; defaults to `defaultRead`.
+ * @param onAcceptPluginUpdate - what `settings.acceptPluginUpdate` does; defaults to success.
  * @returns the fake elements and a way to fire the save button.
  */
-async function load(onSave: SaveOutcome, onRead?: () => Promise<unknown>): Promise<Renderer> {
+async function load(
+  onSave: SaveOutcome,
+  onRead?: () => Promise<unknown>,
+  onAcceptPluginUpdate?: AcceptPluginUpdateOutcome,
+): Promise<Renderer> {
   const hiddenIds = declaredHiddenIds()
   const elements = new Map(
     declaredIds().map((id) => {
@@ -145,8 +186,15 @@ async function load(onSave: SaveOutcome, onRead?: () => Promise<unknown>): Promi
     return node
   })
 
+  let createdCount = 0
   const document = {
     getElementById: (id: string) => elements.get(id) ?? null,
+    createElement: (tagName: string) => {
+      createdCount += 1
+      const node = element(`__created-${tagName}-${String(createdCount)}`)
+      node.tagName = tagName
+      return node
+    },
     querySelector: (selector: string) => {
       if (selector !== 'input[name="kind"]:checked') throw new Error(`unexpected selector ${selector}`)
       return radios.find((radio) => radio.checked)
@@ -160,10 +208,15 @@ async function load(onSave: SaveOutcome, onRead?: () => Promise<unknown>): Promi
   let progressListener: ((line: string) => void) | undefined
   let updateListener: ((latest: string) => void) | undefined
   let pluginUpdateListener: ((pkg: string, latest: string) => void) | undefined
+  const acceptPluginUpdateCalls: Array<[string, string]> = []
   const settings = {
     read: vi.fn(onRead ?? defaultRead),
     pickFolder: vi.fn(async () => undefined),
     save: vi.fn(onSave),
+    acceptPluginUpdate: vi.fn(async (pkg: string, version: string) => {
+      acceptPluginUpdateCalls.push([pkg, version])
+      return (onAcceptPluginUpdate ?? (async () => ({ ok: true, warnings: [] })))(pkg, version)
+    }),
     onProgress: vi.fn((listener: (line: string) => void) => {
       progressListener = listener
     }),
@@ -184,6 +237,9 @@ async function load(onSave: SaveOutcome, onRead?: () => Promise<unknown>): Promi
   await Promise.resolve()
   await Promise.resolve()
 
+  /** The `<p>` rows rendered into `#plugin-updates`, one per pending update. */
+  const updateRows = (): FakeElement[] => elements.get('plugin-updates')?.children ?? []
+
   return {
     elements,
     save: async () => {
@@ -194,10 +250,14 @@ async function load(onSave: SaveOutcome, onRead?: () => Promise<unknown>): Promi
     },
     pushProgress: (line) => progressListener?.(line),
     pushUpdateAvailable: (latest) => updateListener?.(latest),
-    useLatestPlugin: async () => {
-      await elements.get('use-latest-plugin')?.listeners.get('click')?.()
-    },
     pushPluginUpdateAvailable: (pkg, latest) => pluginUpdateListener?.(pkg, latest),
+    useLatestPlugin: async (pkg) => {
+      const row = updateRows().find((candidate) => candidate.textContent.includes(pkg))
+      const button = row?.children[0]
+      await button?.listeners.get('click')?.()
+    },
+    renderedPluginUpdateRows: () => updateRows().map((row) => row.textContent),
+    acceptPluginUpdateCalls,
   }
 }
 
@@ -300,13 +360,16 @@ describe('update available', () => {
 })
 
 describe('plugins', () => {
+  const HOOKS = '@deepseek-ai/dsh-hooks-claude-code'
+  const DECK = '@onetest/dsh-deck'
+
   const READ_WITH_PLUGINS = (): Promise<unknown> =>
     Promise.resolve({
       configured: true,
       form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
       plugins: [
-        { spec: '@deepseek-ai/dsh-hooks-claude-code', package: '@deepseek-ai/dsh-hooks-claude-code', pinned: false, version: '0.1.1-rc.2' },
-        { spec: '@onetest/dsh-deck@0.2.1', package: '@onetest/dsh-deck', pinned: true, version: undefined },
+        { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
+        { spec: `${DECK}@0.2.1`, package: DECK, pinned: true, version: undefined },
       ],
     })
 
@@ -314,37 +377,106 @@ describe('plugins', () => {
     const renderer = await load(async () => ({ ok: true, warnings: [] }), READ_WITH_PLUGINS)
 
     const status = renderer.elements.get('plugin-status')?.textContent ?? ''
-    expect(status).toContain('@deepseek-ai/dsh-hooks-claude-code — v0.1.1-rc.2 installed')
-    expect(status).toContain('@onetest/dsh-deck — pinned, not installed yet')
+    expect(status).toContain(`${HOOKS} — v0.1.1-rc.2 installed`)
+    expect(status).toContain(`${DECK} — pinned, not installed yet`)
   })
 
-  it('reveals its own update hint, separate from the harness one, naming the package', async () => {
+  it('never offers an update for an entry the server never pushed one for', async () => {
     const renderer = await load(async () => ({ ok: true, warnings: [] }), READ_WITH_PLUGINS)
-    renderer.pushPluginUpdateAvailable('@deepseek-ai/dsh-hooks-claude-code', '0.2.0')
-
-    expect(renderer.elements.get('plugin-update-hint')?.hidden).toBe(false)
-    expect(renderer.elements.get('plugin-update-name')?.textContent).toBe('@deepseek-ai/dsh-hooks-claude-code')
-    expect(renderer.elements.get('latest-plugin-version')?.textContent).toBe('0.2.0')
-    expect(renderer.elements.get('update-hint')?.hidden).toBe(true)
+    expect(renderer.renderedPluginUpdateRows()).toEqual([])
   })
 
-  it('using it pins that entry\'s line in the textarea and saves', async () => {
-    const save = vi.fn(async () => ({ ok: true, warnings: [] }))
-    const renderer = await load(save, READ_WITH_PLUGINS)
-    renderer.elements.get('plugins')!.value = '@deepseek-ai/dsh-hooks-claude-code\n@onetest/dsh-deck@0.2.1'
-    renderer.pushPluginUpdateAvailable('@deepseek-ai/dsh-hooks-claude-code', '0.2.0')
+  it('renders a per-package update row naming the package and version', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), READ_WITH_PLUGINS)
+    renderer.pushPluginUpdateAvailable(HOOKS, '0.2.0')
 
-    await renderer.useLatestPlugin()
+    expect(renderer.renderedPluginUpdateRows()).toEqual([expect.stringContaining(HOOKS)])
+    expect(renderer.renderedPluginUpdateRows()[0]).toContain('0.2.0')
+  })
 
-    expect(renderer.elements.get('plugins')?.value).toBe('@deepseek-ai/dsh-hooks-claude-code@0.2.0\n@onetest/dsh-deck@0.2.1')
-    expect(save).toHaveBeenCalled()
+  it('keeps every offered update reachable when two floating plugins both have one, rather than one overwriting the other', async () => {
+    // The bug this guards: a single shared hint element lets a second push
+    // silently replace the first, leaving one update unreachable until
+    // Settings is reopened. Both packages must render their own row.
+    const readTwoFloating = (): Promise<unknown> =>
+      Promise.resolve({
+        configured: true,
+        form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+        plugins: [
+          { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
+          { spec: DECK, package: DECK, pinned: false, version: '0.2.0' },
+        ],
+      })
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), readTwoFloating)
+
+    renderer.pushPluginUpdateAvailable(HOOKS, '0.2.0')
+    renderer.pushPluginUpdateAvailable(DECK, '0.3.0')
+
+    const rows = renderer.renderedPluginUpdateRows()
+    expect(rows).toHaveLength(2)
+    expect(rows.some((row) => row.includes(HOOKS))).toBe(true)
+    expect(rows.some((row) => row.includes(DECK))).toBe(true)
   })
 
   it('ignores a push naming an unknown package rather than crashing', async () => {
     const renderer = await load(async () => ({ ok: true, warnings: [] }), READ_WITH_PLUGINS)
     renderer.pushPluginUpdateAvailable('@unknown/package', '0.3.0')
 
-    expect(renderer.elements.get('plugin-update-hint')?.hidden).toBe(true)
+    expect(renderer.renderedPluginUpdateRows()).toEqual([])
+  })
+
+  describe('accepting an update', () => {
+    const readOneFloating = (): Promise<unknown> =>
+      Promise.resolve({
+        configured: true,
+        form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+        plugins: [{ spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' }],
+      })
+
+    it('calls acceptPluginUpdate with the package and version, never rewriting the plugins textarea', async () => {
+      const renderer = await load(async () => ({ ok: true, warnings: [] }), readOneFloating)
+      renderer.pushPluginUpdateAvailable(HOOKS, '0.2.0')
+      const textareaBefore = renderer.elements.get('plugins')?.value
+
+      await renderer.useLatestPlugin(HOOKS)
+
+      expect(renderer.acceptPluginUpdateCalls).toEqual([[HOOKS, '0.2.0']])
+      expect(renderer.elements.get('plugins')?.value).toBe(textareaBefore)
+    })
+
+    it('never calls save — accepting an update goes through its own channel, not the general one', async () => {
+      const save = vi.fn(async () => ({ ok: true, warnings: [] }))
+      const renderer = await load(save, readOneFloating)
+      renderer.pushPluginUpdateAvailable(HOOKS, '0.2.0')
+
+      await renderer.useLatestPlugin(HOOKS)
+
+      expect(save).not.toHaveBeenCalled()
+    })
+
+    it('clears that row once accepted', async () => {
+      const renderer = await load(async () => ({ ok: true, warnings: [] }), readOneFloating)
+      renderer.pushPluginUpdateAvailable(HOOKS, '0.2.0')
+      expect(renderer.renderedPluginUpdateRows()).toHaveLength(1)
+
+      await renderer.useLatestPlugin(HOOKS)
+
+      expect(renderer.renderedPluginUpdateRows()).toEqual([])
+    })
+
+    it('reports the failure and keeps the row when acceptPluginUpdate is refused', async () => {
+      const renderer = await load(
+        async () => ({ ok: true, warnings: [] }),
+        readOneFloating,
+        async () => ({ ok: false, errors: { kind: 'Port 43117 is already in use.' } }),
+      )
+      renderer.pushPluginUpdateAvailable(HOOKS, '0.2.0')
+
+      await renderer.useLatestPlugin(HOOKS)
+
+      expect(renderer.elements.get('status')?.textContent).toBe('Port 43117 is already in use.')
+      expect(renderer.elements.get('status')?.classes.has('status-failed')).toBe(true)
+    })
   })
 })
 
