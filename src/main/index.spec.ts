@@ -142,8 +142,10 @@ vi.mock('./tray', () => ({
   },
 }))
 
+const notifyCloseMock = vi.fn(async () => {})
+const startNotifyListenerMock = vi.fn(async () => ({ port: 1, close: notifyCloseMock }))
 vi.mock('./notify', () => ({
-  startNotifyListener: vi.fn(async () => ({ port: 1, close: async () => {} })),
+  startNotifyListener: (...args: unknown[]) => startNotifyListenerMock(...(args as [])),
   portIsFree: vi.fn(async () => true),
 }))
 
@@ -250,9 +252,18 @@ function installStartServer(): void {
   )
 }
 
+/** The freshly imported entry point's exports, captured by `loadIndex`. */
+let indexModule: typeof import('./index') | undefined
+
 /** Import the entry point fresh, so its module state starts clean. */
 async function loadIndex(): Promise<void> {
-  await import('./index')
+  indexModule = await import('./index')
+}
+
+/** `applySettings` from the currently loaded module instance. */
+function applySettings(previous: DesktopConfig | undefined, next: DesktopConfig): Promise<string[]> {
+  if (indexModule === undefined) throw new Error('loadIndex() must run before applySettings()')
+  return indexModule.applySettings(previous, next)
 }
 
 /** Let queued microtasks and the lifecycle chain settle. */
@@ -473,5 +484,82 @@ describe('settings', () => {
     trayActions?.openSettings()
     closeSettings()
     expect(fake.app.quit).not.toHaveBeenCalled()
+  })
+})
+
+describe('applySettings', () => {
+  const OTHER_REPO = '/tmp/other-harness'
+
+  /**
+   * Drive `applySettings` when it is expected to respawn the harness: the
+   * respawned child's readiness is awaited from outside just like `bootReady`,
+   * since `applySettings` itself blocks on the child becoming ready.
+   */
+  async function applySettingsReady(previous: DesktopConfig | undefined, next: DesktopConfig): Promise<void> {
+    const before = children.length
+    const pending = applySettings(previous, next)
+    await vi.waitFor(() => expect(children.length).toBe(before + 1))
+    children[children.length - 1].ready()
+    await pending
+    await settle()
+  }
+
+  it('restarts the harness when the source changes', async () => {
+    const child = await bootReady()
+    startServer.mockClear()
+    await applySettingsReady(STORED, { ...STORED, harness: { kind: 'local', repo: OTHER_REPO } })
+    expect(startServer).toHaveBeenCalledTimes(1)
+    expect(child.stop).toHaveBeenCalled()
+  })
+
+  it('restarts the harness when the notify port changes, because hooks.json is regenerated at boot', async () => {
+    await bootReady()
+    startServer.mockClear()
+    await applySettingsReady(STORED, { ...STORED, notifyPort: 5000 })
+    expect(startServer).toHaveBeenCalledTimes(1)
+  })
+
+  it('rebinds the notify listener when the port changes', async () => {
+    await bootReady()
+    await applySettingsReady(STORED, { ...STORED, notifyPort: 5000 })
+    expect(startNotifyListenerMock).toHaveBeenLastCalledWith(5000, expect.any(Function))
+  })
+
+  it('re-registers the hotkey without restarting the harness', async () => {
+    await bootReady()
+    startServer.mockClear()
+    await applySettings(STORED, { ...STORED, hotkey: 'Alt+D' })
+    await settle()
+    expect(fake.globalShortcut.unregisterAll).toHaveBeenCalled()
+    expect(fake.globalShortcut.register).toHaveBeenLastCalledWith('Alt+D', expect.any(Function))
+    expect(startServer).not.toHaveBeenCalled()
+  })
+
+  it('restarts when a binary path changes, since it is resolved at spawn', async () => {
+    await bootReady()
+    startServer.mockClear()
+    await applySettingsReady(STORED, { ...STORED, pnpmPath: '/opt/pnpm' })
+    expect(startServer).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing when nothing changed', async () => {
+    await bootReady()
+    startServer.mockClear()
+    fake.globalShortcut.unregisterAll.mockClear()
+    await applySettings(STORED, { ...STORED })
+    await settle()
+    expect(startServer).not.toHaveBeenCalled()
+    expect(fake.globalShortcut.unregisterAll).not.toHaveBeenCalled()
+  })
+
+  it('boots for the first time when there was no previous config', async () => {
+    configResult = { configured: false }
+    await readyHandler()
+    // The settings save already wrote this config to disk by the time
+    // `applySettings` runs; `bootNow` re-reads it via `loadConfig`.
+    configResult = { configured: true, config: STORED }
+    startServer.mockClear()
+    await applySettingsReady(undefined, STORED)
+    expect(startServer).toHaveBeenCalledTimes(1)
   })
 })

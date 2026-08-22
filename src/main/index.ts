@@ -26,11 +26,58 @@ let notifier: NotifyServer | undefined
 /** A deep link that arrived before the window existed; see the `open-url` handler. */
 let deepLinkPending = false
 
+/** Whether two configs differ in a way that requires respawning the harness child. */
+function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig): boolean {
+  if (previous === undefined) return true
+  return (
+    JSON.stringify(previous.harness) !== JSON.stringify(next.harness) ||
+    // The notify port is baked into the generated hooks.json at boot, so a
+    // changed port only reaches the harness through a respawn.
+    previous.notifyPort !== next.notifyPort ||
+    // Both binaries are resolved when the child is spawned.
+    previous.pnpmPath !== next.pnpmPath ||
+    previous.npxPath !== next.npxPath
+  )
+}
+
 /**
- * Apply a saved settings change to the running app.
- * FIXME(task-6): restart the harness / rebind the listener / re-register the hotkey
+ * Apply saved settings to the running app.
+ *
+ * Harness-affecting changes go through `enqueue`, the same serialized
+ * transition the tray's Restart uses, so a save can never interleave with a
+ * boot, another restart, or shutdown.
+ * @param previous - the config being replaced, or undefined on a first run.
+ * @param next - the config just written to disk.
+ * @returns non-blocking warnings for the settings form to display.
  */
-const applySettings = async (): Promise<string[]> => []
+export async function applySettings(previous: DesktopConfig | undefined, next: DesktopConfig): Promise<string[]> {
+  const warnings: string[] = []
+  if (needsRestart(previous, next)) {
+    await enqueue(async () => {
+      await stopCurrent()
+      await bootNow()
+    })
+  }
+
+  if (previous?.notifyPort !== next.notifyPort) {
+    await notifier?.close()
+    notifier = undefined
+    try {
+      notifier = await startNotifyListener(next.notifyPort, onTurnEnd)
+    } catch (error) {
+      warnings.push((error as Error).message)
+    }
+  }
+
+  if (previous?.hotkey !== next.hotkey) {
+    globalShortcut.unregisterAll()
+    if (!globalShortcut.register(next.hotkey, toggleWindow)) {
+      console.warn(`dsh-desktop: the hotkey ${next.hotkey} could not be registered; another app already owns it.`)
+    }
+  }
+
+  return warnings
+}
 
 const settingsHandlers = createSettingsHandlers({
   readConfig: () => loadConfig(CONFIG_PATH),
