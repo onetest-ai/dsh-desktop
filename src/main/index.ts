@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, globalShortcut, Notification } from 'electron'
 import { join } from 'node:path'
-import { loadConfig, writeConfig, type DesktopConfig } from './config'
+import { loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
 import { configPath, type HarnessSource } from './harness-source'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { preflight } from './preflight'
@@ -29,8 +29,15 @@ let deepLinkPending = false
 /**
  * Whether two harness sources differ, compared field by field so a config
  * file with reordered (but identical) keys never looks like a change.
- * The `default` branch makes the comparison fail to compile if `HarnessSource`
- * grows a new kind without a matching case here.
+ *
+ * The `default` branch covers one axis only: it fails to compile if
+ * `HarnessSource` grows a new `kind` without a case here. A new *field* on an
+ * existing kind still compiles — structural typing lets the extra property
+ * through — and would be silently treated as unchanged, so every field added
+ * to an arm must be added to its comparison by hand.
+ * @param previous - the source being replaced.
+ * @param next - the source just configured.
+ * @returns whether the two differ.
  */
 function harnessSourceChanged(previous: HarnessSource, next: HarnessSource): boolean {
   if (previous.kind !== next.kind) return true
@@ -67,9 +74,15 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
 /**
  * Apply saved settings to the running app.
  *
- * Harness-affecting changes go through `enqueue`, the same serialized
+ * Harness-affecting changes go through `restart`, the same serialized
  * transition the tray's Restart uses, so a save can never interleave with a
  * boot, another restart, or shutdown.
+ *
+ * `quitting` is re-checked after every `await` and before every side effect:
+ * the save's own check happens before the write, but a quit landing during any
+ * of these awaits has already run `will-quit`, so a listener bound afterwards
+ * is younger than the teardown that would have closed it and a hotkey armed
+ * afterwards outlives `unregisterAll()`.
  * @param previous - the config being replaced, or undefined on a first run.
  * @param next - the config just written to disk.
  * @returns non-blocking warnings for the settings form to display.
@@ -77,23 +90,32 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
 export async function applySettings(previous: DesktopConfig | undefined, next: DesktopConfig): Promise<string[]> {
   const warnings: string[] = []
   if (needsRestart(previous, next)) {
-    await enqueue(async () => {
-      await stopCurrent()
-      await bootNow()
-    })
+    // restart() reports 'starting' on the tray for the whole respawn window;
+    // inlining stop-then-boot here would leave a stale 'running' dot up for as
+    // long as the readiness timeout.
+    await restart()
   }
 
-  if (previous?.notifyPort !== next.notifyPort) {
+  if (!quitting && previous?.notifyPort !== next.notifyPort) {
     await notifier?.close()
     notifier = undefined
-    try {
-      notifier = await startNotifyListener(next.notifyPort, onTurnEnd)
-    } catch (error) {
-      warnings.push((error as Error).message)
+    if (!quitting) {
+      try {
+        const started = await startNotifyListener(next.notifyPort, onTurnEnd)
+        if (quitting) {
+          // `will-quit` already closed whatever it knew about; this listener
+          // was bound after that, so nothing else would ever close it.
+          await started.close()
+        } else {
+          notifier = started
+        }
+      } catch (error) {
+        warnings.push((error as Error).message)
+      }
     }
   }
 
-  if (previous?.hotkey !== next.hotkey) {
+  if (!quitting && previous?.hotkey !== next.hotkey) {
     globalShortcut.unregisterAll()
     if (!globalShortcut.register(next.hotkey, toggleWindow)) {
       warnings.push(`The hotkey ${next.hotkey} could not be registered; another app already owns it.`)
@@ -101,7 +123,11 @@ export async function applySettings(previous: DesktopConfig | undefined, next: D
       // the app would silently end up with no hotkey at all; re-arm the one
       // that was working rather than leave the user with nothing bound.
       if (previous !== undefined && !globalShortcut.register(previous.hotkey, toggleWindow)) {
-        console.warn(`dsh-desktop: could not re-register the previous hotkey ${previous.hotkey} either.`)
+        // Both accelerators are gone: the user has no hotkey at all, which is
+        // exactly the state the save result is supposed to name.
+        warnings.push(
+          `The previous hotkey ${previous.hotkey} could not be restored either; no show/hide shortcut is bound.`,
+        )
       }
     }
   }
@@ -316,10 +342,23 @@ async function shutdown(): Promise<void> {
 /** Serialized entry point for the tray's "Restart harness" action; see `restart`. */
 const restartOnce = singleFlight(restart)
 
-/** Open settings, quitting if a first run closes it without configuring anything. */
+/**
+ * Open settings, quitting if a first run closes it without configuring anything.
+ *
+ * An unreadable config is deliberately not a quit: it means a real config may
+ * exist and merely be broken, and quitting would take away the one window that
+ * can repair it. The app stays in the tray, where Settings is reachable again.
+ */
 function showSettings(): void {
   openSettings(settingsHandlers, () => {
-    if (!loadConfig(CONFIG_PATH).configured) app.quit()
+    let stored: ConfigResult
+    try {
+      stored = loadConfig(CONFIG_PATH)
+    } catch (error) {
+      console.warn((error as Error).message)
+      return
+    }
+    if (!stored.configured) app.quit()
   })
 }
 
@@ -413,7 +452,17 @@ if (!app.requestSingleInstanceLock()) {
       deepLinkPending = false
       revealWindow()
     }
-    const stored = loadConfig(CONFIG_PATH)
+    let stored: ConfigResult
+    try {
+      stored = loadConfig(CONFIG_PATH)
+    } catch (error) {
+      // Without this the voided whenReady handler would simply reject: no
+      // boot, no error pane, no settings window — a hidden window and a tray
+      // icon, with no way to reach the form that fixes the config.
+      fail('Configuration problem', (error as Error).message)
+      showSettings()
+      return
+    }
     if (!stored.configured) {
       // Nothing to boot and nothing to show until the user says where the
       // harness lives, so settings is the whole app until it is saved.

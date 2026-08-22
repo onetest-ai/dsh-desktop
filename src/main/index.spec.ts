@@ -297,6 +297,10 @@ beforeEach(() => {
   trayActions = undefined
   hangStop = false
   configResult = { configured: true, config: STORED }
+  // clearAllMocks leaves implementations in place, so a test that made the
+  // config unreadable would otherwise leak that into the next one.
+  loadConfigMock.mockImplementation(() => configResult)
+  startNotifyListenerMock.mockImplementation(async () => ({ port: 1, close: notifyCloseMock }))
   settingsOnClosed = undefined
   vi.clearAllMocks()
   fake.resetReady()
@@ -487,6 +491,43 @@ describe('settings', () => {
   })
 })
 
+describe('an unreadable config', () => {
+  /** Make every `loadConfig` fail the way a malformed or EACCES file does. */
+  function unreadable(): void {
+    loadConfigMock.mockImplementation(() => {
+      throw new Error('dsh-desktop: cannot read /tmp/desktop.json')
+    })
+  }
+
+  it('shows the failure pane and opens settings at startup instead of stranding the app', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    unreadable()
+    await readyHandler()
+    expect(showError).toHaveBeenCalledWith(
+      fake.window,
+      'Configuration problem',
+      expect.stringContaining('cannot read'),
+    )
+    expect(openSettingsMock).toHaveBeenCalled()
+    expect(startServer).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('does not throw out of the settings close handler, and keeps the app alive', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    unreadable()
+    await readyHandler()
+    // The close handler runs on the main process's event loop: a throw here is
+    // an uncaught exception, not a rejected promise someone can catch.
+    expect(() => {
+      closeSettings()
+    }).not.toThrow()
+    // Quitting would remove the only window that can repair the config.
+    expect(fake.app.quit).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+})
+
 describe('applySettings', () => {
   const OTHER_REPO = '/tmp/other-harness'
 
@@ -567,6 +608,81 @@ describe('applySettings', () => {
     const warnings = await applySettings(STORED, { ...STORED, hotkey: 'Alt+D' })
     await settle()
     expect(warnings).toEqual([expect.stringContaining('Alt+D')])
+  })
+
+  it('binds no listener and arms no hotkey when a quit lands during the respawn', async () => {
+    await bootReady()
+    startNotifyListenerMock.mockClear()
+    fake.globalShortcut.register.mockClear()
+    fake.globalShortcut.unregisterAll.mockClear()
+
+    // Both a port and a hotkey change, so every side effect below the restart
+    // is in play; the restart's await is the window the quit lands in.
+    const pending = applySettings(STORED, { ...STORED, notifyPort: 5000, hotkey: 'Alt+D' })
+    await vi.waitFor(() => expect(children.length).toBe(2))
+
+    // will-quit has run by the time the respawn unwinds: the listener it would
+    // have closed and the shortcuts it unregistered are already gone.
+    void fake.emit('before-quit', fake.quitEvent())
+    await settle()
+    await pending
+    await settle()
+
+    expect(startNotifyListenerMock).not.toHaveBeenCalled()
+    expect(fake.globalShortcut.unregisterAll).not.toHaveBeenCalled()
+    expect(fake.globalShortcut.register).not.toHaveBeenCalled()
+  })
+
+  it('closes a listener that wins its race with a quit', async () => {
+    await bootReady()
+    let bind: (listener: { port: number; close: () => Promise<void> }) => void = () => {}
+    startNotifyListenerMock.mockImplementation(
+      async () =>
+        new Promise<{ port: number; close: () => Promise<void> }>((resolve) => {
+          bind = resolve
+        }),
+    )
+
+    const pending = applySettings(STORED, { ...STORED, notifyPort: 5000 })
+    await vi.waitFor(() => expect(children.length).toBe(2))
+    children[children.length - 1].ready()
+    await settle()
+
+    // The respawn is done and the listener is mid-bind: the quit lands here.
+    void fake.emit('before-quit', fake.quitEvent())
+    await settle()
+
+    const close = vi.fn(async () => {})
+    bind({ port: 5000, close })
+    await pending
+    await settle()
+
+    // Nothing else knows about this listener: will-quit already ran its close.
+    expect(close).toHaveBeenCalled()
+  })
+
+  it('reports the tray as starting for the whole respawn window', async () => {
+    await bootReady()
+    setTrayStatus.mockClear()
+    const pending = applySettings(STORED, { ...STORED, harness: { kind: 'local', repo: OTHER_REPO } })
+    await vi.waitFor(() => expect(children.length).toBe(2))
+    // The child is spawned but not ready: the tray must not still say running.
+    expect(setTrayStatus).toHaveBeenLastCalledWith('starting')
+    children[children.length - 1].ready()
+    await pending
+    await settle()
+    expect(setTrayStatus).toHaveBeenLastCalledWith('running')
+  })
+
+  it('names both accelerators when the previous hotkey cannot be restored either', async () => {
+    await bootReady()
+    fake.globalShortcut.register.mockReturnValue(false)
+    const warnings = await applySettings(STORED, { ...STORED, hotkey: 'Alt+D' })
+    await settle()
+    expect(warnings).toEqual([
+      expect.stringContaining('Alt+D'),
+      expect.stringContaining(STORED.hotkey),
+    ])
   })
 
   it('does nothing when nothing changed', async () => {
