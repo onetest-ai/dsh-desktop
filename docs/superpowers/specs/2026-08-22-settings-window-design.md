@@ -92,7 +92,7 @@ A save arriving during an in-flight boot is safe: it goes through `enqueue`. A s
 | npx package empty | Inline field error; nothing written |
 | Port outside 1–65535 | Inline field error; nothing written |
 | Port already bound | Inline field error naming the port; nothing written |
-| Hotkey rejected by the OS | Config saves; the Settings window shows a non-blocking warning naming the accelerator, and the tray menu label reports the hotkey as unbound |
+| Hotkey rejected by the OS | Config saves; the Settings window shows a non-blocking warning naming the accelerator, carried back on the save result. The tray label does not report it — that needs a main-to-renderer push channel for a message the user just saw, so it is dropped as unnecessary. |
 | Config valid but harness fails to boot | Config stays written; the existing failure pane shows, Settings still reachable |
 | Non-ENOENT read failure on `desktop.json` | Throws loudly, as today — never silently replaced |
 
