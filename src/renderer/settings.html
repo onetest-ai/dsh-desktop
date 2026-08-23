@@ -3,7 +3,8 @@
 <title>Settings</title>
 <link rel="stylesheet" href="settings.css">
 <div class="titlebar" aria-hidden="true"></div>
-<main>
+<header class="chrome">
+  <div class="chrome-inner">
   <h1>DeepSeek Harness</h1>
   <p id="intro" class="hint"></p>
 
@@ -22,6 +23,10 @@
     </button>
   </div>
 
+  </div>
+</header>
+
+<main>
   <section id="panel-harness" role="tabpanel" aria-labelledby="tab-harness" tabindex="0" class="panel">
     <p class="group-label" id="source-label">Where the harness runs from</p>
     <section class="group choices" role="radiogroup" aria-labelledby="source-label">

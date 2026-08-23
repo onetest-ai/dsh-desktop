@@ -45,8 +45,14 @@
 
 body {
   margin: 0;
-  /* 66px = 28px of original breathing room below the 38px fixed .titlebar. */
-  padding: 66px 32px 96px;
+  /* The window is a fixed three-part frame: a drag titlebar and the section
+     header pinned at the top, the Save bar pinned at the bottom, and only the
+     active panel scrolling between them. Scrolling the whole document instead
+     took the tabs and the title off-screen, which is what made a long plugin
+     list awkward to navigate. */
+  height: 100vh;
+  overflow: hidden;
+  padding: 0;
   background: var(--bg);
   color: var(--label);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
@@ -57,11 +63,41 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-main {
+.chrome {
+  position: fixed;
+  top: 38px;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  padding: 28px 32px 0;
+  background: var(--bg);
+}
+
+.chrome-inner {
   max-width: 34rem;
   margin: 0 auto;
-  display: grid;
-  gap: 20px;
+}
+
+/* `.hint`'s negative top margin was tuned for the old grid-gap layout; inside
+   the fixed header there is no gap to pull back against, so it overlapped the
+   title. */
+.chrome-inner .hint {
+  margin: 2px 0 0;
+}
+
+.chrome-inner .tabs {
+  margin-top: 14px;
+}
+
+main {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow-y: auto;
+  /* Clears the fixed titlebar + header above and the Save bar below. */
+  padding: 172px 32px 96px;
 }
 
 h1 {
@@ -565,6 +601,9 @@ button:disabled {
   height: 38px;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
+  /* Precedes `main` in the DOM, so without this the absolutely-positioned
+     scroll area paints over it and content scrolls through the drag strip. */
+  z-index: 6;
   -webkit-app-region: drag;
 }
 
