@@ -416,13 +416,19 @@ button:disabled {
   margin: 0;
   font-size: 12px;
   line-height: 18px;
+  /* The harness's message embeds an absolute module path with no spaces, which
+     is one unbreakable word — without this it runs off the card and out of the
+     window instead of wrapping. */
+  overflow-wrap: anywhere;
 }
 
-/* Many rows scroll inside their own bounded area instead of growing the
-   window past its fixed 640x720 size. */
-.plugin-rows:not(:empty) {
-  max-height: 220px;
-  overflow-y: auto;
+/* The list does NOT scroll inside its own bounded area. A row can carry a
+   long disabled reason — the harness's own error — and trapping that in a
+   220px sliver made it unreadable: the text the user needs in order to fix
+   the plugin was the text most likely to be clipped. The page scrolls as a
+   whole instead, which the fixed titlebar and action bar already allow for
+   via body's padding. */
+.plugin-rows {
   padding-right: 2px;
 }
 
