@@ -64,6 +64,28 @@ function declaredAriaSelected(): Map<string, string> {
 }
 
 /**
+ * Byte ranges `[start, end)` of every `<section id="panel-...">...</section>`
+ * in the markup, matched by tag depth so a nested `<section class="group">`
+ * inside a panel does not close its range early.
+ * @returns each tab panel's id and the byte range its markup spans.
+ */
+function panelRanges(): Array<{ id: string; start: number; end: number }> {
+  const ranges: Array<{ id: string; start: number; end: number }> = []
+  const stack: Array<{ id: string | undefined; start: number }> = []
+  for (const match of MARKUP.matchAll(/<(\/?)section\b([^>]*)>/g)) {
+    if (match[1] === '/') {
+      const open = stack.pop()
+      if (open?.id?.startsWith('panel-') === true) {
+        ranges.push({ id: open.id, start: open.start, end: match.index + match[0].length })
+      }
+    } else {
+      stack.push({ id: /\bid="([^"]+)"/.exec(match[2])?.[1], start: match.index })
+    }
+  }
+  return ranges
+}
+
+/**
  * The `kind` radios the page declares, in document order.
  * @returns each radio's value and whether the markup marks it checked.
  */
@@ -549,6 +571,42 @@ describe('install progress', () => {
 
     expect(renderer.elements.get('progress')?.textContent).toBe('')
     expect(renderer.elements.get('progress')?.hidden).toBe(true)
+  })
+
+  it('keeps the progress node outside every tab panel, so a cold-install save stays visible no matter which tab is active', () => {
+    // A managed-source save is triggered from the Harness tab but can run for
+    // minutes; if `#progress` lived inside a `<section class="panel">` it
+    // would inherit that panel's `hidden` state the moment the user switches
+    // tabs to look at something else. This is a markup check, not a
+    // behavioral one: the flat test fixture below assigns `hidden` directly
+    // to `#progress` and cannot observe ancestor-driven hiding, so only the
+    // real markup's nesting proves the claim.
+    const progressIndex = MARKUP.indexOf('id="progress"')
+    expect(progressIndex).toBeGreaterThan(-1)
+
+    const insidePanel = panelRanges().some((range) => progressIndex > range.start && progressIndex < range.end)
+    expect(insidePanel).toBe(false)
+  })
+})
+
+describe('workspace folder info affordance', () => {
+  it('is a native disclosure next to the workspace label, keyboard-reachable and labelled without any script', () => {
+    const labelIndex = MARKUP.indexOf('for="workspace"')
+    expect(labelIndex).toBeGreaterThan(-1)
+
+    const detailsIndex = MARKUP.indexOf('<details class="field-info">')
+    expect(detailsIndex).toBeGreaterThan(-1)
+    // Sits with the workspace label, not scattered elsewhere on the page.
+    expect(Math.abs(detailsIndex - labelIndex)).toBeLessThan(400)
+
+    const detailsMarkup = MARKUP.slice(detailsIndex, MARKUP.indexOf('</details>', detailsIndex))
+    const summaryLabel = /<summary aria-label="([^"]+)">/.exec(detailsMarkup)?.[1]
+    // `<summary>` is natively Tab-reachable and Enter/Space-toggleable; the
+    // `aria-label` is the accessible name a screen reader announces it by.
+    expect(summaryLabel).toMatch(/workspace/i)
+    expect(detailsMarkup).not.toMatch(/\btabindex="-1"/)
+    // The explanation itself, not just an empty toggle.
+    expect(detailsMarkup).toMatch(/<p>.+working directory.+<\/p>/)
   })
 })
 

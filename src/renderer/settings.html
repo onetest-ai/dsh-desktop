@@ -2,6 +2,7 @@
 <meta charset="utf-8">
 <title>Settings</title>
 <link rel="stylesheet" href="settings.css">
+<div class="titlebar" aria-hidden="true"></div>
 <main>
   <h1>DeepSeek Harness</h1>
   <p id="intro" class="hint"></p>
@@ -48,7 +49,13 @@
         Version <span id="latest-version"></span> is available.
         <button id="use-latest" type="button">Use it</button>
       </p>
-      <label for="workspace">Workspace folder</label>
+      <div class="field-label-row">
+        <label for="workspace">Workspace folder</label>
+        <details class="field-info">
+          <summary aria-label="About the workspace folder"><span aria-hidden="true">i</span></summary>
+          <p>The working directory the harness runs in for a managed install — the folder the agent reads and writes files in. Defaults to your home folder.</p>
+        </details>
+      </div>
       <div class="row">
         <input id="workspace" type="text" placeholder="defaults to your home folder">
         <button id="browse-workspace" type="button">Choose…</button>

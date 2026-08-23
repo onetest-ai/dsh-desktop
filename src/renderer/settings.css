@@ -45,7 +45,8 @@
 
 body {
   margin: 0;
-  padding: 28px 32px 96px;
+  /* 66px = 28px of original breathing room below the 38px fixed .titlebar. */
+  padding: 66px 32px 96px;
   background: var(--bg);
   color: var(--label);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
@@ -449,4 +450,84 @@ button:disabled {
 
 .panel:focus-visible {
   outline: none;
+}
+
+/* Drag strip for the frameless window (`titleBarStyle: 'hidden'` in
+   settings-window.ts) — this window owns its markup, so unlike the main
+   window (CSS injected over the harness's own content) this is a real
+   element. 38px tall to clear the macOS traffic lights positioned at
+   `trafficLightPosition: { x: 16, y: 14 }`; nothing else lives in it, so no
+   `no-drag` carve-outs are needed. */
+.titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+}
+
+.field-label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-label-row label {
+  margin: 0;
+}
+
+/* A native disclosure needs no script to be keyboard-reachable (Tab, then
+   Enter/Space toggles it) or screen-reader announced (the "i" summary is
+   the accessible name via `aria-label`; its expanded/collapsed state is
+   native `<details>` semantics). Reusable: copy this `.field-info` block
+   next to any other label that needs the same treatment. */
+.field-info {
+  position: relative;
+}
+
+.field-info summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  color: var(--label-secondary);
+  font: italic 700 11px/1 Georgia, 'Times New Roman', serif;
+  cursor: pointer;
+  list-style: none;
+}
+
+.field-info summary::-webkit-details-marker {
+  display: none;
+}
+
+.field-info summary:hover {
+  color: var(--label);
+  border-color: var(--label-secondary);
+}
+
+.field-info[open] summary {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.field-info p {
+  position: absolute;
+  z-index: 5;
+  top: 22px;
+  left: 0;
+  width: 240px;
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--label-secondary);
+  font: 12px/18px -apple-system, BlinkMacSystemFont, sans-serif;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
 }

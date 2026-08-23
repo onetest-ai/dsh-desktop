@@ -83,6 +83,14 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
     width: 640,
     height: 720,
     title: 'DeepSeek Harness Settings',
+    // Genuinely frameless, matching the main window: this window owns its
+    // markup, so it can carry a real drag strip (`.titlebar` in
+    // settings.html) instead of the CSS-injection workaround the harness
+    // content needs. `titleBarStyle`/`trafficLightPosition` apply on macOS
+    // only; Electron ignores both elsewhere and this window keeps its
+    // native frame there, so it is unaffected on Windows/Linux.
+    titleBarStyle: 'hidden',
+    trafficLightPosition: { x: 16, y: 14 },
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
