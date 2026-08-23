@@ -243,12 +243,31 @@ function renderPluginRows() {
     // overlay (not installed, not loadable) or a boot isolated it after
     // attributing a runtime failure to it — carries the harness's own reason
     // here, on its own row, rather than only in the tray tooltip: this is
-    // where the user is already looking to fix it.
+    // where the user is already looking to fix it. The row shows the short
+    // extracted summary by default (see `error-summary.ts`), with the full,
+    // often-thousands-of-characters raw text one click away in an expander —
+    // the same collapsed-by-default pattern the config editor below uses, so
+    // a disabled row does not force a wall of stack trace on every glance at
+    // the list.
     if (plugin.disabledReason) {
       const note = document.createElement('p')
       note.className = 'plugin-disabled-note'
-      note.textContent = `Disabled — the harness would not start with it: ${plugin.disabledReason}`
+      note.textContent = `Disabled — the harness would not start with it: ${plugin.disabledSummary ?? plugin.disabledReason}`
       row.append(note)
+
+      const detail = document.createElement('details')
+      detail.className = 'plugin-disabled-detail'
+
+      const detailSummary = document.createElement('summary')
+      detailSummary.textContent = 'Full error'
+      detail.append(detailSummary)
+
+      const pre = document.createElement('pre')
+      pre.className = 'plugin-disabled-full'
+      pre.textContent = plugin.disabledReason
+      detail.append(pre)
+
+      row.append(detail)
     }
 
     const configWrap = document.createElement('details')

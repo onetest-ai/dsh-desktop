@@ -442,20 +442,64 @@ button:disabled {
   margin: 4px 0 0;
 }
 
-/* Why a plugin is not mounted right now, carrying the harness's own message —
-   e.g. what a rejected `config` requires — so the fix is legible without
-   leaving this row. Reuses `.error`'s color and rhythm (same token, same
-   type scale) so it reads as part of the same error-reporting system as
-   every other field on this page, not a one-off callout. */
+/* Why a plugin is not mounted right now, carrying the extracted summary of
+   the harness's own message — e.g. what a rejected `config` requires — so
+   the fix is legible without leaving this row or reading a stack trace.
+   Reuses `.error`'s color and rhythm (same token, same type scale) so it
+   reads as part of the same error-reporting system as every other field on
+   this page, not a one-off callout. */
 .plugin-disabled-note {
   color: var(--danger);
   margin: 0;
   font-size: 12px;
   line-height: 18px;
-  /* The harness's message embeds an absolute module path with no spaces, which
-     is one unbreakable word — without this it runs off the card and out of the
-     window instead of wrapping. */
+  /* The summary can still embed an absolute module path with no spaces,
+     which is one unbreakable word — without this it runs off the card and
+     out of the window instead of wrapping. */
   overflow-wrap: anywhere;
+}
+
+/* The harness's raw failure text — the full stack trace the summary above
+   was extracted from — collapsed by default next to the summary note, the
+   same disclosure pattern `.plugin-config` below uses. It is genuinely
+   useful when the summary alone is not enough to diagnose a failure, but
+   must never be what greets the user, so it stays one click away rather
+   than inline. */
+.plugin-disabled-detail {
+  margin-top: 2px;
+}
+
+.plugin-disabled-detail summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--label-secondary);
+  list-style: none;
+}
+
+.plugin-disabled-detail summary::-webkit-details-marker {
+  display: none;
+}
+
+.plugin-disabled-detail summary::before {
+  content: '▸ ';
+}
+
+.plugin-disabled-detail[open] summary::before {
+  content: '▾ ';
+}
+
+.plugin-disabled-full {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-fill);
+  color: var(--label-secondary);
+  font: 11px/16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 /* The list does NOT scroll inside its own bounded area. A row can carry a

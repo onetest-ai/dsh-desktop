@@ -206,6 +206,23 @@ describe('read', () => {
       )
       expect(plugins.find((plugin) => plugin.package === HOOKS_PACKAGE)?.disabledReason).toBeUndefined()
     })
+
+    it('carries a disabled entry summarized from its own reason, and no summary for a healthy entry', () => {
+      const d = deps({
+        readConfig: () => ({
+          configured: true,
+          config: withPlugins([{ spec: `${DECK}@0.2.1`, version: '0.2.1' }, { spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' }]),
+        }),
+        disabledPlugins: () => ({ [DECK]: 'base must be a non-empty string starting with "/", received undefined (at base)' }),
+      })
+
+      const { plugins } = createSettingsHandlers(d).read()
+
+      expect(plugins.find((plugin) => plugin.package === DECK)?.disabledSummary).toBe(
+        'base must be a non-empty string starting with "/", received undefined (at base)',
+      )
+      expect(plugins.find((plugin) => plugin.package === HOOKS_PACKAGE)?.disabledSummary).toBeUndefined()
+    })
   })
 })
 

@@ -1,5 +1,6 @@
 import type { BinaryChecks } from './check-binaries'
 import type { ConfigResult, DesktopConfig } from './config'
+import { summarizeFailure } from './error-summary'
 import type { OpenConfigFileResult } from './open-config-file'
 import { parseSpec, type PluginEntry } from './plugin-entries'
 import {
@@ -105,8 +106,18 @@ export interface PluginInfo {
    * own message when a boot isolated it after attributing a runtime failure
    * to it, or the pre-flight reason (not installed, not loadable, …) when it
    * never reached the overlay at all. Undefined when the plugin is mounted.
+   *
+   * This is the full, raw text — often a multi-level stack trace — kept
+   * available for a Settings row's expander. `disabledSummary` is what the
+   * row shows by default; see `error-summary.ts`'s `summarizeFailure`.
    */
   disabledReason?: string
+  /**
+   * The one-sentence extract of `disabledReason` the row shows by default.
+   * Always present when `disabledReason` is, computed by `summarizeFailure`
+   * — never the harness's raw, thousands-of-characters text.
+   */
+  disabledSummary?: string
 }
 
 /** What a save refused for overlapping another save reports on the `kind` field. */
@@ -449,13 +460,15 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       const disabled = deps.disabledPlugins()
       const plugins: PluginInfo[] = storedPlugins.map((entry) => {
         const { package: pkg, pinnedVersion } = parseSpec(entry.spec)
+        const disabledReason = disabled[pkg]
         return {
           spec: entry.spec,
           package: pkg,
           pinned: pinnedVersion !== undefined,
           version: entry.version,
           config: entry.config === undefined ? '' : JSON.stringify(entry.config, undefined, 2),
-          disabledReason: disabled[pkg],
+          disabledReason,
+          disabledSummary: disabledReason === undefined ? undefined : summarizeFailure(disabledReason),
         }
       })
 

@@ -750,6 +750,33 @@ describe('plugins', () => {
     expect(classes.some((className) => className === 'plugin-row')).toBe(true)
   })
 
+  it("shows the extracted summary inline and keeps the harness's raw reason reachable behind an expander", async () => {
+    const rawReason =
+      'dsh-desktop: the harness exited with code 1 before starting. { [cause]: Error: failed to apply loader entry deepseek-ai-dsh-mcp-client (/home/dev/.dsh/plugins/deepseek-ai-dsh-mcp-client/lib/index.js): invalid config: - expected { serverName: string } but got {} at Entry._init (file:///…) }'
+    const onRead = vi.fn().mockResolvedValue({
+      configured: true,
+      form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+      plugins: [
+        {
+          spec: DECK,
+          package: DECK,
+          pinned: false,
+          version: '0.2.1',
+          disabledReason: rawReason,
+          disabledSummary: 'invalid config: - expected { serverName: string } but got {}',
+        },
+      ],
+    })
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), onRead)
+
+    const deckText = renderer.renderedPluginRows().find((row) => row.includes(DECK))
+    // The note visible without expanding anything carries the short summary.
+    expect(deckText).toContain('invalid config: - expected { serverName: string } but got {}')
+    // The full raw reason is still present in the row (inside the collapsed
+    // expander) so it is reachable, never discarded.
+    expect(deckText).toContain('at Entry._init')
+  })
+
   describe('adding a row', () => {
     it('appends a row and clears the input on a valid spec', async () => {
       const renderer = await load(async () => ({ ok: true, warnings: [] }))
