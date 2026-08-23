@@ -48,6 +48,24 @@ function buildFixture(
   return root
 }
 
+/**
+ * Add a dependency package to a fixture tree that is installed and reachable
+ * but exposes no root export — only a subpath, the way real packages such as
+ * `@modelcontextprotocol/sdk` do. `require.resolve('@fixture/<name>')` throws
+ * for a package built this way even though it is correctly installed.
+ * @param root - the fixture root returned by `buildFixture`.
+ * @param name - the dependency's name, without the `@fixture/` scope.
+ */
+function addSubpathOnlyDependency(root: string, name: string): void {
+  const dir = join(root, 'node_modules', '@fixture', name)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: `@fixture/${name}`, exports: { './sub': './sub.js' } }),
+  )
+  writeFileSync(join(dir, 'sub.js'), 'module.exports = {}\n')
+}
+
 /** Always reports the candidate as loadable, regardless of `fromDirectory`. */
 const alwaysLoadable: LoadabilityProbe = () => undefined
 
@@ -194,6 +212,37 @@ describe('checkPackageLoadable', () => {
       ['dep', 'peer'],
     )
     expect(checkPackageLoadable('@fixture/main', root)).toBeUndefined()
+  })
+
+  it('reports a genuinely absent dependency, not just an absent peer', () => {
+    const root = buildFixture({ dependencies: { '@fixture/dep': '*' } }, [])
+    const reason = checkPackageLoadable('@fixture/main', root)
+    expect(reason).toBeDefined()
+    expect(reason).toContain('@fixture/dep')
+  })
+
+  // The regression this fix targets: @modelcontextprotocol/sdk is installed
+  // and every plugin subpath import of it works, but it has no root export,
+  // so a bare `require.resolve` on the dependency name alone throws and used
+  // to falsely disable the plugin declaring it.
+  it('treats a subpath-only dependency — installed, but with no root export — as present', () => {
+    const root = buildFixture({ dependencies: { '@fixture/subpath-only': '*' } }, [])
+    addSubpathOnlyDependency(root, 'subpath-only')
+    expect(checkPackageLoadable('@fixture/main', root)).toBeUndefined()
+  })
+
+  it('never throws when a dependency manifest is malformed JSON', () => {
+    const root = buildFixture({ dependencies: { '@fixture/dep': '*' } }, ['dep'])
+    const depManifest = join(root, 'node_modules', '@fixture', 'dep', 'package.json')
+    writeFileSync(depManifest, '{ not valid json')
+    expect(() => checkPackageLoadable('@fixture/main', root)).not.toThrow()
+  })
+
+  it("never throws when the plugin's own manifest is malformed JSON", () => {
+    const root = buildFixture({}, [])
+    const mainManifest = join(root, 'node_modules', '@fixture', 'main', 'package.json')
+    writeFileSync(mainManifest, '{ not valid json')
+    expect(() => checkPackageLoadable('@fixture/main', root)).not.toThrow()
   })
 })
 

@@ -54,6 +54,38 @@ interface Manifest {
 }
 
 /**
+ * Whether `dependencyName` is installed and reachable from `fromDirectory`,
+ * by walking up the `node_modules` ancestry the same way Node's own module
+ * resolution does — checking `<dir>/node_modules/<dependencyName>/package.json`
+ * at `fromDirectory` and then at each parent directory in turn — without
+ * following the dependency's own `exports`/`main` field.
+ *
+ * A bare `require.resolve(dependencyName)` answers a different question: does
+ * this package expose a root entry point. Plenty of installed, working
+ * packages answer no — they publish only subpath exports (e.g.
+ * `@modelcontextprotocol/sdk`, which exposes `./client/index.js` but no root
+ * `.`) and `require.resolve` throws for them even though the package is
+ * correctly installed and every subpath a consumer actually imports resolves
+ * fine. This walk instead asks the question `checkPackageLoadable` actually
+ * needs answered — is the dependency present in the tree at all — by finding
+ * its own manifest directly, which sidesteps `exports` map semantics
+ * entirely (including packages whose `exports` map also restricts
+ * `<name>/package.json` itself).
+ * @param dependencyName - the dependency to look for, e.g. `@modelcontextprotocol/sdk`.
+ * @param fromDirectory - directory to start the ancestry walk from.
+ * @returns true when the dependency's own `package.json` is found.
+ */
+function isDependencyInstalled(dependencyName: string, fromDirectory: string): boolean {
+  let dir = fromDirectory
+  for (;;) {
+    if (existsSync(join(dir, 'node_modules', dependencyName, 'package.json'))) return true
+    const parent = dirname(dir)
+    if (parent === dir) return false
+    dir = parent
+  }
+}
+
+/**
  * Whether a package resolves — together with everything its own `package.json`
  * declares as a required runtime dependency — from a directory. Never throws.
  *
@@ -72,13 +104,22 @@ interface Manifest {
  * that is absent is treated as a hard failure even though some required
  * peers (e.g. `@deepseek-ai/cordis`) are ones the harness host itself
  * provides at runtime rather than ones the plugin's own install step places
- * in its `node_modules`: `require.resolve`'s search walks up through every
- * ancestor `node_modules` starting at the package's own directory, so a peer
- * the profile's own dependency tree hoists to a shared, higher
- * `node_modules` (which is how the profile installs these host-provided
- * packages) still resolves from there. A peer that cannot be found by that
- * walk is one nothing in the profile provides, at any level — which is
- * exactly the class of break this probe exists to catch.
+ * in its `node_modules`: the `isDependencyInstalled` ancestry walk starts at
+ * the package's own directory and checks every ancestor `node_modules` in
+ * turn, so a peer the profile's own dependency tree hoists to a shared,
+ * higher `node_modules` (which is how the profile installs these
+ * host-provided packages) still resolves from there. A peer that cannot be
+ * found by that walk is one nothing in the profile provides, at any level —
+ * which is exactly the class of break this probe exists to catch.
+ *
+ * Each dependency and required peer is checked with `isDependencyInstalled`,
+ * not `require.resolve`: the latter follows the dependency's own
+ * `exports`/`main` field to a root entry point, which a subpath-only package
+ * (one that publishes only `./sub` exports and no `.`) legitimately does not
+ * have, even when fully installed and working. `isDependencyInstalled`
+ * instead looks for the dependency's own `package.json` directly, which
+ * answers "is this dependency installed and reachable" without depending on
+ * whether it happens to expose a root export.
  *
  * The walk covers one level: the plugin's own declared dependencies, not
  * their transitive dependencies. The reproduced failure, and the class of
@@ -129,10 +170,8 @@ export function checkPackageLoadable(packageName: string, fromDirectory: string)
       (name) => manifest.peerDependenciesMeta?.[name]?.optional !== true,
     )
     for (const dependency of [...Object.keys(manifest.dependencies ?? {}), ...requiredPeers]) {
-      try {
-        resolve(dependency, { paths: [packageDir] })
-      } catch (error) {
-        return `${packageName} depends on ${dependency}, which is not resolvable: ${(error as Error).message}`
+      if (!isDependencyInstalled(dependency, packageDir)) {
+        return `${packageName} depends on ${dependency}, which is not resolvable: no package.json found for ${dependency} in any node_modules ancestor of ${packageDir}`
       }
     }
     return undefined
