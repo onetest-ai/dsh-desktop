@@ -271,6 +271,15 @@ button:disabled {
   background: var(--input-fill);
 }
 
+/* A plugin the running harness dropped: the card itself reads as a problem
+   to fix, not a passive status line — a danger-toned border and a faint
+   tint of the same color, so it stands out at a glance in a scrolled list
+   without relying on the note text alone in either theme. */
+.plugin-row-disabled {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--input-fill));
+}
+
 /* The name/meta/actions line — what `.plugin-row` alone used to be, before
    the collapsible config editor below became a second, optional line. */
 .plugin-row-top {
@@ -395,6 +404,18 @@ button:disabled {
 
 .plugin-config-error {
   margin: 4px 0 0;
+}
+
+/* Why a plugin is not mounted right now, carrying the harness's own message —
+   e.g. what a rejected `config` requires — so the fix is legible without
+   leaving this row. Reuses `.error`'s color and rhythm (same token, same
+   type scale) so it reads as part of the same error-reporting system as
+   every other field on this page, not a one-off callout. */
+.plugin-disabled-note {
+  color: var(--danger);
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 /* Many rows scroll inside their own bounded area instead of growing the

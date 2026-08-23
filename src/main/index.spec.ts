@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConfigResult, DesktopConfig } from './config'
+import type { PluginStatus } from './plugin-entries'
 import type { StartOptions } from './server'
 
 /** The stored config used by tests that need a configured first run. */
@@ -159,8 +160,20 @@ vi.mock('./config', () => ({
 }))
 
 /** `createSettingsHandlers` has its own tests; here it only needs to exist. */
+/**
+ * The deps object `index.ts` builds once at module scope and hands to
+ * `createSettingsHandlers`. Captured so tests can call `disabledPlugins()`
+ * directly — the exact function a Settings window's `read()` would call,
+ * whether that window is open at boot time or opened long afterwards — to
+ * verify what a boot recorded without needing the real `settings-ipc`
+ * plumbing, which has its own tests for turning this into `PluginInfo.disabledReason`.
+ */
+let capturedSettingsDeps: { disabledPlugins(): Record<string, string> } | undefined
 vi.mock('./settings-ipc', () => ({
-  createSettingsHandlers: vi.fn(() => ({ read: vi.fn(), pickFolder: vi.fn(), save: vi.fn() })),
+  createSettingsHandlers: vi.fn((deps: { disabledPlugins(): Record<string, string> }) => {
+    capturedSettingsDeps = deps
+    return { read: vi.fn(), pickFolder: vi.fn(), save: vi.fn() }
+  }),
 }))
 
 /** Captures the `onClosed` callback so tests can fire it via `closeSettings()`. */
@@ -187,11 +200,27 @@ vi.mock('./install-process', () => ({
 const preflightMock = vi.fn(() => ({ ok: true }))
 vi.mock('./preflight', () => ({ preflight: (...args: unknown[]) => preflightMock(...(args as [])) }))
 
-const writeRuntimeFilesMock = vi.fn(() => ({ patchPath: '/tmp/p.yml', hooksPath: '/tmp/h.json', omitted: [] }))
-vi.mock('./runtime-files', () => ({
-  writeRuntimeFiles: (...args: unknown[]) => writeRuntimeFilesMock(...(args as [])),
-  runtimeFilePaths: (directory: string) => ({ patchPath: `${directory}/desktop.patch.yml`, hooksPath: `${directory}/hooks.json` }),
+/**
+ * Derives `ready`/`omitted` from the `statuses` `bootNow` actually passed in
+ * for this attempt, so an isolation retry's exclusion (which drops entries
+ * before `pluginStatus` is even called) is reflected the same way the real
+ * `writeRuntimeFiles` would reflect it, instead of a canned return value that
+ * can't tell one attempt's surviving entries from another's.
+ */
+const writeRuntimeFilesMock = vi.fn((_directory: string, _port: number, statuses: PluginStatus[] = []) => ({
+  patchPath: '/tmp/p.yml',
+  hooksPath: '/tmp/h.json',
+  omitted: statuses.filter((s): s is Extract<PluginStatus, { kind: 'unavailable' }> => s.kind === 'unavailable').map((s) => ({ package: s.package, reason: s.reason })),
+  ready: statuses.filter((s): s is Extract<PluginStatus, { kind: 'ready' }> => s.kind === 'ready').map((s) => ({ package: s.package, entryPath: s.entryPath })),
 }))
+vi.mock('./runtime-files', async () => {
+  const actual = await vi.importActual<typeof import('./runtime-files')>('./runtime-files')
+  return {
+    attributeBootFailure: actual.attributeBootFailure,
+    writeRuntimeFiles: (...args: unknown[]) => writeRuntimeFilesMock(...(args as [string, number, PluginStatus[]])),
+    runtimeFilePaths: (directory: string) => ({ patchPath: `${directory}/desktop.patch.yml`, hooksPath: `${directory}/hooks.json` }),
+  }
+})
 
 /** Controlled by tests that assert what `bootNow` derives for each configured plugin entry. */
 const pluginStatusMock = vi.fn(() => ({ kind: 'unavailable', package: '@deepseek-ai/dsh-hooks-claude-code', reason: 'not installed yet' }))
@@ -326,7 +355,13 @@ beforeEach(() => {
   // config unreadable would otherwise leak that into the next one.
   loadConfigMock.mockImplementation(() => configResult)
   startNotifyListenerMock.mockImplementation(async () => ({ port: 1, close: notifyCloseMock }))
-  writeRuntimeFilesMock.mockImplementation(() => ({ patchPath: '/tmp/p.yml', hooksPath: '/tmp/h.json', omitted: [] }))
+  writeRuntimeFilesMock.mockImplementation((_directory: string, _port: number, statuses: PluginStatus[] = []) => ({
+    patchPath: '/tmp/p.yml',
+    hooksPath: '/tmp/h.json',
+    omitted: statuses.filter((s): s is Extract<PluginStatus, { kind: 'unavailable' }> => s.kind === 'unavailable').map((s) => ({ package: s.package, reason: s.reason })),
+    ready: statuses.filter((s): s is Extract<PluginStatus, { kind: 'ready' }> => s.kind === 'ready').map((s) => ({ package: s.package, entryPath: s.entryPath })),
+  }))
+  capturedSettingsDeps = undefined
   pluginStatusMock.mockImplementation(() => ({
     kind: 'unavailable',
     package: '@deepseek-ai/dsh-hooks-claude-code',
@@ -344,11 +379,14 @@ beforeEach(() => {
 })
 
 describe('boot', () => {
-  it('loads the harness URL once the child reports ready', async () => {
+  it('loads the harness URL once the child reports ready, marking no plugin disabled', async () => {
     const child = await bootReady()
     expect(child.options.timeoutMs).toBeGreaterThan(0)
     expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:5000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running')
+    // A healthy boot marks nothing disabled — the map a later-opened Settings
+    // window would read is empty, not merely unset.
+    expect(capturedSettingsDeps?.disabledPlugins()).toEqual({})
   })
 
   it('derives a plugin status per configured entry, and passes them straight to writeRuntimeFiles', async () => {
@@ -390,11 +428,13 @@ describe('boot', () => {
       patchPath: '/tmp/p.yml',
       hooksPath: '/tmp/h.json',
       omitted: [{ package: '@deepseek-ai/dsh-hooks-claude-code', reason: 'not installed yet' }],
+      ready: [],
     }))
 
     await bootReady()
 
     expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:5000')
+    expect(capturedSettingsDeps?.disabledPlugins()).toEqual({ '@deepseek-ai/dsh-hooks-claude-code': 'not installed yet' })
     expect(setTrayStatus).toHaveBeenLastCalledWith(
       'running',
       expect.stringContaining('not installed yet'),
@@ -458,41 +498,107 @@ describe('configuration-class boot failures', () => {
 })
 
 describe('plugin-caused boot failures', () => {
+  const DECK = '@onetest/dsh-deck'
+  const DECK_ENTRY = '/tmp/deck/lib/index.js'
+  const OTHER = '@onetest/dsh-other'
+  const OTHER_ENTRY = '/tmp/other/lib/index.js'
+
+  /** The real harness's own wording: names the failing insert id and, in parens, its resolved entry path. */
+  function deckFailure(): string {
+    return `failed to apply loader entry onetest-dsh-deck (${DECK_ENTRY}): invalid config: - base must be a non-empty string starting with "/", received undefined (at base)`
+  }
+
   /** Configure one entry that resolves to a ready overlay insert. */
   function configureOneReadyPlugin(): void {
     configResult = {
       configured: true,
-      config: { ...STORED, plugins: [{ spec: '@onetest/dsh-deck', version: '0.2.1' }] },
+      config: { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }] },
     }
-    pluginStatusMock.mockImplementation(() => ({
-      kind: 'ready',
-      package: '@onetest/dsh-deck',
-      entryPath: '/tmp/deck/lib/index.js',
-      probeDirectory: '/tmp/deck',
-    }))
-    // The default `writeRuntimeFilesMock` reports `omitted: []`, so the one
-    // configured entry counts as inserted (`insertedCount` = 1 - 0).
+    pluginStatusMock.mockImplementation(() => ({ kind: 'ready', package: DECK, entryPath: DECK_ENTRY, probeDirectory: '/tmp/deck' }))
+    // The default `writeRuntimeFilesMock` derives `ready`/`omitted` from
+    // whatever `statuses` this attempt actually resolved, so the one
+    // configured entry counts as inserted (`insertedCount` = 1) on the
+    // primary boot and drops out once excluded on a retry.
   }
 
-  it('retries once with plugins removed when a boot with plugins inserted fails, and succeeds', async () => {
-    configureOneReadyPlugin()
+  /** Configure two entries that both resolve to ready overlay inserts. */
+  function configureTwoReadyPlugins(): void {
+    configResult = {
+      configured: true,
+      config: { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }, { spec: OTHER, version: '1.0.0' }] },
+    }
+    pluginStatusMock.mockImplementation((_deps: unknown, _home: string, entry: { spec: string }) => {
+      const isDeck = entry.spec.startsWith(DECK)
+      return {
+        kind: 'ready',
+        package: isDeck ? DECK : OTHER,
+        entryPath: isDeck ? DECK_ENTRY : OTHER_ENTRY,
+        probeDirectory: isDeck ? '/tmp/deck' : '/tmp/other',
+      }
+    })
+  }
+
+  it('attributes a failure naming one plugin and retries with only that plugin dropped, the other still inserted', async () => {
+    configureTwoReadyPlugins()
 
     await loadIndex()
     fake.ready()
     await vi.waitFor(() => expect(children.length).toBe(1))
-    children[0].failToStart('invalid config: base must be a non-empty string')
+    children[0].failToStart(deckFailure())
     await vi.waitFor(() => expect(children.length).toBe(2))
     children[1].ready('http://127.0.0.1:6000')
     await settle()
 
     expect(startServer).toHaveBeenCalledTimes(2)
+    // Only the culprit is excluded: the retry's own `pluginStatus` calls
+    // still cover both configured entries (exclusion happens in the `entry`
+    // filter before `pluginStatus`), but `writeRuntimeFilesMock` derives its
+    // `ready` list from what actually reached it — proving the survivor's
+    // status was still resolved and passed through.
+    expect(writeRuntimeFilesMock).toHaveBeenLastCalledWith(
+      expect.any(String),
+      STORED.notifyPort,
+      expect.arrayContaining([expect.objectContaining({ package: OTHER })]),
+    )
     expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
-    expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('plugins disabled'))
-    // Non-vacuity: with `canRetryWithoutPlugins` hardwired to `false`, this
-    // assertion fails because only the first, failing attempt ever runs and
-    // the error pane shows instead. Restoring the retry fixes it.
+    expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining(`${DECK} disabled`))
     expect(showError).not.toHaveBeenCalled()
     expect(openSettingsMock).not.toHaveBeenCalled()
+    // Non-vacuity: reverting `attributeBootFailure` to always return
+    // undefined makes this fail — `writeRuntimeFilesMock`'s last call carries
+    // no `OTHER` entry, because the unattributable fallback drops every
+    // configured plugin instead of isolating just the one named in the error.
+    expect(capturedSettingsDeps?.disabledPlugins()).toEqual({ [DECK]: expect.stringContaining('base must be a non-empty string') })
+
+    // A Settings window opened well after this boot finished still sees the
+    // reason: `disabledPlugins()` reads the same module-level state a window
+    // open at boot time would, not anything captured by a window instance.
+    // Non-vacuity: hardwiring `recordDisabledPlugins` to a no-op makes this
+    // assertion fail with `{}` instead of the deck's reason.
+    expect(capturedSettingsDeps?.disabledPlugins()[DECK]).toContain('base must be a non-empty string')
+  })
+
+  it('falls back to dropping every plugin, and reports it, when a failure names none of them', async () => {
+    configureTwoReadyPlugins()
+
+    await loadIndex()
+    fake.ready()
+    await vi.waitFor(() => expect(children.length).toBe(1))
+    // No entry path or insert id appears anywhere in this message.
+    children[0].failToStart('the harness crashed on an unrelated assertion')
+    await vi.waitFor(() => expect(children.length).toBe(2))
+    children[1].ready('http://127.0.0.1:6000')
+    await settle()
+
+    expect(startServer).toHaveBeenCalledTimes(2)
+    expect(writeRuntimeFilesMock).toHaveBeenLastCalledWith(expect.any(String), STORED.notifyPort, [])
+    expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
+    expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('disabled'))
+    expect(capturedSettingsDeps?.disabledPlugins()).toEqual({
+      [DECK]: expect.stringContaining('unrelated assertion'),
+      [OTHER]: expect.stringContaining('unrelated assertion'),
+    })
+    expect(showError).not.toHaveBeenCalled()
   })
 
   it('does not retry, and does not double the wait, when no plugin was inserted', async () => {
@@ -504,32 +610,46 @@ describe('plugin-caused boot failures', () => {
     children[0].failToStart('no URL')
     await settle()
 
-    // Non-vacuity: with the `insertedCount > 0` guard removed from
-    // `canRetryWithoutPlugins`, this assertion fails because a second
-    // `startServer` call (the unconditional retry) follows the first.
-    // Restoring the guard fixes it.
     expect(startServer).toHaveBeenCalledTimes(1)
     expect(showError).toHaveBeenCalledWith(fake.window, 'The harness failed to start', expect.stringContaining('no URL'))
     expect(openSettingsMock).not.toHaveBeenCalled()
   })
 
-  it('reports the original failure, not the retry’s, when the retry also fails', async () => {
-    configureOneReadyPlugin()
+  it('bounds isolation retries: at most MAX_ISOLATION_ATTEMPTS extra attempts, even with a pathological plugin count', async () => {
+    // Three configured plugins, each individually attributable but each
+    // retry still fails: without a bound, this would isolate one per
+    // attempt until none remained. The bound must stop it after two extra
+    // attempts (three `startServer` calls total), leaving the third
+    // configured plugin's own failure as whatever the last attempt reports,
+    // not an unbounded fourth attempt.
+    const THIRD = '@onetest/dsh-third'
+    const THIRD_ENTRY = '/tmp/third/lib/index.js'
+    configResult = {
+      configured: true,
+      config: { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }, { spec: OTHER, version: '1.0.0' }, { spec: THIRD, version: '1.0.0' }] },
+    }
+    pluginStatusMock.mockImplementation((_deps: unknown, _home: string, entry: { spec: string }) => {
+      if (entry.spec.startsWith(DECK)) return { kind: 'ready', package: DECK, entryPath: DECK_ENTRY, probeDirectory: '/tmp/deck' }
+      if (entry.spec.startsWith(OTHER)) return { kind: 'ready', package: OTHER, entryPath: OTHER_ENTRY, probeDirectory: '/tmp/other' }
+      return { kind: 'ready', package: THIRD, entryPath: THIRD_ENTRY, probeDirectory: '/tmp/third' }
+    })
 
     await loadIndex()
     fake.ready()
     await vi.waitFor(() => expect(children.length).toBe(1))
-    children[0].failToStart('invalid config: base must be a non-empty string')
+    children[0].failToStart(`failed to apply loader entry (${DECK_ENTRY}): invalid config`)
     await vi.waitFor(() => expect(children.length).toBe(2))
-    children[1].failToStart('still broken')
+    children[1].failToStart(`failed to apply loader entry (${OTHER_ENTRY}): invalid config`)
+    await vi.waitFor(() => expect(children.length).toBe(3))
+    children[2].failToStart(`failed to apply loader entry (${THIRD_ENTRY}): invalid config`)
     await settle()
 
-    expect(startServer).toHaveBeenCalledTimes(2)
-    expect(showError).toHaveBeenCalledWith(
-      fake.window,
-      'The harness failed to start',
-      expect.stringContaining('invalid config: base must be a non-empty string'),
-    )
+    // 1 primary + MAX_ISOLATION_ATTEMPTS (2) retries = 3 total, never 4.
+    expect(startServer).toHaveBeenCalledTimes(3)
+    expect(showError).toHaveBeenCalledWith(fake.window, 'The harness failed to start', expect.stringContaining(THIRD_ENTRY))
+    // Non-vacuity: raising the loop's attempt bound (or removing it) makes
+    // this fail because a fourth `startServer` call follows, isolating the
+    // third plugin too instead of giving up after the bound.
   })
 
   it('leaks no child when a quit lands while the retry is still starting', async () => {
@@ -538,7 +658,7 @@ describe('plugin-caused boot failures', () => {
     await loadIndex()
     fake.ready()
     await vi.waitFor(() => expect(children.length).toBe(1))
-    children[0].failToStart('invalid config: base must be a non-empty string')
+    children[0].failToStart(deckFailure())
     await vi.waitFor(() => expect(children.length).toBe(2))
 
     // The retry's child is spawned but has not yet reported ready or exited.

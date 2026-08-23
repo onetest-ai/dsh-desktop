@@ -55,6 +55,7 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     installPlugin: vi.fn(async (_pkg, version) => version),
     checkManagedUpdate: vi.fn(async () => undefined),
     checkBinaries: vi.fn(async () => ({ pnpm: { ok: true, version: '9.0.0' }, npm: { ok: true, version: '10.0.0' } })),
+    disabledPlugins: vi.fn(() => ({})),
     ...overrides,
   }
 }
@@ -182,6 +183,27 @@ describe('read', () => {
       createSettingsHandlers(d).read(undefined, vi.fn())
 
       expect(checkManagedUpdate).not.toHaveBeenCalled()
+    })
+
+    it("carries the boot's own disabled reason for a matching package, and nothing for the rest", () => {
+      // `disabledPlugins` reflects main-process state a boot last recorded,
+      // independent of this `read` call — the very thing that lets a
+      // Settings window opened long after boot still show an accurate
+      // reason, rather than only one that happened to be open at boot time.
+      const d = deps({
+        readConfig: () => ({
+          configured: true,
+          config: withPlugins([{ spec: `${DECK}@0.2.1`, version: '0.2.1' }, { spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' }]),
+        }),
+        disabledPlugins: () => ({ [DECK]: 'base must be a non-empty string starting with "/", received undefined (at base)' }),
+      })
+
+      const { plugins } = createSettingsHandlers(d).read()
+
+      expect(plugins.find((plugin) => plugin.package === DECK)?.disabledReason).toBe(
+        'base must be a non-empty string starting with "/", received undefined (at base)',
+      )
+      expect(plugins.find((plugin) => plugin.package === HOOKS_PACKAGE)?.disabledReason).toBeUndefined()
     })
   })
 })

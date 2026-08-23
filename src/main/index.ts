@@ -10,7 +10,7 @@ import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { HOOKS_PACKAGE, parseSpec, pluginInstallMarker, pluginStatus, type PluginEntry } from './plugin-entries'
 import { preflight } from './preflight'
-import { runtimeFilePaths, writeRuntimeFiles } from './runtime-files'
+import { attributeBootFailure, runtimeFilePaths, writeRuntimeFiles } from './runtime-files'
 import type { InstallDeps } from './runtime-install'
 import { dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
 import { createSettingsHandlers } from './settings-ipc'
@@ -31,6 +31,21 @@ const READY_TIMEOUT_MS = 60_000
 
 /** How long the Advanced tab's Check button waits for `pnpm --version`/`npm --version` before treating a binary as hung. */
 const CHECK_BINARY_TIMEOUT_MS = 10_000
+
+/**
+ * How many extra attempts `bootNow` may make beyond the primary one when a
+ * server-stage failure is attributable, or falls back, to dropping plugins.
+ *
+ * Bounds worst-case boot time to `(1 + MAX_ISOLATION_ATTEMPTS) *
+ * READY_TIMEOUT_MS` regardless of how many plugins are configured: without a
+ * cap, a config with many independently broken plugins could isolate one per
+ * attempt forever, each attempt paying a full readiness timeout. Two extra
+ * attempts covers the realistic cases this feature exists for — one bad
+ * plugin, or two whose failures surface one after the other — while the
+ * unattributable-failure fallback (drop every remaining plugin at once)
+ * always guarantees a bounded final attempt reaches a plugin-free boot.
+ */
+const MAX_ISOLATION_ATTEMPTS = 2
 
 let window: BrowserWindow | undefined
 let quitting = false
@@ -200,6 +215,7 @@ const settingsHandlers = createSettingsHandlers({
   checkManagedUpdate: (pkg, installed, npmPath) =>
     createUpdateChecker(installDeps, resolveBinary(npmPath, 'npm', process.env))(pkg, installed),
   checkBinaries: (pnpmPath, npmPath) => checkBinaries(pnpmPath, npmPath, process.env, CHECK_BINARY_TIMEOUT_MS),
+  disabledPlugins: () => Object.fromEntries(disabledPlugins),
 })
 
 /**
@@ -215,6 +231,33 @@ interface Child {
   stop(): Promise<void>
 }
 let child: Child | undefined
+
+/**
+ * Why each currently-configured plugin is not mounted in the running
+ * harness, keyed by package name; absent means the entry is either mounted
+ * or not configured at all.
+ *
+ * Held at module scope, not on the settings window: a boot's outcome must
+ * reach a Settings window opened long after that boot finished, and this is
+ * what `read()` (via `SettingsDeps.disabledPlugins`) consults regardless of
+ * whether any window existed when the boot happened. Replaced wholesale by
+ * `recordDisabledPlugins` at the end of every boot attempt that reaches a
+ * final outcome — never merged — so a plugin that starts working again after
+ * a later boot cannot leave a stale reason behind.
+ */
+let disabledPlugins = new Map<string, string>()
+
+/**
+ * Replace the disabled-plugin state a Settings window reads, from a single
+ * boot attempt's own knowledge: entries the overlay never tried to mount
+ * (pre-flight `omitted`, e.g. not installed yet) and entries this boot
+ * isolated after attributing a runtime failure to them.
+ * @param omitted - pre-flight omissions from the attempt that ultimately ran.
+ * @param isolated - package/reason pairs isolated during this boot's retries.
+ */
+function recordDisabledPlugins(omitted: { package: string; reason: string }[], isolated: { package: string; reason: string }[]): void {
+  disabledPlugins = new Map([...omitted, ...isolated].map((entry) => [entry.package, entry.reason]))
+}
 
 /**
  * Incremented for every child the app starts and every stop it performs.
@@ -343,13 +386,14 @@ async function bootNow(): Promise<void> {
 
   const mine = (generation += 1)
 
-  const attempt = await attemptBoot(config, mine, true)
+  const attempt = await attemptBoot(config, mine, new Set())
 
   if (attempt.ok) {
     if (mine !== generation) {
       // A stop overtook this boot; the child is already being reaped elsewhere.
       return
     }
+    recordDisabledPlugins(attempt.omitted, [])
     setStatus('running', attempt.hooksNote)
     if (window !== undefined && !window.isDestroyed()) void window.loadURL(attempt.handle.url)
     return
@@ -364,13 +408,14 @@ async function bootNow(): Promise<void> {
   if (mine !== generation) return
   // The rejection paths (readiness timeout, early exit) can leave a child
   // mid-death, so it is reaped here rather than merely forgotten. This is
-  // also the retry's own generation token from here on: `stopCurrent` always
-  // advances `generation`, so `mine` itself can never match it again — the
-  // retry needs a fresh baseline captured right after this expected bump,
-  // not the boot's original token, to tell a legitimate advance (this reap)
-  // from an illegitimate one (a newer transition superseding this attempt).
+  // also every retry's own generation token from here on: `stopCurrent`
+  // always advances `generation`, so `mine` itself can never match it again
+  // — each retry needs a fresh baseline captured right after this expected
+  // bump, not the boot's original token, to tell a legitimate advance (this
+  // reap) from an illegitimate one (a newer transition superseding this
+  // attempt).
   await stopCurrent()
-  const afterOwnReap = generation
+  let token = generation
 
   // A ConfigurationError means `dshWebCommand` could not resolve the
   // configured launcher — a config mistake unrelated to plugins, fixed in
@@ -378,63 +423,118 @@ async function bootNow(): Promise<void> {
   // full timeout. Every other rejection (readiness timeout, early exit,
   // spawn ENOENT) means a correctly configured launcher started something
   // that then failed, which — when the overlay had inserted at least one
-  // plugin — is retried once with every plugin insert removed: the app
-  // holds that a broken plugin costs its own feature, never the whole app,
-  // and a plugin that loads but rejects its config is exactly that case,
-  // just discovered one step later than the loadability probe alone catches.
-  const canRetryWithoutPlugins = attempt.insertedCount > 0 && !(attempt.error instanceof ConfigurationError) && !quitting
+  // plugin — is retried, isolating the plugin the error attributes the
+  // failure to (see `attributeBootFailure`) rather than dropping every
+  // plugin: the app holds that a broken plugin costs its own feature, never
+  // the whole app, and a plugin that loads but rejects its config is exactly
+  // that case, just discovered one step later than the loadability probe
+  // alone catches. When a failure names no identifiable plugin, every
+  // remaining candidate is dropped at once — the old drop-all behavior,
+  // still reported below via `isolated`.
+  let current: BootAttempt = attempt
+  const excluded = new Set<string>()
+  const isolated: { package: string; reason: string }[] = []
+  let attemptsMade = 1
 
-  if (canRetryWithoutPlugins) {
-    const retry = await attemptBoot(config, afterOwnReap, false)
-    if (retry.ok) {
-      if (afterOwnReap === generation && !quitting) {
-        setStatus('running', `plugins disabled — the harness would not start with them: ${attempt.error.message}`)
-        if (window !== undefined && !window.isDestroyed()) void window.loadURL(retry.handle.url)
-        return
+  while (
+    current.stage === 'server' &&
+    current.insertedCount > 0 &&
+    !(current.error instanceof ConfigurationError) &&
+    !quitting &&
+    attemptsMade < 1 + MAX_ISOLATION_ATTEMPTS
+  ) {
+    const survivors = current.ready.filter((entry) => !excluded.has(entry.package))
+    const culprit = attributeBootFailure(current.error.message, survivors)
+    if (culprit !== undefined) {
+      excluded.add(culprit)
+      isolated.push({ package: culprit, reason: current.error.message })
+    } else {
+      // Unattributable: falling back to dropping every plugin still standing
+      // is reported the same as an attributed isolation, via `isolated`, so
+      // the user still learns plugins were disabled and why, even though the
+      // "why" here is the harness's own undifferentiated failure rather than
+      // a single named cause.
+      for (const entry of survivors) {
+        excluded.add(entry.package)
+        isolated.push({ package: entry.package, reason: current.error.message })
       }
-      // Superseded (a newer boot, restart, or shutdown landed mid-retry) — the
-      // retry's child must still be reaped rather than left running unreported.
-      await stopCurrent()
+    }
+
+    attemptsMade += 1
+    const retry = await attemptBoot(config, token, excluded)
+
+    if (token !== generation) {
+      // Superseded (a newer boot, restart, or shutdown landed mid-retry) —
+      // the retry's child, if any, must still be reaped rather than left
+      // running unreported.
+      if (retry.ok) await stopCurrent()
       return
     }
-    if (retry.stage === 'server' && afterOwnReap === generation) {
-      await stopCurrent()
+
+    if (retry.ok) {
+      recordDisabledPlugins(retry.omitted, isolated)
+      setStatus(
+        'running',
+        [retry.hooksNote, isolated.map((entry) => `${entry.package} disabled — the harness would not start with it: ${entry.reason}`).join('; ')]
+          .filter((note): note is string => note !== undefined && note !== '')
+          .join('; '),
+      )
+      if (window !== undefined && !window.isDestroyed()) void window.loadURL(retry.handle.url)
+      return
     }
+
+    if (retry.stage === 'files') {
+      // Unreachable in practice — the primary attempt already wrote these
+      // files successfully — but handled the same way a primary files
+      // failure is, rather than left to fall through as a server failure.
+      fail('The harness launch files could not be written', retry.message)
+      return
+    }
+
+    await stopCurrent()
+    token = generation
+    current = retry
   }
 
-  if (attempt.error instanceof ConfigurationError) {
-    failConfiguration('The harness failed to start', attempt.error.message)
-  } else {
-    fail('The harness failed to start', attempt.error.message)
+  // Every isolation attempt is reported even though the loop is exiting on
+  // an unrecoverable failure, so Settings can show why a plugin dropped
+  // along the way is disabled, not just the final error pane.
+  recordDisabledPlugins([], isolated)
+
+  if (current.stage === 'server' && current.error instanceof ConfigurationError) {
+    failConfiguration('The harness failed to start', current.error.message)
+  } else if (current.stage === 'server') {
+    fail('The harness failed to start', current.error.message)
   }
 }
 
 /** What one `attemptBoot` call produced. */
 type BootAttempt =
-  | { ok: true; handle: ServerHandle; hooksNote?: string }
+  | { ok: true; handle: ServerHandle; hooksNote?: string; omitted: { package: string; reason: string }[] }
   | { ok: false; stage: 'files'; message: string }
-  | { ok: false; stage: 'server'; error: Error; insertedCount: number }
+  | { ok: false; stage: 'server'; error: Error; insertedCount: number; ready: { package: string; entryPath: string }[] }
 
 /**
- * Write the runtime files and spawn the harness once, either with every
- * configured plugin entry resolved, or with none — the shape `bootNow` uses
- * both for the normal boot and for its plugins-disabled retry.
+ * Write the runtime files and spawn the harness once, with every configured
+ * plugin entry resolved except those in `excludePackages` — the shape
+ * `bootNow` uses for the primary boot (empty set) and for every isolation or
+ * drop-all retry (one or more packages named).
  *
  * Runs only inside `enqueue` (via `bootNow`), so it can assume no other
  * transition is active; still checks `mine !== generation` nowhere itself —
  * that is `bootNow`'s job, since only it knows whether a given attempt is
- * the primary or the retry.
+ * the primary or a retry, and only it holds the per-retry token.
  * @param config - the desktop settings this boot is starting from.
  * @param mine - this boot's generation token, closed over by `onSpawned`/`onExit`.
- * @param includePlugins - false for the plugins-disabled retry: every
- *   configured entry is left out of the overlay, the same as none were ever
- *   configured.
+ * @param excludePackages - package names to leave out of the overlay
+ *   entirely, as if they were never configured — empty for the primary boot.
  * @returns the outcome, discriminated by `ok` and, on failure, by `stage`.
  */
-async function attemptBoot(config: DesktopConfig, mine: number, includePlugins: boolean): Promise<BootAttempt> {
+async function attemptBoot(config: DesktopConfig, mine: number, excludePackages: ReadonlySet<string>): Promise<BootAttempt> {
   let patchPath: string
   let hooksNote: string | undefined
-  let insertedCount = 0
+  let omitted: { package: string; reason: string }[] = []
+  let ready: { package: string; entryPath: string }[] = []
   try {
     // Where each configured plugin entry would load from, or why it is
     // unavailable — from whatever a Settings save last resolved and
@@ -442,22 +542,19 @@ async function attemptBoot(config: DesktopConfig, mine: number, includePlugins: 
     // privileged with `configPath` pointing at the hooks file this same
     // boot is about to write; every other entry gets none.
     const { hooksPath } = runtimeFilePaths(runtimeDirectory())
-    const statuses = includePlugins
-      ? (config.plugins ?? []).map((entry) =>
-          pluginStatus(installDeps, DSH_HOME, entry, parseSpec(entry.spec).package === HOOKS_PACKAGE ? hooksPath : undefined),
-        )
-      : []
+    const statuses = (config.plugins ?? [])
+      .filter((entry) => !excludePackages.has(parseSpec(entry.spec).package))
+      .map((entry) => pluginStatus(installDeps, DSH_HOME, entry, parseSpec(entry.spec).package === HOOKS_PACKAGE ? hooksPath : undefined))
     const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses)
     patchPath = files.patchPath
-    insertedCount = statuses.length - files.omitted.length
-    if (includePlugins) {
-      const bridgeOmitted = files.omitted.find((entry) => entry.package === HOOKS_PACKAGE)
-      const otherOmitted = files.omitted.filter((entry) => entry.package !== HOOKS_PACKAGE)
-      const notes: string[] = []
-      if (bridgeOmitted !== undefined) notes.push(`notifications unavailable — hook bridge not loaded: ${bridgeOmitted.reason}`)
-      for (const entry of otherOmitted) notes.push(`${entry.package} not loaded: ${entry.reason}`)
-      hooksNote = notes.length > 0 ? notes.join('; ') : undefined
-    }
+    omitted = files.omitted
+    ready = files.ready
+    const bridgeOmitted = omitted.find((entry) => entry.package === HOOKS_PACKAGE)
+    const otherOmitted = omitted.filter((entry) => entry.package !== HOOKS_PACKAGE)
+    const notes: string[] = []
+    if (bridgeOmitted !== undefined) notes.push(`notifications unavailable — hook bridge not loaded: ${bridgeOmitted.reason}`)
+    for (const entry of otherOmitted) notes.push(`${entry.package} not loaded: ${entry.reason}`)
+    hooksNote = notes.length > 0 ? notes.join('; ') : undefined
   } catch (error) {
     return { ok: false, stage: 'files', message: (error as Error).message }
   }
@@ -475,9 +572,10 @@ async function attemptBoot(config: DesktopConfig, mine: number, includePlugins: 
         fail(`The harness exited (code ${String(code)})`, tail || 'No output captured.')
       },
     })
-    return { ok: true, handle, hooksNote }
+    return { ok: true, handle, hooksNote, omitted }
   } catch (error) {
-    return { ok: false, stage: 'server', error: error as Error, insertedCount }
+    const insertedCount = ready.length
+    return { ok: false, stage: 'server', error: error as Error, insertedCount, ready }
   }
 }
 

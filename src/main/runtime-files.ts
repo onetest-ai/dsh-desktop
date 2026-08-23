@@ -13,6 +13,13 @@ export interface RuntimeFiles {
   hooksPath: string
   /** Every configured plugin left out of the overlay, and why. Empty when all mounted. */
   omitted: { package: string; reason: string }[]
+  /**
+   * Every plugin actually inserted into the overlay, package name paired with
+   * its resolved entry file — the same absolute path the cordis loader was
+   * given as the insert's `name`. Used only to attribute a runtime boot
+   * failure back to the one entry that caused it; see `attributeBootFailure`.
+   */
+  ready: { package: string; entryPath: string }[]
 }
 
 /** File names inside the runtime directory. */
@@ -291,9 +298,47 @@ export function writeRuntimeFiles(
   }
 
   const paths = runtimeFilePaths(directory)
-  const files: RuntimeFiles = { ...paths, omitted }
+  const files: RuntimeFiles = {
+    ...paths,
+    omitted,
+    ready: ready.map((entry) => ({ package: entry.package, entryPath: entry.entryPath })),
+  }
   mkdirSync(directory, { recursive: true })
   writeFileSync(files.hooksPath, hooksConfig(notifyPort))
   writeFileSync(files.patchPath, patchOverlay(ready, omitted))
   return files
+}
+
+/**
+ * Attribute a harness boot failure to the one configured plugin that caused
+ * it, by looking for that plugin's own resolved entry file — an absolute
+ * path unique to its install directory — as a substring of the harness's
+ * error text.
+ *
+ * The harness's own error names the failing insert two ways: a sanitized id
+ * (`insertId`, e.g. `onetest-dsh-deck`) and, in parentheses, the absolute
+ * entry path the overlay gave it (e.g. `failed to apply loader entry
+ * onetest-dsh-deck (/…/…/lib/index.js): invalid config: …`). The entry path
+ * is used here rather than the id: `insertId` collapses every character
+ * outside `[a-zA-Z0-9]` to `-`, so two distinct scoped package names can
+ * sanitize to the same id (`@a-b/c` and `@a/b-c` both become `a-b-c`), while
+ * each entry's resolved path is unique by construction — it lives under its
+ * own package-and-version install directory (see `managedDir`) — so a
+ * substring match against it can never attribute a failure to the wrong
+ * plugin among the ones actually offered.
+ *
+ * Exactly one match is required: if the message names none of `ready`'s
+ * paths, or — in principle, given a pathological entry path that is itself a
+ * substring of another's — more than one, the failure is treated as
+ * unattributable, since guessing which of several candidates actually broke
+ * would risk dropping a healthy plugin while leaving the real cause running.
+ * @param message - the harness's own failure text.
+ * @param ready - the entries actually inserted into the overlay for the
+ *   attempt that failed.
+ * @returns the one package the failure is attributed to, or undefined when
+ *   the message cannot be attributed to exactly one of them.
+ */
+export function attributeBootFailure(message: string, ready: { package: string; entryPath: string }[]): string | undefined {
+  const matches = ready.filter((entry) => message.includes(entry.entryPath))
+  return matches.length === 1 ? matches[0].package : undefined
 }

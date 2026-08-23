@@ -65,6 +65,15 @@ export interface SettingsDeps {
    * @param npmPath - the npm path field's current value; blank means PATH.
    */
   checkBinaries(pnpmPath: string, npmPath: string): Promise<BinaryChecks>
+  /**
+   * Why each currently-configured plugin is not mounted in the harness the
+   * app has running right now, keyed by package name; a package absent from
+   * the result is mounted (or was never configured). Reflects the outcome of
+   * whatever boot last concluded, in the main process, independent of
+   * whether any Settings window was open when it happened — so a window
+   * opened well after boot still shows an accurate reason.
+   */
+  disabledPlugins(): Record<string, string>
 }
 
 /** What `read` reports about one configured plugin entry, alongside the editable form. */
@@ -79,6 +88,13 @@ export interface PluginInfo {
   version?: string
   /** The entry's stored config, pretty-printed for the row's textarea; `''` when none is set. */
   config: string
+  /**
+   * Why this plugin is not mounted in the harness right now — the harness's
+   * own message when a boot isolated it after attributing a runtime failure
+   * to it, or the pre-flight reason (not installed, not loadable, …) when it
+   * never reached the overlay at all. Undefined when the plugin is mounted.
+   */
+  disabledReason?: string
 }
 
 /** What a save refused for overlapping another save reports on the `kind` field. */
@@ -410,6 +426,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       }
 
       const storedPlugins = stored.configured ? (stored.config.plugins ?? []) : []
+      const disabled = deps.disabledPlugins()
       const plugins: PluginInfo[] = storedPlugins.map((entry) => {
         const { package: pkg, pinnedVersion } = parseSpec(entry.spec)
         return {
@@ -418,6 +435,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
           pinned: pinnedVersion !== undefined,
           version: entry.version,
           config: entry.config === undefined ? '' : JSON.stringify(entry.config, undefined, 2),
+          disabledReason: disabled[pkg],
         }
       })
 

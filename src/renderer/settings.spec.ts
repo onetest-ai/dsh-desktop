@@ -233,6 +233,8 @@ interface Renderer {
   useLatestPlugin(pkg: string): Promise<void>
   /** The rendered plugin rows' aggregated text, one entry per row, in render order. */
   renderedPluginRows(): string[]
+  /** The rendered `<li>` rows' own `className`, one entry per row, in render order. */
+  renderedPluginRowClasses(): string[]
   /** Calls made to `settings.acceptPluginUpdate`, as `[pkg, version]` pairs. */
   acceptPluginUpdateCalls: Array<[string, string]>
   /** Calls made to `settings.validatePlugin`, as `[spec, existingPackages]` pairs. */
@@ -441,6 +443,7 @@ async function load(
       await findByClass(row, 'plugin-update-use')?.listeners.get('click')?.()
     },
     renderedPluginRows: () => rows().map((row) => textOf(row)),
+    renderedPluginRowClasses: () => rows().map((row) => row.className),
     acceptPluginUpdateCalls,
     validatePluginCalls,
     clickTab: (id) => {
@@ -699,6 +702,34 @@ describe('plugins', () => {
     await renderer.save()
 
     expect(renderer.renderedPluginRows()).toEqual([expect.stringContaining('v0.2.0 installed')])
+  })
+
+  it("shows a disabled plugin's own reason on its row, and marks the row, while a healthy row carries neither", async () => {
+    const onRead = vi.fn().mockResolvedValue({
+      configured: true,
+      form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+      plugins: [
+        { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
+        {
+          spec: `${DECK}@0.2.1`,
+          package: DECK,
+          pinned: true,
+          version: '0.2.1',
+          disabledReason: 'base must be a non-empty string starting with "/", received undefined (at base)',
+        },
+      ],
+    })
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), onRead)
+
+    const deckText = renderer.renderedPluginRows().find((row) => row.includes(DECK))
+    const hooksText = renderer.renderedPluginRows().find((row) => row.includes(HOOKS))
+    expect(deckText).toContain('base must be a non-empty string')
+    expect(hooksText).not.toContain('Disabled')
+
+    const classes = renderer.renderedPluginRowClasses()
+    expect(classes.some((className) => className.includes('plugin-row-disabled'))).toBe(true)
+    // The healthy row's class carries no disabled marker.
+    expect(classes.some((className) => className === 'plugin-row')).toBe(true)
   })
 
   describe('adding a row', () => {

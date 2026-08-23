@@ -187,7 +187,7 @@ function renderPluginRows() {
   list.textContent = ''
   for (const plugin of pluginRows) {
     const row = document.createElement('li')
-    row.className = 'plugin-row'
+    row.className = plugin.disabledReason ? 'plugin-row plugin-row-disabled' : 'plugin-row'
 
     const top = document.createElement('div')
     top.className = 'plugin-row-top'
@@ -238,6 +238,18 @@ function renderPluginRows() {
 
     top.append(actions)
     row.append(top)
+
+    // A plugin the running harness dropped — either it never reached the
+    // overlay (not installed, not loadable) or a boot isolated it after
+    // attributing a runtime failure to it — carries the harness's own reason
+    // here, on its own row, rather than only in the tray tooltip: this is
+    // where the user is already looking to fix it.
+    if (plugin.disabledReason) {
+      const note = document.createElement('p')
+      note.className = 'plugin-disabled-note'
+      note.textContent = `Disabled — the harness would not start with it: ${plugin.disabledReason}`
+      row.append(note)
+    }
 
     const configWrap = document.createElement('details')
     configWrap.className = 'plugin-config'

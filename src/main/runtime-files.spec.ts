@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { checkPackageLoadable, hooksConfig, patchOverlay, writeRuntimeFiles, type LoadabilityProbe } from './runtime-files'
+import { attributeBootFailure, checkPackageLoadable, hooksConfig, patchOverlay, writeRuntimeFiles, type LoadabilityProbe } from './runtime-files'
 import type { PluginStatus } from './plugin-entries'
 
 /**
@@ -282,5 +282,41 @@ describe('writeRuntimeFiles', () => {
     writeRuntimeFiles(directory, 44001, [ready()], alwaysLoadable)
     const files = writeRuntimeFiles(directory, 44002, [ready()], alwaysLoadable)
     expect(readFileSync(files.hooksPath, 'utf8')).toContain('127.0.0.1:44002')
+  })
+
+  it('reports every mounted entry, package paired with its resolved entry file, for `attributeBootFailure` to consult', () => {
+    const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
+    const files = writeRuntimeFiles(directory, 44001, [ready('@onetest/dsh-deck', '/irrelevant/lib/index.js')], alwaysLoadable)
+
+    expect(files.ready).toEqual([{ package: '@onetest/dsh-deck', entryPath: '/irrelevant/lib/index.js' }])
+  })
+})
+
+describe('attributeBootFailure', () => {
+  const deck = { package: '@onetest/dsh-deck', entryPath: '/dsh-home/runtimes/x/@onetest/dsh-deck/lib/index.js' }
+  const bridge = { package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: '/dsh-home/runtimes/x/@deepseek-ai/dsh-hooks-claude-code/lib/index.js' }
+
+  it('attributes a failure to the one entry whose resolved path appears in the message', () => {
+    const message = `failed to apply loader entry onetest-dsh-deck (${deck.entryPath}): invalid config: - base must be a non-empty string starting with "/", received undefined (at base)`
+    expect(attributeBootFailure(message, [deck, bridge])).toBe(deck.package)
+  })
+
+  it('is unattributable when the message names none of the ready entries', () => {
+    expect(attributeBootFailure('the harness crashed on an unrelated assertion', [deck, bridge])).toBeUndefined()
+  })
+
+  it('is unattributable when the message happens to mention more than one entry path', () => {
+    // Deliberately ambiguous: naming which of two candidates actually broke
+    // would risk dropping a healthy plugin while leaving the real cause
+    // running, so neither is picked.
+    const message = `${deck.entryPath} and ${bridge.entryPath} both appear in this message`
+    expect(attributeBootFailure(message, [deck, bridge])).toBeUndefined()
+  })
+
+  it('never matches the sanitized loader-entry id alone, only the resolved path', () => {
+    // The id (`onetest-dsh-deck`) is not unique the way the path is — two
+    // distinct scoped package names can sanitize to the same id — so a
+    // message carrying only the id and not the path is unattributable here.
+    expect(attributeBootFailure('failed to apply loader entry onetest-dsh-deck: some other error', [deck])).toBeUndefined()
   })
 })
