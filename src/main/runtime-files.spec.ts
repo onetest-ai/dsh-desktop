@@ -119,6 +119,36 @@ describe('patchOverlay', () => {
     expect(overlay).toContain("name: '/tmp/deck/lib/index.js'")
     expect(overlay).toContain('@deepseek-ai/dsh-hooks-claude-code was omitted: not installed yet')
   })
+
+  it("emits an entry's own stored config as a flow-style YAML mapping", () => {
+    const overlay = patchOverlay(
+      [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', config: { base: '/x', nested: { n: 1 } } }],
+      [],
+    )
+    expect(overlay).toContain('config: {"base":"/x","nested":{"n":1}}')
+    expect(overlay).not.toContain('config: {}')
+  })
+
+  it('keeps the empty-object default for an entry with no stored config', () => {
+    const overlay = patchOverlay([{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', config: undefined }], [])
+    expect(overlay).toContain('config: {}')
+  })
+
+  it('prefers the privileged configPath over a stored config when both are set', () => {
+    const overlay = patchOverlay(
+      [
+        {
+          package: '@deepseek-ai/dsh-hooks-claude-code',
+          entryPath: '/tmp/hooks/lib/index.js',
+          configPath: '/tmp/hooks.json',
+          config: { ignored: true },
+        },
+      ],
+      [],
+    )
+    expect(overlay).toContain("configPath: '/tmp/hooks.json'")
+    expect(overlay).not.toContain('ignored')
+  })
 })
 
 describe('checkPackageLoadable', () => {
@@ -188,6 +218,22 @@ describe('writeRuntimeFiles', () => {
     expect(overlay).toContain("name: '/irrelevant/lib/index.js'")
     expect(overlay).toContain('port: 0')
     expect(readFileSync(files.hooksPath, 'utf8')).toContain('127.0.0.1:44001')
+  })
+
+  it("carries a ready entry's own stored config through to the overlay", () => {
+    const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
+    const status: PluginStatus = {
+      kind: 'ready',
+      package: '@onetest/dsh-deck',
+      entryPath: '/irrelevant/lib/index.js',
+      probeDirectory: '/irrelevant',
+      config: { base: '/x' },
+    }
+    const files = writeRuntimeFiles(directory, 44001, [status], alwaysLoadable)
+
+    expect(files.omitted).toEqual([])
+    const overlay = readFileSync(files.patchPath, 'utf8')
+    expect(overlay).toContain('config: {"base":"/x"}')
   })
 
   it('omits the insert and reports a reason when the plugin is not loadable', () => {

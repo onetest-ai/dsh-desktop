@@ -16,12 +16,17 @@ export interface SettingsForm {
   pnpmPath: string
   npmPath: string
   /**
-   * One plugin spec per line, typed the way the user would on a command
-   * line: `pkg@version` (pinned) or `pkg` (floating). Blank lines are
-   * ignored. `settings-ipc.ts`'s `performSave` resolves and installs each
-   * line and reconciles it against the previously stored entries.
+   * One row per configured plugin, built by the renderer from its row-based
+   * Add control — not raw HTML field values, unlike every other member of
+   * this interface. `spec` is typed the way the user would on a command
+   * line: `pkg@version` (pinned) or `pkg` (floating). `config` is the row's
+   * own free-form configuration textarea, raw JSON text; blank means no
+   * config. A row with a blank `spec` is ignored, the same as a blank line
+   * was in the free-text field this replaced. `settings-ipc.ts`'s
+   * `performSave` resolves and installs each row and reconciles it against
+   * the previously stored entries.
    */
-  plugins: string
+  plugins: { spec: string; config: string }[]
 }
 
 /** Per-field messages for a rejected form; absent keys validated cleanly. */
@@ -52,23 +57,55 @@ const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$
  */
 const VERSION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.+-]*$/
 
+/** Result of validating one plugin's config textarea. */
+export type PluginConfigValidation = { ok: true; config?: Record<string, unknown> } | { ok: false; message: string }
+
 /**
- * Parse the `plugins` field — one spec per line, accumulated from the
- * Settings window's row-based Add control — into entries, or the reason the
- * text was rejected.
+ * Parse and validate one plugin row's free-form config text.
  *
- * Each non-blank line is one spec. A duplicate package name (pinned or not)
- * is rejected rather than silently keeping one. In normal use the row-based
- * control already rejects a duplicate at Add time (see `validatePluginSpec`
- * below), so this is a second check on the accumulated list at Save.
- * @param text - the raw field contents.
- * @returns the parsed entries, or an error message naming the bad line.
+ * The config is inherently free-form — only the plugin itself knows its own
+ * schema — so JSON is the wire format rather than a key/value UI that could
+ * never express nesting. Blank text means "no config", which keeps the
+ * overlay's current `{}` behaviour (see `runtime-files.ts`'s `patchOverlay`).
+ * @param text - the raw textarea contents.
+ * @returns the parsed object, or the message to show beside that row.
  */
-function parsePluginsField(text: string): { ok: true; entries: PluginEntry[] } | { ok: false; message: string } {
+export function parsePluginConfig(text: string): PluginConfigValidation {
+  const trimmed = text.trim()
+  if (trimmed === '') return { ok: true, config: undefined }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch (error) {
+    return { ok: false, message: `Config is not valid JSON: ${(error as Error).message}` }
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { ok: false, message: 'Config must be a JSON object, e.g. {"key": "value"}.' }
+  }
+  return { ok: true, config: parsed as Record<string, unknown> }
+}
+
+/**
+ * Parse the `plugins` field — one row per configured plugin, accumulated
+ * from the Settings window's row-based Add control — into entries, or the
+ * reason a row was rejected.
+ *
+ * A row with a blank `spec` is skipped, the same as a blank line was in the
+ * free-text field this replaced. A duplicate package name (pinned or not) is
+ * rejected rather than silently keeping one. In normal use the row-based
+ * control already rejects a duplicate spec at Add time (see
+ * `validatePluginSpec` below) and a bad config on blur (see
+ * `parsePluginConfig`), so this is a second check on the accumulated list at
+ * Save. A config parse failure is reported against the package it belongs
+ * to, not as a field-wide error, since more than one row could be at fault.
+ * @param rows - the row-based field contents.
+ * @returns the parsed entries, or an error message naming the bad row.
+ */
+function parsePluginsField(rows: { spec: string; config: string }[]): { ok: true; entries: PluginEntry[] } | { ok: false; message: string } {
   const seen = new Set<string>()
   const entries: PluginEntry[] = []
-  for (const raw of text.split('\n')) {
-    const spec = raw.trim()
+  for (const row of rows) {
+    const spec = row.spec.trim()
     if (spec === '') continue
     if (!validSpecShape(spec)) {
       return { ok: false, message: `"${spec}" does not look like a package name, package@version, or a valid version.` }
@@ -78,7 +115,11 @@ function parsePluginsField(text: string): { ok: true; entries: PluginEntry[] } |
       return { ok: false, message: `${pkg} is listed more than once.` }
     }
     seen.add(pkg)
-    entries.push({ spec })
+    const config = parsePluginConfig(row.config)
+    if (!config.ok) {
+      return { ok: false, message: `${pkg}: ${config.message}` }
+    }
+    entries.push({ spec, ...(config.config === undefined ? {} : { config: config.config }) })
   }
   return { ok: true, entries }
 }
@@ -238,9 +279,7 @@ export function formFor(result: ConfigResult): SettingsForm {
     // A never-configured install pre-seeds the notification hook bridge as
     // the first plugin, so the first save installs it rather than special-
     // casing it outside this generic list.
-    plugins: defaultPlugins()
-      .map((entry) => entry.spec)
-      .join('\n'),
+    plugins: defaultPlugins().map((entry) => ({ spec: entry.spec, config: '' })),
   }
   if (!result.configured) return base
 
@@ -255,6 +294,9 @@ export function formFor(result: ConfigResult): SettingsForm {
     hotkey,
     pnpmPath: pnpmPath ?? '',
     npmPath: npmPath ?? '',
-    plugins: (plugins ?? []).map((entry) => entry.spec).join('\n'),
+    plugins: (plugins ?? []).map((entry) => ({
+      spec: entry.spec,
+      config: entry.config === undefined ? '' : JSON.stringify(entry.config, undefined, 2),
+    })),
   }
 }

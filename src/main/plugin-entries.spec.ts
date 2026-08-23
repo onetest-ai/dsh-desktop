@@ -134,4 +134,18 @@ describe('pluginStatus', () => {
     expect(status.kind).toBe('ready')
     if (status.kind === 'ready') expect(status.configPath).toBe('/tmp/hooks.json')
   })
+
+  it("carries the entry's own stored config through for a ready status", () => {
+    const installDir = managedDir(DSH_HOME, PKG, '0.2.1')
+    const pkgDir = join(installDir, 'node_modules', '@onetest', 'dsh-deck')
+    mkdirSync(join(pkgDir, 'lib'), { recursive: true })
+    writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ main: 'lib/index.js' }))
+    writeFileSync(join(pkgDir, 'lib', 'index.js'), 'module.exports = {}\n')
+
+    const deps = fakeDeps([join(pkgDir, 'package.json')])
+    const status = pluginStatus(deps, DSH_HOME, { spec: PKG, version: '0.2.1', config: { base: '/x' } })
+
+    expect(status.kind).toBe('ready')
+    if (status.kind === 'ready') expect(status.config).toEqual({ base: '/x' })
+  })
 })

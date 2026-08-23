@@ -3,9 +3,11 @@ import type { ConfigResult, DesktopConfig } from './config'
 import { parseSpec, type PluginEntry } from './plugin-entries'
 import {
   formFor,
+  parsePluginConfig,
   validatePluginSpec,
   validateSettings,
   type FieldErrors,
+  type PluginConfigValidation,
   type PluginSpecValidation,
   type SettingsForm,
 } from './settings-validate'
@@ -75,6 +77,8 @@ export interface PluginInfo {
   pinned: boolean
   /** The concrete, installed version, or undefined when a save has never installed it. */
   version?: string
+  /** The entry's stored config, pretty-printed for the row's textarea; `''` when none is set. */
+  config: string
 }
 
 /** What a save refused for overlapping another save reports on the `kind` field. */
@@ -155,6 +159,14 @@ export interface SettingsHandlers {
    * @returns the parsed entry to add as a row, or the message to show beside the input.
    */
   validatePlugin(spec: string, existingPackages: string[]): PluginSpecValidation
+  /**
+   * Validate one plugin row's config textarea, synchronously and without
+   * installing or persisting anything — the row-based control's live check
+   * on blur, over the same grammar `save` re-checks in `parsePluginsField`.
+   * @param text - the raw textarea contents.
+   * @returns ok, or the message to show beside that row.
+   */
+  validatePluginConfig(text: string): PluginConfigValidation
   /**
    * Verify the Advanced tab's `pnpm`/`npm` path fields actually spawn, using
    * the values currently typed in the form. Bypasses the save lock entirely:
@@ -241,10 +253,10 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       const versionToInstall = pinnedVersion ?? prior?.version ?? 'latest'
       try {
         const concrete = await deps.installPlugin(pkg, versionToInstall, npmPath, onProgress)
-        resolved.push({ spec: entry.spec, version: concrete })
+        resolved.push({ spec: entry.spec, version: concrete, ...(entry.config === undefined ? {} : { config: entry.config }) })
       } catch (error) {
         warnings.push(`${pkg} could not be installed: ${(error as Error).message}`)
-        resolved.push({ spec: entry.spec, version: prior?.version })
+        resolved.push({ spec: entry.spec, version: prior?.version, ...(entry.config === undefined ? {} : { config: entry.config }) })
       }
     }
     return { resolved, warnings }
@@ -363,7 +375,9 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       return { ok: false, errors: { kind: 'The app is shutting down; settings were not saved.' } }
     }
 
-    const updatedEntries = entries.map((entry, i) => (i === index ? { spec: entry.spec, version: concrete } : entry))
+    const updatedEntries = entries.map((entry, i) =>
+      i === index ? { spec: entry.spec, version: concrete, ...(entry.config === undefined ? {} : { config: entry.config }) } : entry,
+    )
     const config: DesktopConfig = { ...previous, plugins: updatedEntries }
     deps.writeConfig(config)
     const warnings = await deps.apply(previous, config)
@@ -398,7 +412,13 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       const storedPlugins = stored.configured ? (stored.config.plugins ?? []) : []
       const plugins: PluginInfo[] = storedPlugins.map((entry) => {
         const { package: pkg, pinnedVersion } = parseSpec(entry.spec)
-        return { spec: entry.spec, package: pkg, pinned: pinnedVersion !== undefined, version: entry.version }
+        return {
+          spec: entry.spec,
+          package: pkg,
+          pinned: pinnedVersion !== undefined,
+          version: entry.version,
+          config: entry.config === undefined ? '' : JSON.stringify(entry.config, undefined, 2),
+        }
       })
 
       // Update checks apply to floating entries only: a pinned entry's spec
@@ -449,6 +469,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       }
     },
     validatePlugin: (spec, existingPackages) => validatePluginSpec(spec, existingPackages),
+    validatePluginConfig: (text) => parsePluginConfig(text),
     checkBinaries: (pnpmPath, npmPath) => deps.checkBinaries(pnpmPath, npmPath),
   }
 }

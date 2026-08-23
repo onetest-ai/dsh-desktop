@@ -263,13 +263,22 @@ button:disabled {
 .plugin-row {
   min-width: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 6px;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--input-fill);
+}
+
+/* The name/meta/actions line — what `.plugin-row` alone used to be, before
+   the collapsible config editor below became a second, optional line. */
+.plugin-row-top {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .plugin-row-main {
@@ -330,6 +339,62 @@ button:disabled {
 
 .plugin-remove:hover:not(:disabled) {
   background: var(--surface-hover);
+}
+
+/* The per-row config editor: collapsed to a one-line disclosure by default so
+   a row with nothing configured stays exactly as compact as before this
+   field existed; a row that has config set opens by default and relabels its
+   summary, so "something is configured here" is visible without expanding
+   every row in the list. */
+.plugin-config {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.plugin-config summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--label-secondary);
+  list-style: none;
+}
+
+.plugin-config summary::-webkit-details-marker {
+  display: none;
+}
+
+.plugin-config summary::before {
+  content: '▸ ';
+}
+
+.plugin-config[open] summary::before {
+  content: '▾ ';
+}
+
+.plugin-config-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-fill);
+  color: var(--label);
+  font: 12px/18px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  resize: vertical;
+}
+
+.plugin-config-input::placeholder {
+  color: var(--label-secondary);
+  opacity: 0.7;
+}
+
+.plugin-config-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.plugin-config-error {
+  margin: 4px 0 0;
 }
 
 /* Many rows scroll inside their own bounded area instead of growing the

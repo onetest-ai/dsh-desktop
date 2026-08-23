@@ -101,6 +101,15 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
       if (!validSpecShape(entry.spec)) {
         throw new ConfigurationError(`dsh-desktop: ${filePath} plugin spec "${entry.spec}" is not a valid package name or package@version`)
       }
+      // Same defense-in-depth as the spec check above: the Settings form
+      // validates a freshly typed config before it is ever written (see
+      // `settings-validate.ts`'s `parsePluginConfig`), but a hand-edited
+      // `desktop.json` reaches `patchOverlay` through this same field, so an
+      // array/string/null here — which `JSON.stringify` would happily emit as
+      // a non-object overlay `config:` value — is rejected up front instead.
+      if (entry.config !== undefined && (typeof entry.config !== 'object' || entry.config === null || Array.isArray(entry.config))) {
+        throw new ConfigurationError(`dsh-desktop: ${filePath} plugin "${entry.spec}" config must be a JSON object`)
+      }
     }
   }
 

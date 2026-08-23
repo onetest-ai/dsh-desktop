@@ -18,10 +18,18 @@ export const HOOKS_PACKAGE = '@deepseek-ai/dsh-hooks-claude-code'
  * — absent until a save has installed the entry at least once. The field is
  * optional so a `desktop.json` predating plugins, or with an entry that has
  * never successfully installed, stays valid.
+ *
+ * `config` is the entry's own free-form configuration, passed to the cordis
+ * overlay's `insert.config` verbatim. Only the plugin itself knows its
+ * schema, so this is deliberately untyped beyond "a JSON object" — validated
+ * by `settings-validate.ts`'s `parsePluginConfig` before it is ever stored,
+ * and re-validated in `config.ts`'s `parseConfig` for a hand-edited
+ * `desktop.json`. Absent means the entry gets the overlay's empty `{}`.
  */
 export interface PluginEntry {
   spec: string
   version?: string
+  config?: Record<string, unknown>
 }
 
 /** The plugin list a fresh, never-configured install starts from. */
@@ -173,9 +181,23 @@ export function resolvePluginEntry(installDir: string, pkg: string): string {
  * not work there, only its entry file does — plus the directory the
  * loadability probe should check from. `unavailable` carries why the entry
  * cannot be mounted, surfaced by the caller instead of blocking boot.
+ *
+ * `config` carries the entry's own stored configuration, when set; `configPath`
+ * is a separate, privileged override used only for the hook bridge and takes
+ * precedence over `config` in `patchOverlay` — the two are never both
+ * meaningful for the same entry today, but are kept distinct because they
+ * come from different sources (an entry's own stored `config` vs. a path this
+ * app generates).
  */
 export type PluginStatus =
-  | { kind: 'ready'; package: string; entryPath: string; probeDirectory: string; configPath?: string }
+  | {
+      kind: 'ready'
+      package: string
+      entryPath: string
+      probeDirectory: string
+      configPath?: string
+      config?: Record<string, unknown>
+    }
   | { kind: 'unavailable'; package: string; reason: string }
 
 /**
@@ -213,6 +235,7 @@ export function pluginStatus(
       entryPath: resolvePluginEntry(installDir, pkg),
       probeDirectory: installDir,
       configPath,
+      config: entry.config,
     }
   } catch (error) {
     return { kind: 'unavailable', package: pkg, reason: (error as Error).message }

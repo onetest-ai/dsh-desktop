@@ -141,10 +141,7 @@ function hideUpdateHint() {
 function collect() {
   const form = { kind: kindOf() }
   for (const name of FIELDS) form[name] = el(name).value
-  // The wire format `validateSettings` expects is still one spec per line —
-  // only the way the user builds that list changed, from a free-text
-  // textarea to rows validated one at a time on Add.
-  form.plugins = pluginRows.map((plugin) => plugin.spec).join('\n')
+  form.plugins = pluginRows.map((plugin) => ({ spec: plugin.spec, config: plugin.config ?? '' }))
   return form
 }
 
@@ -153,10 +150,37 @@ function messageOf(error) {
 }
 
 /**
+ * Validate one row's config textarea on blur, over the same grammar Save
+ * re-checks in main, and show its result beside that row only — never on the
+ * field-wide `error-plugins` node, so one row's typo never has to be found
+ * by reading a message about a package name that scrolled out of view.
+ * @param {HTMLTextAreaElement} textarea - the row's config input.
+ * @param {HTMLElement} errorNode - the row's own error paragraph.
+ * @param {HTMLElement} summaryNode - the row's collapsible summary, relabelled to reflect whether config is set.
+ */
+async function validatePluginConfigRow(textarea, errorNode, summaryNode) {
+  errorNode.textContent = ''
+  let result
+  try {
+    result = await window.settings.validatePluginConfig(textarea.value)
+  } catch (error) {
+    errorNode.textContent = messageOf(error)
+    return
+  }
+  if (!result.ok) {
+    errorNode.textContent = result.message
+    return
+  }
+  summaryNode.textContent = textarea.value.trim() === '' ? 'Config' : 'Config (set)'
+}
+
+/**
  * Render one row per entry in `pluginRows`, each showing the package, its
  * resolved version or that it is not installed yet, whether it is pinned,
  * and — inline, not in a separate list — any update offered for it. Each row
- * carries its own remove control.
+ * carries its own remove control and a collapsed-by-default config editor,
+ * so a row with nothing configured stays as compact as before this field
+ * existed and does not crowd out rows that do carry one.
  */
 function renderPluginRows() {
   const list = el('plugin-rows')
@@ -164,6 +188,9 @@ function renderPluginRows() {
   for (const plugin of pluginRows) {
     const row = document.createElement('li')
     row.className = 'plugin-row'
+
+    const top = document.createElement('div')
+    top.className = 'plugin-row-top'
 
     const main = document.createElement('div')
     main.className = 'plugin-row-main'
@@ -179,7 +206,7 @@ function renderPluginRows() {
     meta.textContent = plugin.pinned ? `pinned, ${state}` : state
     main.append(meta)
 
-    row.append(main)
+    top.append(main)
 
     const actions = document.createElement('div')
     actions.className = 'plugin-row-actions'
@@ -209,7 +236,40 @@ function renderPluginRows() {
     remove.addEventListener('click', () => removePlugin(plugin.package))
     actions.append(remove)
 
-    row.append(actions)
+    top.append(actions)
+    row.append(top)
+
+    const configWrap = document.createElement('details')
+    configWrap.className = 'plugin-config'
+    const hasConfig = (plugin.config ?? '').trim() !== ''
+    configWrap.open = hasConfig
+
+    const summary = document.createElement('summary')
+    summary.textContent = hasConfig ? 'Config (set)' : 'Config'
+    configWrap.append(summary)
+
+    const textarea = document.createElement('textarea')
+    textarea.className = 'plugin-config-input'
+    textarea.rows = 3
+    textarea.spellcheck = false
+    textarea.setAttribute('aria-label', `${plugin.package} config, as JSON`)
+    textarea.placeholder = '{ "key": "value" }'
+    textarea.value = plugin.config ?? ''
+    textarea.disabled = saveInFlight
+
+    const configError = document.createElement('p')
+    configError.className = 'error plugin-config-error'
+
+    textarea.addEventListener('input', () => {
+      plugin.config = textarea.value
+    })
+    textarea.addEventListener('blur', () => {
+      void validatePluginConfigRow(textarea, configError, summary)
+    })
+
+    configWrap.append(textarea, configError)
+    row.append(configWrap)
+
     list.append(row)
   }
 }
@@ -248,7 +308,7 @@ async function addPlugin() {
       errorNode.textContent = result.message
       return
     }
-    pluginRows.push({ ...result.plugin, version: undefined })
+    pluginRows.push({ ...result.plugin, version: undefined, config: '' })
     input.value = ''
     renderPluginRows()
   } finally {

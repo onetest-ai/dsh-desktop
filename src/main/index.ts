@@ -12,7 +12,7 @@ import { HOOKS_PACKAGE, parseSpec, pluginInstallMarker, pluginStatus, type Plugi
 import { preflight } from './preflight'
 import { runtimeFilePaths, writeRuntimeFiles } from './runtime-files'
 import type { InstallDeps } from './runtime-install'
-import { dshWebCommand, resolveBinary, startServer } from './server'
+import { dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
 import { createSettingsHandlers } from './settings-ipc'
 import { openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
@@ -343,8 +343,98 @@ async function bootNow(): Promise<void> {
 
   const mine = (generation += 1)
 
+  const attempt = await attemptBoot(config, mine, true)
+
+  if (attempt.ok) {
+    if (mine !== generation) {
+      // A stop overtook this boot; the child is already being reaped elsewhere.
+      return
+    }
+    setStatus('running', attempt.hooksNote)
+    if (window !== undefined && !window.isDestroyed()) void window.loadURL(attempt.handle.url)
+    return
+  }
+
+  if (attempt.stage === 'files') {
+    fail('The harness launch files could not be written', attempt.message)
+    return
+  }
+
+  // attempt.stage === 'server'
+  if (mine !== generation) return
+  // The rejection paths (readiness timeout, early exit) can leave a child
+  // mid-death, so it is reaped here rather than merely forgotten. This is
+  // also the retry's own generation token from here on: `stopCurrent` always
+  // advances `generation`, so `mine` itself can never match it again — the
+  // retry needs a fresh baseline captured right after this expected bump,
+  // not the boot's original token, to tell a legitimate advance (this reap)
+  // from an illegitimate one (a newer transition superseding this attempt).
+  await stopCurrent()
+  const afterOwnReap = generation
+
+  // A ConfigurationError means `dshWebCommand` could not resolve the
+  // configured launcher — a config mistake unrelated to plugins, fixed in
+  // Settings; a bad harness path must still fail fast, not after a second
+  // full timeout. Every other rejection (readiness timeout, early exit,
+  // spawn ENOENT) means a correctly configured launcher started something
+  // that then failed, which — when the overlay had inserted at least one
+  // plugin — is retried once with every plugin insert removed: the app
+  // holds that a broken plugin costs its own feature, never the whole app,
+  // and a plugin that loads but rejects its config is exactly that case,
+  // just discovered one step later than the loadability probe alone catches.
+  const canRetryWithoutPlugins = attempt.insertedCount > 0 && !(attempt.error instanceof ConfigurationError) && !quitting
+
+  if (canRetryWithoutPlugins) {
+    const retry = await attemptBoot(config, afterOwnReap, false)
+    if (retry.ok) {
+      if (afterOwnReap === generation && !quitting) {
+        setStatus('running', `plugins disabled — the harness would not start with them: ${attempt.error.message}`)
+        if (window !== undefined && !window.isDestroyed()) void window.loadURL(retry.handle.url)
+        return
+      }
+      // Superseded (a newer boot, restart, or shutdown landed mid-retry) — the
+      // retry's child must still be reaped rather than left running unreported.
+      await stopCurrent()
+      return
+    }
+    if (retry.stage === 'server' && afterOwnReap === generation) {
+      await stopCurrent()
+    }
+  }
+
+  if (attempt.error instanceof ConfigurationError) {
+    failConfiguration('The harness failed to start', attempt.error.message)
+  } else {
+    fail('The harness failed to start', attempt.error.message)
+  }
+}
+
+/** What one `attemptBoot` call produced. */
+type BootAttempt =
+  | { ok: true; handle: ServerHandle; hooksNote?: string }
+  | { ok: false; stage: 'files'; message: string }
+  | { ok: false; stage: 'server'; error: Error; insertedCount: number }
+
+/**
+ * Write the runtime files and spawn the harness once, either with every
+ * configured plugin entry resolved, or with none — the shape `bootNow` uses
+ * both for the normal boot and for its plugins-disabled retry.
+ *
+ * Runs only inside `enqueue` (via `bootNow`), so it can assume no other
+ * transition is active; still checks `mine !== generation` nowhere itself —
+ * that is `bootNow`'s job, since only it knows whether a given attempt is
+ * the primary or the retry.
+ * @param config - the desktop settings this boot is starting from.
+ * @param mine - this boot's generation token, closed over by `onSpawned`/`onExit`.
+ * @param includePlugins - false for the plugins-disabled retry: every
+ *   configured entry is left out of the overlay, the same as none were ever
+ *   configured.
+ * @returns the outcome, discriminated by `ok` and, on failure, by `stage`.
+ */
+async function attemptBoot(config: DesktopConfig, mine: number, includePlugins: boolean): Promise<BootAttempt> {
   let patchPath: string
   let hooksNote: string | undefined
+  let insertedCount = 0
   try {
     // Where each configured plugin entry would load from, or why it is
     // unavailable — from whatever a Settings save last resolved and
@@ -352,20 +442,24 @@ async function bootNow(): Promise<void> {
     // privileged with `configPath` pointing at the hooks file this same
     // boot is about to write; every other entry gets none.
     const { hooksPath } = runtimeFilePaths(runtimeDirectory())
-    const statuses = (config.plugins ?? []).map((entry) =>
-      pluginStatus(installDeps, DSH_HOME, entry, parseSpec(entry.spec).package === HOOKS_PACKAGE ? hooksPath : undefined),
-    )
+    const statuses = includePlugins
+      ? (config.plugins ?? []).map((entry) =>
+          pluginStatus(installDeps, DSH_HOME, entry, parseSpec(entry.spec).package === HOOKS_PACKAGE ? hooksPath : undefined),
+        )
+      : []
     const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses)
     patchPath = files.patchPath
-    const bridgeOmitted = files.omitted.find((entry) => entry.package === HOOKS_PACKAGE)
-    const otherOmitted = files.omitted.filter((entry) => entry.package !== HOOKS_PACKAGE)
-    const notes: string[] = []
-    if (bridgeOmitted !== undefined) notes.push(`notifications unavailable — hook bridge not loaded: ${bridgeOmitted.reason}`)
-    for (const entry of otherOmitted) notes.push(`${entry.package} not loaded: ${entry.reason}`)
-    hooksNote = notes.length > 0 ? notes.join('; ') : undefined
+    insertedCount = statuses.length - files.omitted.length
+    if (includePlugins) {
+      const bridgeOmitted = files.omitted.find((entry) => entry.package === HOOKS_PACKAGE)
+      const otherOmitted = files.omitted.filter((entry) => entry.package !== HOOKS_PACKAGE)
+      const notes: string[] = []
+      if (bridgeOmitted !== undefined) notes.push(`notifications unavailable — hook bridge not loaded: ${bridgeOmitted.reason}`)
+      for (const entry of otherOmitted) notes.push(`${entry.package} not loaded: ${entry.reason}`)
+      hooksNote = notes.length > 0 ? notes.join('; ') : undefined
+    }
   } catch (error) {
-    fail('The harness launch files could not be written', (error as Error).message)
-    return
+    return { ok: false, stage: 'files', message: (error as Error).message }
   }
 
   try {
@@ -381,27 +475,9 @@ async function bootNow(): Promise<void> {
         fail(`The harness exited (code ${String(code)})`, tail || 'No output captured.')
       },
     })
-    if (mine !== generation) {
-      // A stop overtook this boot; the child is already being reaped elsewhere.
-      return
-    }
-    setStatus('running', hooksNote)
-    if (window !== undefined && !window.isDestroyed()) void window.loadURL(handle.url)
+    return { ok: true, handle, hooksNote }
   } catch (error) {
-    if (mine !== generation) return
-    // The rejection paths (readiness timeout, early exit) can leave a child
-    // mid-death, so it is reaped here rather than merely forgotten.
-    await stopCurrent()
-    // A ConfigurationError here means `dshWebCommand` could not resolve the
-    // configured launcher — a config mistake, fixed in Settings. Every other
-    // rejection (readiness timeout, early exit, spawn ENOENT) means a
-    // correctly configured harness misbehaved after actually being launched,
-    // which Settings cannot fix.
-    if (error instanceof ConfigurationError) {
-      failConfiguration('The harness failed to start', error.message)
-    } else {
-      fail('The harness failed to start', (error as Error).message)
-    }
+    return { ok: false, stage: 'server', error: error as Error, insertedCount }
   }
 }
 

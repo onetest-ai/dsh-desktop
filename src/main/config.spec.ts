@@ -186,5 +186,47 @@ describe('loadConfig', () => {
       )
       expect(() => loadConfig(file)).toThrow(/plugin spec/)
     })
+
+    it('accepts a well-shaped entry config', () => {
+      const file = writeConfigFile(
+        JSON.stringify({
+          harness: { kind: 'local', repo: '/tmp/harness' },
+          plugins: [{ spec: '@onetest/dsh-deck', config: { base: '/x' } }],
+        }),
+      )
+      const result = loadConfig(file)
+      expect(result.configured).toBe(true)
+      expect(result.configured && result.config.plugins).toEqual([{ spec: '@onetest/dsh-deck', config: { base: '/x' } }])
+    })
+
+    it('rejects a hand-edited entry config that is an array', () => {
+      const file = writeConfigFile(
+        JSON.stringify({
+          harness: { kind: 'local', repo: '/tmp/harness' },
+          plugins: [{ spec: '@onetest/dsh-deck', config: [1, 2, 3] }],
+        }),
+      )
+      expect(() => loadConfig(file)).toThrow(/config must be a JSON object/)
+    })
+
+    it('rejects a hand-edited entry config that is a bare string', () => {
+      const file = writeConfigFile(
+        JSON.stringify({
+          harness: { kind: 'local', repo: '/tmp/harness' },
+          plugins: [{ spec: '@onetest/dsh-deck', config: 'not-an-object' }],
+        }),
+      )
+      expect(() => loadConfig(file)).toThrow(/config must be a JSON object/)
+    })
+
+    it('rejects a hand-edited entry config that is null', () => {
+      const file = writeConfigFile(
+        JSON.stringify({
+          harness: { kind: 'local', repo: '/tmp/harness' },
+          plugins: [{ spec: '@onetest/dsh-deck', config: null }],
+        }),
+      )
+      expect(() => loadConfig(file)).toThrow(/config must be a JSON object/)
+    })
   })
 })

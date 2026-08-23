@@ -457,6 +457,100 @@ describe('configuration-class boot failures', () => {
   })
 })
 
+describe('plugin-caused boot failures', () => {
+  /** Configure one entry that resolves to a ready overlay insert. */
+  function configureOneReadyPlugin(): void {
+    configResult = {
+      configured: true,
+      config: { ...STORED, plugins: [{ spec: '@onetest/dsh-deck', version: '0.2.1' }] },
+    }
+    pluginStatusMock.mockImplementation(() => ({
+      kind: 'ready',
+      package: '@onetest/dsh-deck',
+      entryPath: '/tmp/deck/lib/index.js',
+      probeDirectory: '/tmp/deck',
+    }))
+    // The default `writeRuntimeFilesMock` reports `omitted: []`, so the one
+    // configured entry counts as inserted (`insertedCount` = 1 - 0).
+  }
+
+  it('retries once with plugins removed when a boot with plugins inserted fails, and succeeds', async () => {
+    configureOneReadyPlugin()
+
+    await loadIndex()
+    fake.ready()
+    await vi.waitFor(() => expect(children.length).toBe(1))
+    children[0].failToStart('invalid config: base must be a non-empty string')
+    await vi.waitFor(() => expect(children.length).toBe(2))
+    children[1].ready('http://127.0.0.1:6000')
+    await settle()
+
+    expect(startServer).toHaveBeenCalledTimes(2)
+    expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
+    expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('plugins disabled'))
+    // Non-vacuity: with `canRetryWithoutPlugins` hardwired to `false`, this
+    // assertion fails because only the first, failing attempt ever runs and
+    // the error pane shows instead. Restoring the retry fixes it.
+    expect(showError).not.toHaveBeenCalled()
+    expect(openSettingsMock).not.toHaveBeenCalled()
+  })
+
+  it('does not retry, and does not double the wait, when no plugin was inserted', async () => {
+    // `STORED` carries no `plugins`, so `insertedCount` is 0 and the retry
+    // path must never engage — an ordinary failure fails fast, once.
+    await loadIndex()
+    fake.ready()
+    await vi.waitFor(() => expect(children.length).toBe(1))
+    children[0].failToStart('no URL')
+    await settle()
+
+    // Non-vacuity: with the `insertedCount > 0` guard removed from
+    // `canRetryWithoutPlugins`, this assertion fails because a second
+    // `startServer` call (the unconditional retry) follows the first.
+    // Restoring the guard fixes it.
+    expect(startServer).toHaveBeenCalledTimes(1)
+    expect(showError).toHaveBeenCalledWith(fake.window, 'The harness failed to start', expect.stringContaining('no URL'))
+    expect(openSettingsMock).not.toHaveBeenCalled()
+  })
+
+  it('reports the original failure, not the retry’s, when the retry also fails', async () => {
+    configureOneReadyPlugin()
+
+    await loadIndex()
+    fake.ready()
+    await vi.waitFor(() => expect(children.length).toBe(1))
+    children[0].failToStart('invalid config: base must be a non-empty string')
+    await vi.waitFor(() => expect(children.length).toBe(2))
+    children[1].failToStart('still broken')
+    await settle()
+
+    expect(startServer).toHaveBeenCalledTimes(2)
+    expect(showError).toHaveBeenCalledWith(
+      fake.window,
+      'The harness failed to start',
+      expect.stringContaining('invalid config: base must be a non-empty string'),
+    )
+  })
+
+  it('leaks no child when a quit lands while the retry is still starting', async () => {
+    configureOneReadyPlugin()
+
+    await loadIndex()
+    fake.ready()
+    await vi.waitFor(() => expect(children.length).toBe(1))
+    children[0].failToStart('invalid config: base must be a non-empty string')
+    await vi.waitFor(() => expect(children.length).toBe(2))
+
+    // The retry's child is spawned but has not yet reported ready or exited.
+    await fake.emit('before-quit', fake.quitEvent())
+    await settle()
+
+    expect(children[1].stop).toHaveBeenCalledTimes(1)
+    expect(startServer).toHaveBeenCalledTimes(2)
+    expect(fake.app.quit).toHaveBeenCalled()
+  })
+})
+
 describe('restart', () => {
   it('ignores a superseded child’s exit instead of clobbering the live one', async () => {
     const first = await bootReady()

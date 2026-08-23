@@ -3,7 +3,20 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HOOKS_PACKAGE } from './plugin-entries'
-import { formFor, validatePluginSpec, validateSettings, type SettingsForm } from './settings-validate'
+import { formFor, parsePluginConfig, validatePluginSpec, validateSettings, type SettingsForm } from './settings-validate'
+
+/**
+ * Build plugin rows from a compact "one spec per line" string, the shape
+ * most of this file's cases only care about the spec for. A case that needs
+ * to exercise a row's `config` builds its `SettingsForm['plugins']` array by
+ * hand instead.
+ * @param text - specs, one per line; blank lines become blank rows, the same
+ *   as a blank line in the free-text field this replaced.
+ * @returns rows with an empty config for every spec.
+ */
+function pluginRows(text: string): SettingsForm['plugins'] {
+  return text.split('\n').map((spec) => ({ spec, config: '' }))
+}
 
 function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
   return {
@@ -16,7 +29,7 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
     hotkey: 'CommandOrControl+Shift+D',
     pnpmPath: '',
     npmPath: '',
-    plugins: HOOKS_PACKAGE,
+    plugins: pluginRows(HOOKS_PACKAGE),
     ...overrides,
   }
 }
@@ -118,41 +131,96 @@ describe('validateSettings — managed source', () => {
 
 describe('validateSettings — plugins', () => {
   it('parses a spec with a version as pinned, and one without as floating', () => {
-    const result = validateSettings(form({ plugins: '@onetest/dsh-deck@0.2.1\n@onetest/other' }))
+    const result = validateSettings(form({ plugins: pluginRows('@onetest/dsh-deck@0.2.1\n@onetest/other') }))
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.config.plugins).toEqual([{ spec: '@onetest/dsh-deck@0.2.1' }, { spec: '@onetest/other' }])
     }
   })
 
-  it('ignores blank lines', () => {
-    const result = validateSettings(form({ plugins: '\n@onetest/dsh-deck\n\n' }))
+  it('ignores rows with a blank spec', () => {
+    const result = validateSettings(form({ plugins: pluginRows('\n@onetest/dsh-deck\n\n') }))
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.config.plugins).toEqual([{ spec: '@onetest/dsh-deck' }])
   })
 
   it('accepts an empty list', () => {
-    const result = validateSettings(form({ plugins: '' }))
+    const result = validateSettings(form({ plugins: [] }))
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.config.plugins).toEqual([])
   })
 
-  it('rejects a line that does not look like a package name', () => {
-    const result = validateSettings(form({ plugins: '../../etc' }))
+  it('rejects a spec that does not look like a package name', () => {
+    const result = validateSettings(form({ plugins: pluginRows('../../etc') }))
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errors.plugins).toMatch(/package name/i)
   })
 
   it('rejects a pinned entry with a traversal-shaped version', () => {
-    const result = validateSettings(form({ plugins: '@onetest/dsh-deck@../../etc' }))
+    const result = validateSettings(form({ plugins: pluginRows('@onetest/dsh-deck@../../etc') }))
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errors.plugins).toMatch(/version/i)
   })
 
   it('rejects the same package listed twice', () => {
-    const result = validateSettings(form({ plugins: '@onetest/dsh-deck\n@onetest/dsh-deck@0.2.1' }))
+    const result = validateSettings(form({ plugins: pluginRows('@onetest/dsh-deck\n@onetest/dsh-deck@0.2.1') }))
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errors.plugins).toMatch(/more than once/i)
+  })
+
+  it('emits a row config into the stored entry', () => {
+    const result = validateSettings(
+      form({ plugins: [{ spec: '@onetest/dsh-deck', config: '{"base": "/x"}' }] }),
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.config.plugins).toEqual([{ spec: '@onetest/dsh-deck', config: { base: '/x' } }])
+  })
+
+  it('keeps a blank row config as no config at all, not an empty object', () => {
+    const result = validateSettings(form({ plugins: [{ spec: '@onetest/dsh-deck', config: '   ' }] }))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.config.plugins).toEqual([{ spec: '@onetest/dsh-deck' }])
+  })
+
+  it('rejects malformed JSON in a row config, naming that row', () => {
+    const result = validateSettings(form({ plugins: [{ spec: '@onetest/dsh-deck', config: '{not json' }] }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.errors.plugins).toMatch(/@onetest\/dsh-deck/)
+      expect(result.errors.plugins).toMatch(/not valid JSON/i)
+    }
+  })
+
+  it('rejects a row config that is valid JSON but not an object', () => {
+    const result = validateSettings(form({ plugins: [{ spec: '@onetest/dsh-deck', config: '[1, 2, 3]' }] }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.errors.plugins).toMatch(/@onetest\/dsh-deck/)
+      expect(result.errors.plugins).toMatch(/JSON object/i)
+    }
+  })
+})
+
+describe('parsePluginConfig', () => {
+  it('treats blank text as no config', () => {
+    expect(parsePluginConfig('')).toEqual({ ok: true, config: undefined })
+    expect(parsePluginConfig('   \n  ')).toEqual({ ok: true, config: undefined })
+  })
+
+  it('parses a JSON object', () => {
+    expect(parsePluginConfig('{"base": "/x", "n": 1}')).toEqual({ ok: true, config: { base: '/x', n: 1 } })
+  })
+
+  it('rejects malformed JSON', () => {
+    const result = parsePluginConfig('{not json')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/not valid JSON/i)
+  })
+
+  it.each(['[1, 2, 3]', '"a string"', '42', 'null', 'true'])('rejects non-object JSON value %s', (text) => {
+    const result = parsePluginConfig(text)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/JSON object/i)
   })
 })
 
@@ -251,21 +319,27 @@ describe('formFor', () => {
     expect(filled.hotkey).toBe('CommandOrControl+Shift+D')
     expect(filled.package).toBe('@deepseek-ai/dsh')
     expect(filled.version).toBe('latest')
-    expect(filled.plugins).toBe(HOOKS_PACKAGE)
+    expect(filled.plugins).toEqual([{ spec: HOOKS_PACKAGE, config: '' }])
   })
 
-  it('round-trips a stored local config', () => {
+  it('round-trips a stored local config, including per-entry config', () => {
     const config = {
       harness: { kind: 'local' as const, repo: '/tmp/harness' },
       notifyPort: 5000,
       hotkey: 'Alt+D',
-      plugins: [{ spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' }, { spec: '@onetest/dsh-deck@0.2.1', version: '0.2.1' }],
+      plugins: [
+        { spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' },
+        { spec: '@onetest/dsh-deck@0.2.1', version: '0.2.1', config: { base: '/x' } },
+      ],
     }
     const filled = formFor({ configured: true, config })
     expect(filled.repo).toBe('/tmp/harness')
     expect(filled.notifyPort).toBe('5000')
     expect(filled.hotkey).toBe('Alt+D')
-    expect(filled.plugins).toBe(`${HOOKS_PACKAGE}\n@onetest/dsh-deck@0.2.1`)
+    expect(filled.plugins).toEqual([
+      { spec: HOOKS_PACKAGE, config: '' },
+      { spec: '@onetest/dsh-deck@0.2.1', config: JSON.stringify({ base: '/x' }, undefined, 2) },
+    ])
   })
 
   it('round-trips a stored managed config with no plugins as an empty list', () => {
@@ -279,6 +353,6 @@ describe('formFor', () => {
     expect(filled.package).toBe('@acme/dsh')
     expect(filled.version).toBe('1.2.3')
     expect(filled.workspace).toBe('/tmp/ws')
-    expect(filled.plugins).toBe('')
+    expect(filled.plugins).toEqual([])
   })
 })

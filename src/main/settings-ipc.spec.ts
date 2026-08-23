@@ -12,11 +12,22 @@ const DECK = '@onetest/dsh-deck'
 
 const HOOKS_PACKAGE = '@deepseek-ai/dsh-hooks-claude-code'
 
+/**
+ * Build plugin rows from a compact "one spec per line" string, the shape
+ * most of this file's cases only care about the spec for — a config text is
+ * never exercised here (see `settings-validate.spec.ts` for that).
+ * @param text - specs, one per line.
+ * @returns rows with an empty config for every spec.
+ */
+function rows(text: string): SettingsForm['plugins'] {
+  return text.split('\n').map((spec) => ({ spec, config: '' }))
+}
+
 function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
   return {
     kind: 'local', repo: REPO, package: PKG, version: 'latest',
     workspace: '', notifyPort: '43117', hotkey: 'CommandOrControl+Shift+D',
-    pnpmPath: '', npmPath: '', plugins: '', ...overrides,
+    pnpmPath: '', npmPath: '', plugins: [], ...overrides,
   }
 }
 
@@ -121,8 +132,8 @@ describe('read', () => {
       const { plugins } = createSettingsHandlers(d).read()
 
       expect(plugins).toEqual([
-        { spec: `${DECK}@0.2.1`, package: DECK, pinned: true, version: '0.2.1' },
-        { spec: HOOKS_PACKAGE, package: HOOKS_PACKAGE, pinned: false, version: '0.1.1-rc.2' },
+        { spec: `${DECK}@0.2.1`, package: DECK, pinned: true, version: '0.2.1', config: '' },
+        { spec: HOOKS_PACKAGE, package: HOOKS_PACKAGE, pinned: false, version: '0.1.1-rc.2', config: '' },
       ])
     })
 
@@ -311,7 +322,7 @@ describe('save', () => {
       const installPlugin = vi.fn(async (_pkg: string, version: string) => version)
       const d = deps({ installPlugin })
 
-      const result = await createSettingsHandlers(d).save(form({ plugins: `${DECK}@0.2.1` }))
+      const result = await createSettingsHandlers(d).save(form({ plugins: rows(`${DECK}@0.2.1`) }))
 
       expect(result).toEqual({ ok: true, warnings: [] })
       expect(installPlugin).toHaveBeenCalledWith(DECK, '0.2.1', undefined, expect.any(Function))
@@ -320,11 +331,34 @@ describe('save', () => {
       )
     })
 
+    it('persists a row config alongside the resolved entry', async () => {
+      const installPlugin = vi.fn(async (_pkg: string, version: string) => version)
+      const d = deps({ installPlugin })
+
+      await createSettingsHandlers(d).save(form({ plugins: [{ spec: `${DECK}@0.2.1`, config: '{"base": "/x"}' }] }))
+
+      expect(d.writeConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ plugins: [{ spec: `${DECK}@0.2.1`, version: '0.2.1', config: { base: '/x' } }] }),
+      )
+    })
+
+    it('rejects malformed row config before installing anything', async () => {
+      const installPlugin = vi.fn(async (_pkg: string, version: string) => version)
+      const d = deps({ installPlugin })
+
+      const result = await createSettingsHandlers(d).save(form({ plugins: [{ spec: DECK, config: '{not json' }] }))
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.errors.plugins).toMatch(/not valid JSON/i)
+      expect(installPlugin).not.toHaveBeenCalled()
+      expect(d.writeConfig).not.toHaveBeenCalled()
+    })
+
     it('resolves a floating entry with no prior version to latest', async () => {
       const installPlugin = vi.fn(async () => '0.2.1')
       const d = deps({ installPlugin })
 
-      await createSettingsHandlers(d).save(form({ plugins: DECK }))
+      await createSettingsHandlers(d).save(form({ plugins: rows(DECK) }))
 
       expect(installPlugin).toHaveBeenCalledWith(DECK, 'latest', undefined, expect.any(Function))
     })
@@ -336,7 +370,7 @@ describe('save', () => {
         readConfig: () => ({ configured: true, config: { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }] } }),
       })
 
-      await createSettingsHandlers(d).save(form({ plugins: DECK }))
+      await createSettingsHandlers(d).save(form({ plugins: rows(DECK) }))
 
       expect(installPlugin).toHaveBeenCalledWith(DECK, '0.2.1', undefined, expect.any(Function))
     })
@@ -352,7 +386,7 @@ describe('save', () => {
       })
 
       // The saved form keeps the bridge, drops the deck, and adds a third entry.
-      await createSettingsHandlers(d).save(form({ plugins: `${HOOKS_PACKAGE}\n@onetest/other` }))
+      await createSettingsHandlers(d).save(form({ plugins: rows(`${HOOKS_PACKAGE}\n@onetest/other`) }))
 
       expect(d.writeConfig).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -370,7 +404,7 @@ describe('save', () => {
         readConfig: () => ({ configured: true, config: { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }] } }),
       })
 
-      const result = await createSettingsHandlers(d).save(form({ plugins: DECK }))
+      const result = await createSettingsHandlers(d).save(form({ plugins: rows(DECK) }))
 
       expect(result.ok).toBe(true)
       if (result.ok) expect(result.warnings[0]).toMatch(/dsh-deck.*registry unreachable/)
@@ -386,7 +420,7 @@ describe('save', () => {
         }),
       })
 
-      const result = await createSettingsHandlers(d).save(form({ plugins: DECK }))
+      const result = await createSettingsHandlers(d).save(form({ plugins: rows(DECK) }))
 
       expect(result.ok).toBe(true)
       expect(d.apply).toHaveBeenCalled()
@@ -406,7 +440,7 @@ describe('save', () => {
       const d = deps({ installPlugin, isQuitting: () => quitting })
 
       const result = await createSettingsHandlers(d).save(
-        form({ plugins: '@onetest/a\n@onetest/b\n@onetest/c\n@onetest/d\n@onetest/e' }),
+        form({ plugins: rows('@onetest/a\n@onetest/b\n@onetest/c\n@onetest/d\n@onetest/e') }),
       )
 
       expect(installPlugin).toHaveBeenCalledTimes(1)
@@ -646,6 +680,34 @@ describe('validatePlugin', () => {
     const result = handlers.validatePlugin(DECK, [DECK])
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.message).toBe(`${DECK} is already in the list.`)
+  })
+})
+
+describe('validatePluginConfig', () => {
+  it('accepts blank text as no config', () => {
+    const handlers = createSettingsHandlers(deps())
+    expect(handlers.validatePluginConfig('')).toEqual({ ok: true, config: undefined })
+  })
+
+  it('accepts a JSON object', () => {
+    const handlers = createSettingsHandlers(deps())
+    expect(handlers.validatePluginConfig('{"base": "/x"}')).toEqual({ ok: true, config: { base: '/x' } })
+  })
+
+  it('rejects malformed JSON without touching disk', () => {
+    const writeConfig = vi.fn()
+    const handlers = createSettingsHandlers(deps({ writeConfig }))
+    const result = handlers.validatePluginConfig('{not json')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/not valid JSON/i)
+    expect(writeConfig).not.toHaveBeenCalled()
+  })
+
+  it('rejects a JSON value that is not an object', () => {
+    const handlers = createSettingsHandlers(deps())
+    const result = handlers.validatePluginConfig('[1, 2, 3]')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/JSON object/i)
   })
 })
 
