@@ -540,6 +540,13 @@ button:disabled {
   justify-self: start;
 }
 
+/* Same capsule as .check-binaries, and the same .check-result feedback line
+   below it, so "Open config file" reads as one system with the Advanced
+   tab's other one-shot verb (Check) rather than a bolted-on control. */
+.open-config-file {
+  justify-self: start;
+}
+
 .panel:focus-visible {
   outline: none;
 }

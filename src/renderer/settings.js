@@ -543,6 +543,37 @@ async function checkBinaries() {
   }
 }
 
+/**
+ * Open `desktop.json` in the OS-associated editor.
+ *
+ * Never saves the form first: main reports "nothing written yet" rather than
+ * this silently creating a file the user never asked to create. Success and
+ * failure share `.check-result`'s styling with the Advanced tab's binary
+ * checks, so both read as the same kind of one-shot feedback.
+ */
+async function openConfigFile() {
+  const button = el('open-config-file')
+  const result = el('open-config-file-result')
+  button.disabled = true
+  result.classList.remove('check-result-ok', 'check-result-failed')
+  result.textContent = 'Opening…'
+  try {
+    const outcome = await window.settings.openConfigFile()
+    if (outcome.ok) {
+      result.textContent = 'Opened.'
+      result.classList.add('check-result-ok')
+    } else {
+      result.textContent = outcome.error
+      result.classList.add('check-result-failed')
+    }
+  } catch (error) {
+    result.textContent = messageOf(error)
+    result.classList.add('check-result-failed')
+  } finally {
+    button.disabled = false
+  }
+}
+
 async function load() {
   let result
   try {
@@ -623,6 +654,10 @@ el('add-plugin').addEventListener('click', () => {
 
 el('check-binaries').addEventListener('click', () => {
   void checkBinaries()
+})
+
+el('open-config-file').addEventListener('click', () => {
+  void openConfigFile()
 })
 
 // Receive-only: the main process pushes progress lines while a managed

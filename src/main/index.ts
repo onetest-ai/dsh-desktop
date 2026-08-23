@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, Notification } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, Notification, shell } from 'electron'
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { checkBinaries } from './check-binaries'
@@ -8,6 +8,7 @@ import { configPath, resolveDshHome, type HarnessSource } from './harness-source
 import { createInstallRunner } from './install-process'
 import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
+import { openConfigFile } from './open-config-file'
 import { HOOKS_PACKAGE, parseSpec, pluginInstallMarker, pluginStatus, type PluginEntry } from './plugin-entries'
 import { preflight } from './preflight'
 import { attributeBootFailure, runtimeFilePaths, writeRuntimeFiles } from './runtime-files'
@@ -216,6 +217,7 @@ const settingsHandlers = createSettingsHandlers({
     createUpdateChecker(installDeps, resolveBinary(npmPath, 'npm', process.env))(pkg, installed),
   checkBinaries: (pnpmPath, npmPath) => checkBinaries(pnpmPath, npmPath, process.env, CHECK_BINARY_TIMEOUT_MS),
   disabledPlugins: () => Object.fromEntries(disabledPlugins),
+  openConfigFile: () => openConfigFile(CONFIG_PATH, existsSync, (path) => shell.openPath(path)),
 })
 
 /**

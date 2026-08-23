@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 /**
  * The settings renderer's entire capability surface.
  *
- * Seven operations reach the main process, plus three receive-only
+ * Eight operations reach the main process, plus three receive-only
  * subscriptions. The renderer has no `fs`, no path construction, and no way
  * to write anything: every value it can persist goes through `save` or
  * `acceptPluginUpdate`, both of which validate in main. `acceptPluginUpdate`
@@ -18,12 +18,14 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
  * config textarea. `checkBinaries` is a seventh: it spawns `pnpm
  * --version`/`npm --version` against the form's current path fields, in
  * main, and returns each outcome — the renderer never spawns anything
- * itself.
+ * itself. `openConfigFile` is an eighth: it asks main to open `desktop.json`
+ * in the OS-associated editor — the renderer never learns the path or
+ * touches the filesystem itself, only the pass/fail outcome.
  * `onProgress`/`onUpdateAvailable`/`onPluginUpdateAvailable` add no way to
  * *call* into main — they only let the renderer listen for what main chooses
- * to push, each returning an unsubscribe function. `validatePlugin` and
- * `checkBinaries` add no new push channel: both answer over their own
- * `invoke`, like the other four.
+ * to push, each returning an unsubscribe function. `validatePlugin`,
+ * `checkBinaries`, and `openConfigFile` add no new push channel: each
+ * answers over its own `invoke`, like the other operations.
  */
 contextBridge.exposeInMainWorld('settings', {
   read: () => ipcRenderer.invoke('settings:read'),
@@ -35,6 +37,7 @@ contextBridge.exposeInMainWorld('settings', {
     ipcRenderer.invoke('settings:validate-plugin', spec, existingPackages),
   validatePluginConfig: (text: string) => ipcRenderer.invoke('settings:validate-plugin-config', text),
   checkBinaries: (pnpmPath: string, npmPath: string) => ipcRenderer.invoke('settings:check-binaries', pnpmPath, npmPath),
+  openConfigFile: () => ipcRenderer.invoke('settings:open-config-file'),
   onProgress: (listener: (line: string) => void) => {
     const handler = (_event: IpcRendererEvent, line: string): void => listener(line)
     ipcRenderer.on('settings:progress', handler)

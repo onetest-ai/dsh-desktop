@@ -56,6 +56,7 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     checkManagedUpdate: vi.fn(async () => undefined),
     checkBinaries: vi.fn(async () => ({ pnpm: { ok: true, version: '9.0.0' }, npm: { ok: true, version: '10.0.0' } })),
     disabledPlugins: vi.fn(() => ({})),
+    openConfigFile: vi.fn(async () => ({ ok: true }) as const),
     ...overrides,
   }
 }
@@ -766,6 +767,48 @@ describe('checkBinaries', () => {
     const saving = handlers.save(form({ kind: 'managed', package: PKG, version: 'latest', workspace: REPO }))
     const result = await handlers.checkBinaries('', '')
     expect(result).toEqual({ pnpm: { ok: true, version: '9.0.0' }, npm: { ok: true, version: '10.0.0' } })
+
+    releaseInstall?.()
+    await saving
+  })
+})
+
+describe('openConfigFile', () => {
+  it('delegates to deps and returns its outcome, writing nothing', async () => {
+    const writeConfig = vi.fn()
+    const openConfigFile = vi.fn(async () => ({ ok: true }) as const)
+    const handlers = createSettingsHandlers(deps({ writeConfig, openConfigFile }))
+
+    const result = await handlers.openConfigFile()
+
+    expect(openConfigFile).toHaveBeenCalledWith()
+    expect(result).toEqual({ ok: true })
+    expect(writeConfig).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a failure from deps rather than swallowing it', async () => {
+    const openConfigFile = vi.fn(async () => ({ ok: false, error: 'No application can open this file.' }) as const)
+    const handlers = createSettingsHandlers(deps({ openConfigFile }))
+
+    const result = await handlers.openConfigFile()
+
+    expect(result).toEqual({ ok: false, error: 'No application can open this file.' })
+  })
+
+  it('runs freely alongside a save already in flight, unlike a second save', async () => {
+    let releaseInstall: (() => void) | undefined
+    const installManaged = vi.fn(
+      async (_pkg: string, version: string) =>
+        new Promise<string>((resolve) => {
+          releaseInstall = () => resolve(version)
+        }),
+    )
+    const openConfigFile = vi.fn(async () => ({ ok: true }) as const)
+    const handlers = createSettingsHandlers(deps({ installManaged, openConfigFile }))
+
+    const saving = handlers.save(form({ kind: 'managed', package: PKG, version: 'latest', workspace: REPO }))
+    const result = await handlers.openConfigFile()
+    expect(result).toEqual({ ok: true })
 
     releaseInstall?.()
     await saving

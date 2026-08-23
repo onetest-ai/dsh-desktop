@@ -82,6 +82,7 @@ function handlers(overrides: Partial<SettingsHandlers> = {}): SettingsHandlers {
     acceptPluginUpdate: vi.fn(async () => ({ ok: true, warnings: [] })),
     validatePlugin: vi.fn(() => ({ ok: true, plugin: { spec: '@onetest/dsh-deck', package: '@onetest/dsh-deck', pinned: false } })),
     checkBinaries: vi.fn(async () => ({ pnpm: { ok: true, version: '9.0.0' }, npm: { ok: true, version: '10.0.0' } })),
+    openConfigFile: vi.fn(async () => ({ ok: true })),
     ...overrides,
   }
 }
@@ -258,6 +259,22 @@ describe('the check-binaries channel', () => {
       pnpm: { ok: true, version: '9.1.0' },
       npm: { ok: false, error: 'npm is not on PATH' },
     })
+    expect(fake.sent).toEqual([])
+  })
+})
+
+describe('the open-config-file channel', () => {
+  it('returns the handler outcome, without pushing anything', async () => {
+    const { openSettings } = await import('./settings-window')
+    const openConfigFile = vi.fn(async () => ({ ok: false, error: 'No config file yet — save your settings once to create it.' }))
+    openSettings(handlers({ openConfigFile }), () => {})
+
+    const openHandler = fake.ipcHandlers.get('settings:open-config-file')
+    const first = fake.sender('first')
+    const result = await openHandler?.(event(first))
+
+    expect(openConfigFile).toHaveBeenCalledWith()
+    expect(result).toEqual({ ok: false, error: 'No config file yet — save your settings once to create it.' })
     expect(fake.sent).toEqual([])
   })
 })

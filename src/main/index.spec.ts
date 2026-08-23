@@ -1,5 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConfigResult, DesktopConfig } from './config'
+import type { OpenConfigFileResult } from './open-config-file'
 import type { PluginStatus } from './plugin-entries'
 import type { StartOptions } from './server'
 
@@ -73,6 +77,10 @@ const fake = vi.hoisted(() => {
     unregisterAll: vi.fn(),
   }
 
+  const shell = {
+    openPath: vi.fn(async () => ''),
+  }
+
   function quitEvent(): { preventDefault: () => void; prevented: boolean } {
     const event = {
       prevented: false,
@@ -98,6 +106,7 @@ const fake = vi.hoisted(() => {
     app,
     window,
     globalShortcut,
+    shell,
     handlers,
     windowHandlers,
     quitEvents,
@@ -113,6 +122,7 @@ vi.mock('electron', () => ({
   app: fake.app,
   BrowserWindow: class {},
   globalShortcut: fake.globalShortcut,
+  shell: fake.shell,
   dialog: { showOpenDialog: vi.fn() },
   Notification: class {
     show(): void {}
@@ -168,12 +178,16 @@ vi.mock('./config', () => ({
  * verify what a boot recorded without needing the real `settings-ipc`
  * plumbing, which has its own tests for turning this into `PluginInfo.disabledReason`.
  */
-let capturedSettingsDeps: { disabledPlugins(): Record<string, string> } | undefined
+let capturedSettingsDeps:
+  | { disabledPlugins(): Record<string, string>; openConfigFile(): Promise<OpenConfigFileResult> }
+  | undefined
 vi.mock('./settings-ipc', () => ({
-  createSettingsHandlers: vi.fn((deps: { disabledPlugins(): Record<string, string> }) => {
-    capturedSettingsDeps = deps
-    return { read: vi.fn(), pickFolder: vi.fn(), save: vi.fn() }
-  }),
+  createSettingsHandlers: vi.fn(
+    (deps: { disabledPlugins(): Record<string, string>; openConfigFile(): Promise<OpenConfigFileResult> }) => {
+      capturedSettingsDeps = deps
+      return { read: vi.fn(), pickFolder: vi.fn(), save: vi.fn() }
+    },
+  ),
 }))
 
 /** Captures the `onClosed` callback so tests can fire it via `closeSettings()`. */
@@ -850,6 +864,56 @@ describe('settings', () => {
     trayActions?.openSettings()
     closeSettings()
     expect(fake.app.quit).not.toHaveBeenCalled()
+  })
+})
+
+describe('the config-file-open deps wiring', () => {
+  // `configPath(process.env)` is resolved once at module load, so `DSH_HOME`
+  // is pointed at a fresh temp directory before each import — never the real
+  // `~/.dsh` a running app on this machine owns.
+  let originalDshHome: string | undefined
+  let dshHome: string
+
+  beforeEach(() => {
+    originalDshHome = process.env.DSH_HOME
+    dshHome = mkdtempSync(join(tmpdir(), 'dsh-desktop-open-config-'))
+    process.env.DSH_HOME = dshHome
+  })
+
+  afterEach(() => {
+    if (originalDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = originalDshHome
+  })
+
+  it('opens the resolved config path and writes nothing', async () => {
+    const configFile = join(dshHome, 'desktop.json')
+    writeFileSync(configFile, '{}')
+    await loadIndex()
+
+    const result = await capturedSettingsDeps?.openConfigFile()
+
+    expect(fake.shell.openPath).toHaveBeenCalledWith(configFile)
+    expect(result).toEqual({ ok: true })
+  })
+
+  it('surfaces an openPath failure rather than swallowing it', async () => {
+    writeFileSync(join(dshHome, 'desktop.json'), '{}')
+    fake.shell.openPath.mockResolvedValueOnce('No application knows how to open this file.')
+    await loadIndex()
+
+    const result = await capturedSettingsDeps?.openConfigFile()
+
+    expect(result).toEqual({ ok: false, error: 'No application knows how to open this file.' })
+  })
+
+  it('reports a missing config file without ever calling openPath', async () => {
+    // No file written at `dshHome`: first run, nothing saved yet.
+    await loadIndex()
+
+    const result = await capturedSettingsDeps?.openConfigFile()
+
+    expect(fake.shell.openPath).not.toHaveBeenCalled()
+    expect(result).toEqual({ ok: false, error: 'No config file yet — save your settings once to create it.' })
   })
 })
 

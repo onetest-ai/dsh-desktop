@@ -73,6 +73,7 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
     ipcMain.handle('settings:check-binaries', (_event, pnpmPath: string, npmPath: string) =>
       handlers.checkBinaries(pnpmPath, npmPath),
     )
+    ipcMain.handle('settings:open-config-file', () => handlers.openConfigFile())
     channelsRegistered = true
   }
 

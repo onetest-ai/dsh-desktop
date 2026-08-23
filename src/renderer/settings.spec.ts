@@ -210,6 +210,9 @@ type ValidatePluginOutcome = (spec: string, existingPackages: string[]) => Promi
 /** What `settings.checkBinaries` does, keyed by test; defaults to both binaries succeeding. */
 type CheckBinariesOutcome = (pnpmPath: string, npmPath: string) => Promise<unknown>
 
+/** What `settings.openConfigFile` does, keyed by test; defaults to success. */
+type OpenConfigFileOutcome = () => Promise<unknown>
+
 /** The loaded renderer, plus the handles a test needs to drive and read it. */
 interface Renderer {
   elements: Map<string, FakeElement>
@@ -243,6 +246,10 @@ interface Renderer {
   checkBinariesCalls: Array<[string, string]>
   /** Clicks the Check button and awaits its own async handler. */
   checkBinaries(): Promise<void>
+  /** How many times `settings.openConfigFile` has been called so far. */
+  openConfigFileCallCount(): number
+  /** Clicks the "Open config file…" button and awaits its own async handler. */
+  openConfigFile(): Promise<void>
   /** Clicks the tab button for `id`. */
   clickTab(id: string): void
   /**
@@ -288,6 +295,7 @@ function defaultRead(): Promise<unknown> {
  *   non-blank spec not already in `existingPackages`, using it verbatim as the package name.
  * @param onCheckBinaries - what `settings.checkBinaries` does; defaults to both binaries
  *   reporting success with a fixed version string.
+ * @param onOpenConfigFile - what `settings.openConfigFile` does; defaults to success.
  * @returns the fake elements and a way to drive the page.
  */
 async function load(
@@ -296,6 +304,7 @@ async function load(
   onAcceptPluginUpdate?: AcceptPluginUpdateOutcome,
   onValidatePlugin?: ValidatePluginOutcome,
   onCheckBinaries?: CheckBinariesOutcome,
+  onOpenConfigFile?: OpenConfigFileOutcome,
 ): Promise<Renderer> {
   const hiddenIds = declaredHiddenIds()
   const ariaSelected = declaredAriaSelected()
@@ -374,6 +383,7 @@ async function load(
       checkBinariesCalls.push([pnpmPath, npmPath])
       return (onCheckBinaries ?? defaultCheckBinaries)(pnpmPath, npmPath)
     }),
+    openConfigFile: vi.fn(async () => (onOpenConfigFile ?? (async () => ({ ok: true })))()),
     onProgress: vi.fn((listener: (line: string) => void) => {
       progressListener = listener
     }),
@@ -474,6 +484,14 @@ async function load(
     checkBinaries: async () => {
       elements.get('check-binaries')?.listeners.get('click')?.()
       // The click handler is `() => void checkBinaries()`: let its own promise settle.
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    },
+    openConfigFileCallCount: () => settings.openConfigFile.mock.calls.length,
+    openConfigFile: async () => {
+      elements.get('open-config-file')?.listeners.get('click')?.()
+      // The click handler is `() => void openConfigFile()`: let its own promise settle.
       await Promise.resolve()
       await Promise.resolve()
       await Promise.resolve()
@@ -1321,6 +1339,69 @@ describe('checking pnpm/npm paths', () => {
     const renderer = await load(save)
 
     await renderer.checkBinaries()
+
+    expect(save).not.toHaveBeenCalled()
+  })
+})
+
+describe('opening the config file', () => {
+  it('invokes the bridge and reports success', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+
+    await renderer.openConfigFile()
+
+    expect(renderer.openConfigFileCallCount()).toBe(1)
+    const result = renderer.elements.get('open-config-file-result')
+    expect(result?.textContent).toBe('Opened.')
+    expect(result?.classes.has('check-result-ok')).toBe(true)
+    expect(result?.classes.has('check-result-failed')).toBe(false)
+  })
+
+  it('surfaces a failure rather than swallowing it', async () => {
+    const renderer = await load(
+      async () => ({ ok: true, warnings: [] }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => ({ ok: false, error: 'No config file yet — save your settings once to create it.' }),
+    )
+
+    await renderer.openConfigFile()
+
+    const result = renderer.elements.get('open-config-file-result')
+    expect(result?.textContent).toBe('No config file yet — save your settings once to create it.')
+    expect(result?.classes.has('check-result-failed')).toBe(true)
+    expect(result?.classes.has('check-result-ok')).toBe(false)
+  })
+
+  it('disables the button while the open runs and re-enables it once done', async () => {
+    let resolveOpen: (() => void) | undefined
+    const renderer = await load(
+      async () => ({ ok: true, warnings: [] }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () =>
+        new Promise((resolve) => {
+          resolveOpen = () => resolve({ ok: true })
+        }),
+    )
+
+    const clickPromise = renderer.openConfigFile()
+    expect(renderer.elements.get('open-config-file')?.disabled).toBe(true)
+    resolveOpen?.()
+    await clickPromise
+
+    expect(renderer.elements.get('open-config-file')?.disabled).toBe(false)
+  })
+
+  it('does not touch Save or write anything itself', async () => {
+    const save = vi.fn(async () => ({ ok: true, warnings: [] }))
+    const renderer = await load(save)
+
+    await renderer.openConfigFile()
 
     expect(save).not.toHaveBeenCalled()
   })

@@ -1,5 +1,6 @@
 import type { BinaryChecks } from './check-binaries'
 import type { ConfigResult, DesktopConfig } from './config'
+import type { OpenConfigFileResult } from './open-config-file'
 import { parseSpec, type PluginEntry } from './plugin-entries'
 import {
   formFor,
@@ -74,6 +75,17 @@ export interface SettingsDeps {
    * opened well after boot still shows an accurate reason.
    */
   disabledPlugins(): Record<string, string>
+  /**
+   * Open `desktop.json` in whatever the OS associates with `.json` files, for
+   * manual editing.
+   *
+   * Never writes the file: a first-run app that has never saved has nothing
+   * on disk yet (see `loadConfig`'s ENOENT-only handling), and this reports
+   * that rather than seeding a file the user never asked to create. Reading
+   * or writing the running config is otherwise `readConfig`/`writeConfig`'s
+   * job alone; this never becomes a third way into that surface.
+   */
+  openConfigFile(): Promise<OpenConfigFileResult>
 }
 
 /** What `read` reports about one configured plugin entry, alongside the editable form. */
@@ -193,6 +205,14 @@ export interface SettingsHandlers {
    * @returns both binaries' outcomes.
    */
   checkBinaries(pnpmPath: string, npmPath: string): Promise<BinaryChecks>
+  /**
+   * Open `desktop.json` for manual editing. Bypasses the save lock, like
+   * `checkBinaries`: this reads and writes nothing settings-owned, so it can
+   * run freely alongside a save already in flight.
+   * @returns ok, or a diagnosable error — including "nothing has been saved
+   *   yet" for a config that has never been written.
+   */
+  openConfigFile(): Promise<OpenConfigFileResult>
 }
 
 /**
@@ -489,5 +509,6 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     validatePlugin: (spec, existingPackages) => validatePluginSpec(spec, existingPackages),
     validatePluginConfig: (text) => parsePluginConfig(text),
     checkBinaries: (pnpmPath, npmPath) => deps.checkBinaries(pnpmPath, npmPath),
+    openConfigFile: () => deps.openConfigFile(),
   }
 }
