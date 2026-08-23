@@ -9,12 +9,15 @@ import { errorPage } from './error-page'
  * so this cannot add markup there — only style what already renders. A
  * `body::before` pseudo-element gets its own box in the render tree without
  * touching the harness's DOM, so it can carry `-webkit-app-region: drag`
- * like a real element. It is 6px tall: the harness sidebar's topmost
- * control (the logo/collapse button) sits at 6px of padding from the
- * window's top edge in its expanded state, so a strip any taller would sit
- * under that button and swallow its clicks. The global `no-drag` rule on
- * interactive elements is a second line of defense if a future harness
- * layout narrows that margin.
+ * like a real element.
+ *
+ * It is 15px tall. A drag region sits above the page and swallows clicks in
+ * its band, so the height trades grabbability against covering the harness's
+ * own controls: 6px was measured off a CSS padding value and proved too thin
+ * to hit reliably, while the topmost harness control (the sidebar
+ * logo/collapse button) renders about 40px below the window's top edge, so
+ * 15px clears it. The global `no-drag` rule on interactive elements is a
+ * second line of defense if a future harness layout raises that control.
  */
 export const DRAG_REGION_CSS = `
 body::before {
@@ -23,7 +26,7 @@ body::before {
   top: 0;
   left: 0;
   right: 0;
-  height: 6px;
+  height: 15px;
   -webkit-app-region: drag;
   z-index: 2147483647;
 }
