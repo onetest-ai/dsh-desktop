@@ -22,6 +22,9 @@ export interface TrayController {
   destroy(): void
 }
 
+/** Longest note a menu item can carry before it distorts the menu's width. */
+const NOTE_MAX = 80
+
 const ASSETS = join(__dirname, '..', '..', 'assets')
 
 const LABELS: Record<ServerStatus, string> = {
@@ -55,12 +58,17 @@ export function createTray(actions: TrayActions): TrayController {
   const tray = new Tray(icon('starting'))
 
   const render = (status: ServerStatus, note?: string): void => {
+    // A menu item renders its label on one unwrapped line, so an over-long
+    // note stretches the menu across the screen. Callers are expected to pass
+    // something short; this is the backstop that keeps a future long note from
+    // breaking the menu outright.
+    const shown = note === undefined || note.length <= NOTE_MAX ? note : `${note.slice(0, NOTE_MAX - 1)}…`
     tray.setImage(icon(status))
-    tray.setToolTip(note !== undefined ? `${LABELS[status]} — ${note}` : LABELS[status])
+    tray.setToolTip(shown !== undefined ? `${LABELS[status]} — ${shown}` : LABELS[status])
     tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: LABELS[status], enabled: false },
-        ...(note !== undefined ? [{ label: note, enabled: false }] : []),
+        ...(shown !== undefined ? [{ label: shown, enabled: false }] : []),
         { type: 'separator' },
         { label: 'Show / Hide', click: () => actions.toggleWindow() },
         { label: 'Restart harness', click: () => actions.restart() },

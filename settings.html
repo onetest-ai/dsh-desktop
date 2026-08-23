@@ -1,0 +1,114 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Settings</title>
+<link rel="stylesheet" href="settings.css">
+<div class="titlebar" aria-hidden="true"></div>
+<main>
+  <h1>DeepSeek Harness</h1>
+  <p id="intro" class="hint"></p>
+
+  <div class="tabs" role="tablist" aria-label="Settings sections">
+    <button type="button" role="tab" id="tab-harness" aria-controls="panel-harness" aria-selected="true" class="tab">
+      Harness<span class="tab-error-dot" id="tab-harness-error-dot" aria-hidden="true" hidden></span>
+    </button>
+    <button type="button" role="tab" id="tab-plugins" aria-controls="panel-plugins" aria-selected="false" tabindex="-1" class="tab">
+      Plugins<span class="tab-error-dot" id="tab-plugins-error-dot" aria-hidden="true" hidden></span>
+    </button>
+    <button type="button" role="tab" id="tab-notifications" aria-controls="panel-notifications" aria-selected="false" tabindex="-1" class="tab">
+      Notifications &amp; Shortcuts<span class="tab-error-dot" id="tab-notifications-error-dot" aria-hidden="true" hidden></span>
+    </button>
+    <button type="button" role="tab" id="tab-advanced" aria-controls="panel-advanced" aria-selected="false" tabindex="-1" class="tab">
+      Advanced<span class="tab-error-dot" id="tab-advanced-error-dot" aria-hidden="true" hidden></span>
+    </button>
+  </div>
+
+  <section id="panel-harness" role="tabpanel" aria-labelledby="tab-harness" tabindex="0" class="panel">
+    <p class="group-label" id="source-label">Where the harness runs from</p>
+    <section class="group choices" role="radiogroup" aria-labelledby="source-label">
+      <label><input type="radio" name="kind" value="local" checked> A local checkout</label>
+      <label><input type="radio" name="kind" value="managed"> A managed install</label>
+    </section>
+
+    <section id="local-fields" class="group">
+      <label for="repo">Checkout folder</label>
+      <div class="row">
+        <input id="repo" type="text" placeholder="/path/to/deepseek-harness">
+        <button id="browse" type="button">Choose…</button>
+      </div>
+      <p class="error" id="error-repo"></p>
+    </section>
+
+    <section id="managed-fields" class="group" hidden>
+      <label for="package">Package</label>
+      <input id="package" type="text">
+      <p class="error" id="error-package"></p>
+      <label for="version">Version</label>
+      <input id="version" type="text">
+      <p class="error" id="error-version"></p>
+      <p class="hint update-hint" id="update-hint" hidden>
+        Version <span id="latest-version"></span> is available.
+        <button id="use-latest" type="button">Use it</button>
+      </p>
+      <div class="field-label-row">
+        <label for="workspace">Workspace folder</label>
+        <details class="field-info">
+          <summary aria-label="About the workspace folder"><span aria-hidden="true">i</span></summary>
+          <p>The working directory the harness runs in for a managed install — the folder the agent reads and writes files in. Defaults to your home folder.</p>
+        </details>
+      </div>
+      <div class="row">
+        <input id="workspace" type="text" placeholder="defaults to your home folder">
+        <button id="browse-workspace" type="button">Choose…</button>
+      </div>
+      <p class="error" id="error-workspace"></p>
+    </section>
+  </section>
+
+  <section id="panel-plugins" role="tabpanel" aria-labelledby="tab-plugins" tabindex="0" class="panel" hidden>
+    <p class="group-label" id="plugins-label">Plugins</p>
+    <section class="group" aria-labelledby="plugins-label">
+      <p class="hint"><code>pkg</code> for the latest, offered updates later, or <code>pkg@version</code> to pin it exactly and never be offered an update. The notification hook bridge is pre-seeded below.</p>
+      <label for="plugin-spec">Add a package</label>
+      <div class="row">
+        <input id="plugin-spec" type="text" placeholder="pkg or pkg@version" spellcheck="false">
+        <button id="add-plugin" type="button">Add</button>
+      </div>
+      <p class="error" id="error-plugin-spec"></p>
+      <ul id="plugin-rows" class="plugin-rows"></ul>
+      <p class="error" id="error-plugins"></p>
+    </section>
+  </section>
+
+  <section id="panel-notifications" role="tabpanel" aria-labelledby="tab-notifications" tabindex="0" class="panel" hidden>
+    <section class="group">
+      <label for="notifyPort">Notification port</label>
+      <input id="notifyPort" type="text" inputmode="numeric">
+      <p class="error" id="error-notifyPort"></p>
+
+      <label for="hotkey">Show/hide shortcut</label>
+      <input id="hotkey" type="text">
+      <p class="error" id="error-hotkey"></p>
+    </section>
+  </section>
+
+  <section id="panel-advanced" role="tabpanel" aria-labelledby="tab-advanced" tabindex="0" class="panel" hidden>
+    <section class="group">
+      <label for="pnpmPath">pnpm path</label>
+      <input id="pnpmPath" type="text" placeholder="found on PATH by default">
+      <p class="check-result" id="check-result-pnpm" role="status"></p>
+      <label for="npmPath">npm path</label>
+      <input id="npmPath" type="text" placeholder="found on PATH by default">
+      <p class="check-result" id="check-result-npm" role="status"></p>
+      <button type="button" id="check-binaries" class="check-binaries">Check</button>
+    </section>
+  </section>
+
+</main>
+<div class="actions">
+  <div class="actions-status">
+    <p class="status" id="status" role="status"></p>
+    <pre class="progress" id="progress" role="status" hidden></pre>
+  </div>
+  <button id="save" type="button">Save</button>
+</div>
+<script src="settings.js"></script>

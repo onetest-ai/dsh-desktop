@@ -255,6 +255,24 @@ let disabledPlugins = new Map<string, string>()
  * @param omitted - pre-flight omissions from the attempt that ultimately ran.
  * @param isolated - package/reason pairs isolated during this boot's retries.
  */
+/**
+ * A tray-sized summary of the plugins that were dropped.
+ *
+ * The harness's own reason is a full error, stack trace included, and a menu
+ * item renders its label on one unwrapped line — pasting the reason there
+ * stretches the menu across the screen. The reason belongs on the plugin's
+ * row in Settings, which shows it in full; the tray only says which plugins
+ * are affected and where to look.
+ * @param isolated - the entries dropped to get the harness running.
+ * @returns a short note, or an empty string when nothing was dropped.
+ */
+function summariseDisabled(isolated: readonly { package: string }[]): string {
+  if (isolated.length === 0) return ''
+  const names = isolated.map((entry) => entry.package)
+  const listed = names.length <= 2 ? names.join(' and ') : `${names.length} plugins`
+  return `${listed} disabled — see Settings for why`
+}
+
 function recordDisabledPlugins(omitted: { package: string; reason: string }[], isolated: { package: string; reason: string }[]): void {
   disabledPlugins = new Map([...omitted, ...isolated].map((entry) => [entry.package, entry.reason]))
 }
@@ -475,7 +493,7 @@ async function bootNow(): Promise<void> {
       recordDisabledPlugins(retry.omitted, isolated)
       setStatus(
         'running',
-        [retry.hooksNote, isolated.map((entry) => `${entry.package} disabled — the harness would not start with it: ${entry.reason}`).join('; ')]
+        [retry.hooksNote, summariseDisabled(isolated)]
           .filter((note): note is string => note !== undefined && note !== '')
           .join('; '),
       )
