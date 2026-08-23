@@ -69,6 +69,9 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
     ipcMain.handle('settings:validate-plugin', (_event, spec: string, existingPackages: string[]) =>
       handlers.validatePlugin(spec, existingPackages),
     )
+    ipcMain.handle('settings:check-binaries', (_event, pnpmPath: string, npmPath: string) =>
+      handlers.checkBinaries(pnpmPath, npmPath),
+    )
     channelsRegistered = true
   }
 

@@ -185,6 +185,9 @@ type AcceptPluginUpdateOutcome = (pkg: string, version: string) => Promise<unkno
 /** What `settings.validatePlugin` does, keyed by test; defaults to accepting anything new. */
 type ValidatePluginOutcome = (spec: string, existingPackages: string[]) => Promise<unknown>
 
+/** What `settings.checkBinaries` does, keyed by test; defaults to both binaries succeeding. */
+type CheckBinariesOutcome = (pnpmPath: string, npmPath: string) => Promise<unknown>
+
 /** The loaded renderer, plus the handles a test needs to drive and read it. */
 interface Renderer {
   elements: Map<string, FakeElement>
@@ -212,6 +215,10 @@ interface Renderer {
   acceptPluginUpdateCalls: Array<[string, string]>
   /** Calls made to `settings.validatePlugin`, as `[spec, existingPackages]` pairs. */
   validatePluginCalls: Array<[string, string[]]>
+  /** Calls made to `settings.checkBinaries`, as `[pnpmPath, npmPath]` pairs. */
+  checkBinariesCalls: Array<[string, string]>
+  /** Clicks the Check button and awaits its own async handler. */
+  checkBinaries(): Promise<void>
   /** Clicks the tab button for `id`. */
   clickTab(id: string): void
   /**
@@ -255,6 +262,8 @@ function defaultRead(): Promise<unknown> {
  * @param onAcceptPluginUpdate - what `settings.acceptPluginUpdate` does; defaults to success.
  * @param onValidatePlugin - what `settings.validatePlugin` does; defaults to accepting any
  *   non-blank spec not already in `existingPackages`, using it verbatim as the package name.
+ * @param onCheckBinaries - what `settings.checkBinaries` does; defaults to both binaries
+ *   reporting success with a fixed version string.
  * @returns the fake elements and a way to drive the page.
  */
 async function load(
@@ -262,6 +271,7 @@ async function load(
   onRead?: () => Promise<unknown>,
   onAcceptPluginUpdate?: AcceptPluginUpdateOutcome,
   onValidatePlugin?: ValidatePluginOutcome,
+  onCheckBinaries?: CheckBinariesOutcome,
 ): Promise<Renderer> {
   const hiddenIds = declaredHiddenIds()
   const ariaSelected = declaredAriaSelected()
@@ -305,6 +315,11 @@ async function load(
   let pluginUpdateListener: ((pkg: string, latest: string) => void) | undefined
   const acceptPluginUpdateCalls: Array<[string, string]> = []
   const validatePluginCalls: Array<[string, string[]]> = []
+  const checkBinariesCalls: Array<[string, string]> = []
+  const defaultCheckBinaries: CheckBinariesOutcome = async () => ({
+    pnpm: { ok: true, version: '9.1.0' },
+    npm: { ok: true, version: '10.2.0' },
+  })
   const defaultValidatePlugin: ValidatePluginOutcome = async (spec, existingPackages) => {
     const trimmed = spec.trim()
     if (trimmed === '') return { ok: false, message: 'Enter a package name to add.' }
@@ -330,6 +345,10 @@ async function load(
     validatePlugin: vi.fn(async (spec: string, existingPackages: string[]) => {
       validatePluginCalls.push([spec, existingPackages])
       return (onValidatePlugin ?? defaultValidatePlugin)(spec, existingPackages)
+    }),
+    checkBinaries: vi.fn(async (pnpmPath: string, npmPath: string) => {
+      checkBinariesCalls.push([pnpmPath, npmPath])
+      return (onCheckBinaries ?? defaultCheckBinaries)(pnpmPath, npmPath)
     }),
     onProgress: vi.fn((listener: (line: string) => void) => {
       progressListener = listener
@@ -426,6 +445,14 @@ async function load(
       elements.get('add-plugin')?.listeners.get('click')?.()
     },
     readCallCount: () => settings.read.mock.calls.length,
+    checkBinariesCalls,
+    checkBinaries: async () => {
+      elements.get('check-binaries')?.listeners.get('click')?.()
+      // The click handler is `() => void checkBinaries()`: let its own promise settle.
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    },
   }
 }
 
@@ -1123,5 +1150,89 @@ describe('a refused save', () => {
 
     expect(renderer.elements.get('error-version')?.textContent).toBe('npm ERR! 404 Not Found')
     expect(renderer.elements.get('status')?.textContent).toBe('')
+  })
+})
+
+describe('checking pnpm/npm paths', () => {
+  it('reports success for both binaries with their printed versions', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+    const pnpmInput = renderer.elements.get('pnpmPath')
+    const npmInput = renderer.elements.get('npmPath')
+    if (pnpmInput !== undefined) pnpmInput.value = '/opt/pnpm'
+    if (npmInput !== undefined) npmInput.value = '/opt/npm'
+
+    await renderer.checkBinaries()
+
+    expect(renderer.checkBinariesCalls).toEqual([['/opt/pnpm', '/opt/npm']])
+    expect(renderer.elements.get('check-result-pnpm')?.textContent).toBe('OK — 9.1.0')
+    expect(renderer.elements.get('check-result-pnpm')?.classes.has('check-result-ok')).toBe(true)
+    expect(renderer.elements.get('check-result-npm')?.textContent).toBe('OK — 10.2.0')
+    expect(renderer.elements.get('check-result-npm')?.classes.has('check-result-ok')).toBe(true)
+  })
+
+  it('shows the real failure for one binary while the other still reports success', async () => {
+    const renderer = await load(
+      async () => ({ ok: true, warnings: [] }),
+      undefined,
+      undefined,
+      undefined,
+      async () => ({
+        pnpm: { ok: false, error: 'pnpm: command not found' },
+        npm: { ok: true, version: '10.2.0' },
+      }),
+    )
+
+    await renderer.checkBinaries()
+
+    const pnpmResult = renderer.elements.get('check-result-pnpm')
+    expect(pnpmResult?.textContent).toBe('pnpm: command not found')
+    expect(pnpmResult?.classes.has('check-result-failed')).toBe(true)
+    expect(pnpmResult?.classes.has('check-result-ok')).toBe(false)
+
+    const npmResult = renderer.elements.get('check-result-npm')
+    expect(npmResult?.textContent).toBe('OK — 10.2.0')
+    expect(npmResult?.classes.has('check-result-ok')).toBe(true)
+  })
+
+  it('checks a blank field via PATH rather than skipping it', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }))
+    const pnpmInput = renderer.elements.get('pnpmPath')
+    if (pnpmInput !== undefined) pnpmInput.value = ''
+
+    await renderer.checkBinaries()
+
+    expect(renderer.checkBinariesCalls).toEqual([['', '']])
+    expect(renderer.elements.get('check-result-pnpm')?.textContent).toBe('OK — 9.1.0')
+  })
+
+  it('disables the button while the check runs and re-enables it once done', async () => {
+    let resolveCheck: (() => void) | undefined
+    const renderer = await load(
+      async () => ({ ok: true, warnings: [] }),
+      undefined,
+      undefined,
+      undefined,
+      () =>
+        new Promise((resolve) => {
+          resolveCheck = () =>
+            resolve({ pnpm: { ok: true, version: '9.1.0' }, npm: { ok: true, version: '10.2.0' } })
+        }),
+    )
+
+    const clickPromise = renderer.checkBinaries()
+    expect(renderer.elements.get('check-binaries')?.disabled).toBe(true)
+    resolveCheck?.()
+    await clickPromise
+
+    expect(renderer.elements.get('check-binaries')?.disabled).toBe(false)
+  })
+
+  it('does not touch Save or write anything itself', async () => {
+    const save = vi.fn(async () => ({ ok: true, warnings: [] }))
+    const renderer = await load(save)
+
+    await renderer.checkBinaries()
+
+    expect(save).not.toHaveBeenCalled()
   })
 })

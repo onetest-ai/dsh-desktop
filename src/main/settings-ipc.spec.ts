@@ -43,6 +43,7 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     installManaged: vi.fn(async (_pkg, version) => version),
     installPlugin: vi.fn(async (_pkg, version) => version),
     checkManagedUpdate: vi.fn(async () => undefined),
+    checkBinaries: vi.fn(async () => ({ pnpm: { ok: true, version: '9.0.0' }, npm: { ok: true, version: '10.0.0' } })),
     ...overrides,
   }
 }
@@ -645,5 +646,44 @@ describe('validatePlugin', () => {
     const result = handlers.validatePlugin(DECK, [DECK])
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.message).toBe(`${DECK} is already in the list.`)
+  })
+})
+
+describe('checkBinaries', () => {
+  it('forwards the two form values verbatim and returns the answer, writing nothing', async () => {
+    const writeConfig = vi.fn()
+    const checkBinaries = vi.fn(async (pnpmPath: string, npmPath: string) => ({
+      pnpm: { ok: true as const, version: `pnpm-for-${pnpmPath}` },
+      npm: { ok: true as const, version: `npm-for-${npmPath}` },
+    }))
+    const handlers = createSettingsHandlers(deps({ writeConfig, checkBinaries }))
+
+    const result = await handlers.checkBinaries('/opt/pnpm', '')
+
+    expect(checkBinaries).toHaveBeenCalledWith('/opt/pnpm', '')
+    expect(result).toEqual({
+      pnpm: { ok: true, version: 'pnpm-for-/opt/pnpm' },
+      npm: { ok: true, version: 'npm-for-' },
+    })
+    expect(writeConfig).not.toHaveBeenCalled()
+  })
+
+  it('runs freely alongside a save already in flight, unlike a second save', async () => {
+    let releaseInstall: (() => void) | undefined
+    const installManaged = vi.fn(
+      async (_pkg: string, version: string) =>
+        new Promise<string>((resolve) => {
+          releaseInstall = () => resolve(version)
+        }),
+    )
+    const checkBinaries = vi.fn(async () => ({ pnpm: { ok: true as const, version: '9.0.0' }, npm: { ok: true as const, version: '10.0.0' } }))
+    const handlers = createSettingsHandlers(deps({ installManaged, checkBinaries }))
+
+    const saving = handlers.save(form({ kind: 'managed', package: PKG, version: 'latest', workspace: REPO }))
+    const result = await handlers.checkBinaries('', '')
+    expect(result).toEqual({ pnpm: { ok: true, version: '9.0.0' }, npm: { ok: true, version: '10.0.0' } })
+
+    releaseInstall?.()
+    await saving
   })
 })

@@ -81,6 +81,7 @@ function handlers(overrides: Partial<SettingsHandlers> = {}): SettingsHandlers {
     save: vi.fn(async () => ({ ok: true, warnings: [] })),
     acceptPluginUpdate: vi.fn(async () => ({ ok: true, warnings: [] })),
     validatePlugin: vi.fn(() => ({ ok: true, plugin: { spec: '@onetest/dsh-deck', package: '@onetest/dsh-deck', pinned: false } })),
+    checkBinaries: vi.fn(async () => ({ pnpm: { ok: true, version: '9.0.0' }, npm: { ok: true, version: '10.0.0' } })),
     ...overrides,
   }
 }
@@ -234,6 +235,28 @@ describe('the validate-plugin channel', () => {
     expect(result).toEqual({
       ok: true,
       plugin: { spec: '@onetest/dsh-deck@0.2.1', package: '@onetest/dsh-deck', pinned: true },
+    })
+    expect(fake.sent).toEqual([])
+  })
+})
+
+describe('the check-binaries channel', () => {
+  it('forwards the two path fields and returns the answer, without pushing anything', async () => {
+    const { openSettings } = await import('./settings-window')
+    const checkBinaries = vi.fn(async () => ({
+      pnpm: { ok: true as const, version: '9.1.0' },
+      npm: { ok: false as const, error: 'npm is not on PATH' },
+    }))
+    openSettings(handlers({ checkBinaries }), () => {})
+
+    const checkHandler = fake.ipcHandlers.get('settings:check-binaries')
+    const first = fake.sender('first')
+    const result = await checkHandler?.(event(first), '/opt/pnpm', '')
+
+    expect(checkBinaries).toHaveBeenCalledWith('/opt/pnpm', '')
+    expect(result).toEqual({
+      pnpm: { ok: true, version: '9.1.0' },
+      npm: { ok: false, error: 'npm is not on PATH' },
     })
     expect(fake.sent).toEqual([])
   })

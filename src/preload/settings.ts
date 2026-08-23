@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 /**
  * The settings renderer's entire capability surface.
  *
- * Five operations reach the main process, plus three receive-only
+ * Six operations reach the main process, plus three receive-only
  * subscriptions. The renderer has no `fs`, no path construction, and no way
  * to write anything: every value it can persist goes through `save` or
  * `acceptPluginUpdate`, both of which validate in main. `acceptPluginUpdate`
@@ -13,11 +13,15 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
  * which is exactly what pins an entry. `validatePlugin` is a fifth call-in:
  * it lets the row-based plugin list validate one spec against the same
  * grammar `save` re-checks, without installing anything and without handing
- * the renderer its own copy of that grammar.
+ * the renderer its own copy of that grammar. `checkBinaries` is a sixth: it
+ * spawns `pnpm --version`/`npm --version` against the form's current path
+ * fields, in main, and returns each outcome — the renderer never spawns
+ * anything itself.
  * `onProgress`/`onUpdateAvailable`/`onPluginUpdateAvailable` add no way to
  * *call* into main — they only let the renderer listen for what main chooses
- * to push, each returning an unsubscribe function. `validatePlugin` adds no
- * new push channel: it answers over its own `invoke`, like the other four.
+ * to push, each returning an unsubscribe function. `validatePlugin` and
+ * `checkBinaries` add no new push channel: both answer over their own
+ * `invoke`, like the other four.
  */
 contextBridge.exposeInMainWorld('settings', {
   read: () => ipcRenderer.invoke('settings:read'),
@@ -27,6 +31,7 @@ contextBridge.exposeInMainWorld('settings', {
     ipcRenderer.invoke('settings:accept-plugin-update', pkg, version),
   validatePlugin: (spec: string, existingPackages: string[]) =>
     ipcRenderer.invoke('settings:validate-plugin', spec, existingPackages),
+  checkBinaries: (pnpmPath: string, npmPath: string) => ipcRenderer.invoke('settings:check-binaries', pnpmPath, npmPath),
   onProgress: (listener: (line: string) => void) => {
     const handler = (_event: IpcRendererEvent, line: string): void => listener(line)
     ipcRenderer.on('settings:progress', handler)

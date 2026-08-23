@@ -423,6 +423,54 @@ async function performSave() {
   }
 }
 
+/**
+ * Render one binary's check outcome into its result node, beside the field it
+ * describes.
+ * @param {HTMLElement} node - the `.check-result` element for that binary.
+ * @param {{ ok: boolean, version?: string, error?: string }} outcome - what
+ *   `checkBinaries` reported for this one binary.
+ */
+function renderCheckResult(node, outcome) {
+  node.classList.remove('check-result-ok', 'check-result-failed')
+  if (outcome.ok) {
+    node.textContent = `OK — ${outcome.version}`
+    node.classList.add('check-result-ok')
+  } else {
+    node.textContent = outcome.error
+    node.classList.add('check-result-failed')
+  }
+}
+
+/**
+ * Verify the pnpm/npm path fields as currently typed, exactly the way the
+ * app would spawn them — never the saved config, and this never saves
+ * anything itself. Bound by main's own timeout, so a hung binary cannot
+ * leave the button stuck; this handler only awaits the one `invoke` call.
+ */
+async function checkBinaries() {
+  const button = el('check-binaries')
+  const pnpmResult = el('check-result-pnpm')
+  const npmResult = el('check-result-npm')
+  button.disabled = true
+  pnpmResult.classList.remove('check-result-ok', 'check-result-failed')
+  npmResult.classList.remove('check-result-ok', 'check-result-failed')
+  pnpmResult.textContent = 'Checking…'
+  npmResult.textContent = 'Checking…'
+  try {
+    const result = await window.settings.checkBinaries(el('pnpmPath').value, el('npmPath').value)
+    renderCheckResult(pnpmResult, result.pnpm)
+    renderCheckResult(npmResult, result.npm)
+  } catch (error) {
+    const message = messageOf(error)
+    pnpmResult.textContent = message
+    pnpmResult.classList.add('check-result-failed')
+    npmResult.textContent = message
+    npmResult.classList.add('check-result-failed')
+  } finally {
+    button.disabled = false
+  }
+}
+
 async function load() {
   let result
   try {
@@ -499,6 +547,10 @@ el('use-latest').addEventListener('click', () => {
 
 el('add-plugin').addEventListener('click', () => {
   void addPlugin()
+})
+
+el('check-binaries').addEventListener('click', () => {
+  void checkBinaries()
 })
 
 // Receive-only: the main process pushes progress lines while a managed

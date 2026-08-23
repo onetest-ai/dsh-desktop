@@ -422,6 +422,31 @@ button:disabled {
   gap: 20px;
 }
 
+/* Verifies the binary the field above it would actually spawn — same tokens
+   as .error/.status so success and failure read as part of the same system
+   rather than a bolted-on widget. */
+.check-result {
+  margin: -4px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.check-result:empty {
+  display: none;
+}
+
+.check-result-ok {
+  color: var(--ok);
+}
+
+.check-result-failed {
+  color: var(--danger);
+}
+
+.check-binaries {
+  justify-self: start;
+}
+
 .panel:focus-visible {
   outline: none;
 }

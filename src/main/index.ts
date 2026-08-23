@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, globalShortcut, Notification } from 'electron'
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { checkBinaries } from './check-binaries'
 import { loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
 import { ConfigurationError } from './configuration-error'
 import { configPath, resolveDshHome, type HarnessSource } from './harness-source'
@@ -27,6 +28,9 @@ const DSH_HOME = resolveDshHome(process.env)
 
 /** How long the harness may take to report its URL. */
 const READY_TIMEOUT_MS = 60_000
+
+/** How long the Advanced tab's Check button waits for `pnpm --version`/`npm --version` before treating a binary as hung. */
+const CHECK_BINARY_TIMEOUT_MS = 10_000
 
 let window: BrowserWindow | undefined
 let quitting = false
@@ -195,6 +199,7 @@ const settingsHandlers = createSettingsHandlers({
     )(pkg, version, onLine),
   checkManagedUpdate: (pkg, installed, npmPath) =>
     createUpdateChecker(installDeps, resolveBinary(npmPath, 'npm', process.env))(pkg, installed),
+  checkBinaries: (pnpmPath, npmPath) => checkBinaries(pnpmPath, npmPath, process.env, CHECK_BINARY_TIMEOUT_MS),
 })
 
 /**

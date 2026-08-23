@@ -1,3 +1,4 @@
+import type { BinaryChecks } from './check-binaries'
 import type { ConfigResult, DesktopConfig } from './config'
 import { parseSpec, type PluginEntry } from './plugin-entries'
 import {
@@ -53,6 +54,15 @@ export interface SettingsDeps {
    * `undefined`.
    */
   checkManagedUpdate(pkg: string, installed: string, npmPath: string | undefined): Promise<string | undefined>
+  /**
+   * Verify the Advanced tab's `pnpm`/`npm` path fields actually spawn,
+   * against the values currently typed in the form — never the saved
+   * config, and never written to disk. Reads nothing from `readConfig` and
+   * calls neither `writeConfig` nor `apply`.
+   * @param pnpmPath - the pnpm path field's current value; blank means PATH.
+   * @param npmPath - the npm path field's current value; blank means PATH.
+   */
+  checkBinaries(pnpmPath: string, npmPath: string): Promise<BinaryChecks>
 }
 
 /** What `read` reports about one configured plugin entry, alongside the editable form. */
@@ -145,6 +155,16 @@ export interface SettingsHandlers {
    * @returns the parsed entry to add as a row, or the message to show beside the input.
    */
   validatePlugin(spec: string, existingPackages: string[]): PluginSpecValidation
+  /**
+   * Verify the Advanced tab's `pnpm`/`npm` path fields actually spawn, using
+   * the values currently typed in the form. Bypasses the save lock entirely:
+   * unlike `save` and `acceptPluginUpdate`, this reads and writes nothing, so
+   * it can run freely alongside a save already in flight without racing it.
+   * @param pnpmPath - the pnpm path field's current value; blank means PATH.
+   * @param npmPath - the npm path field's current value; blank means PATH.
+   * @returns both binaries' outcomes.
+   */
+  checkBinaries(pnpmPath: string, npmPath: string): Promise<BinaryChecks>
 }
 
 /**
@@ -429,5 +449,6 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       }
     },
     validatePlugin: (spec, existingPackages) => validatePluginSpec(spec, existingPackages),
+    checkBinaries: (pnpmPath, npmPath) => deps.checkBinaries(pnpmPath, npmPath),
   }
 }
