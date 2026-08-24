@@ -33,6 +33,29 @@ const HOME_DIR_NAME = '.dsh'
 const RUNTIMES_DIR_NAME = 'runtimes'
 
 /**
+ * The harness profile this app always boots — see `spawnFor`'s `--profile`
+ * flag. Named once here so `plugin-link.ts` can locate the same profile's
+ * `node_modules` (`$DSH_HOME/profiles/<profile>/node_modules`, the directory
+ * `dsh plugin add` itself writes into) without re-typing the literal.
+ */
+export const PROFILE = 'web'
+
+/**
+ * `$DSH_HOME/runtimes`, the root every managed install (harness, hook
+ * bridge, plugin) lives under.
+ *
+ * `plugin-link.ts` uses this to tell its own symlinks apart from a real
+ * package directory: a symlink whose target resolves under this root was
+ * written by this app's linking step, never by `npm install` or `dsh plugin
+ * add`, which always write real directories.
+ * @param dshHome - the resolved `$DSH_HOME` directory.
+ * @returns the managed-runtimes root directory.
+ */
+export function runtimesRoot(dshHome: string): string {
+  return join(dshHome, RUNTIMES_DIR_NAME)
+}
+
+/**
  * Resolve `$DSH_HOME`, matching the harness's own `resolveDshHome`
  * (packages/util/home-paths): trimming only decides whether the value counts
  * as set; the value used is the original, untrimmed string.
@@ -164,7 +187,7 @@ export function managedBin(dir: string): string {
  * @returns command, arguments, and working directory.
  */
 export function spawnFor(source: HarnessSource, launchers: Launchers, patchFile: string, dshHome: string): SpawnSpec {
-  const profileArgs = ['--profile', 'web', '--patch', patchFile, '--no-open']
+  const profileArgs = ['--profile', PROFILE, '--patch', patchFile, '--no-open']
   if (source.kind === 'local') {
     return { command: launchers.pnpm(), args: ['dsh', ...profileArgs], cwd: source.repo }
   }

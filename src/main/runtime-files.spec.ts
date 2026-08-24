@@ -90,19 +90,32 @@ describe('hooksConfig', () => {
 })
 
 describe('patchOverlay', () => {
-  it('mounts a plugin at its resolved entry file, not the bare package name', () => {
-    const overlay = patchOverlay([{ package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: "/tmp/o'brien/lib/index.js", configPath: "/tmp/o'brien/hooks.json" }], [])
+  it('mounts a plugin at the given name, single-quote-escaped', () => {
+    const overlay = patchOverlay([{ package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: "/tmp/o'brien/lib/index.js", name: "/tmp/o'brien/lib/index.js", configPath: "/tmp/o'brien/hooks.json" }], [])
     expect(overlay).toContain("configPath: '/tmp/o''brien/hooks.json'")
     expect(overlay).toContain("name: '/tmp/o''brien/lib/index.js'")
     expect(overlay).not.toContain("name: '@deepseek-ai/dsh-hooks-claude-code'")
     expect(overlay).toContain('port: 0')
   })
 
+  it("mounts a linked entry by its bare package name, distinct from its own entryPath", () => {
+    // `name` and `entryPath` diverge exactly when `plugin-link.ts` has
+    // linked the entry into the profile's `node_modules`: the overlay uses
+    // the bare name a user recognises, while `entryPath` is kept alongside
+    // it (in `RuntimeFiles.ready`) purely for `attributeBootFailure`.
+    const overlay = patchOverlay(
+      [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '@onetest/dsh-deck' }],
+      [],
+    )
+    expect(overlay).toContain("name: '@onetest/dsh-deck'")
+    expect(overlay).not.toContain("name: '/tmp/deck/lib/index.js'")
+  })
+
   it('mounts a plugin with no configPath under an empty config object, never a configPath', () => {
     // cordis's own config resolution rejects an insert with no `config` node
     // at all ("expected a config object"); an empty object satisfies it
     // without giving a generic entry anything to configure.
-    const overlay = patchOverlay([{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js' }], [])
+    const overlay = patchOverlay([{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js' }], [])
     expect(overlay).toContain("name: '/tmp/deck/lib/index.js'")
     expect(overlay).toContain('config: {}')
     expect(overlay).not.toContain('configPath')
@@ -111,8 +124,8 @@ describe('patchOverlay', () => {
   it('mounts every ready entry, each under its own id', () => {
     const overlay = patchOverlay(
       [
-        { package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: '/tmp/hooks/lib/index.js', configPath: '/tmp/hooks.json' },
-        { package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js' },
+        { package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: '/tmp/hooks/lib/index.js', name: '/tmp/hooks/lib/index.js', configPath: '/tmp/hooks.json' },
+        { package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js' },
       ],
       [],
     )
@@ -131,7 +144,7 @@ describe('patchOverlay', () => {
 
   it('mounts a ready entry while separately omitting a broken one', () => {
     const overlay = patchOverlay(
-      [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js' }],
+      [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js' }],
       [{ package: '@deepseek-ai/dsh-hooks-claude-code', reason: 'not installed yet' }],
     )
     expect(overlay).toContain("name: '/tmp/deck/lib/index.js'")
@@ -140,7 +153,7 @@ describe('patchOverlay', () => {
 
   it("emits an entry's own stored config as a flow-style YAML mapping", () => {
     const overlay = patchOverlay(
-      [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', config: { base: '/x', nested: { n: 1 } } }],
+      [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js', config: { base: '/x', nested: { n: 1 } } }],
       [],
     )
     expect(overlay).toContain('config: {"base":"/x","nested":{"n":1}}')
@@ -148,7 +161,7 @@ describe('patchOverlay', () => {
   })
 
   it('keeps the empty-object default for an entry with no stored config', () => {
-    const overlay = patchOverlay([{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', config: undefined }], [])
+    const overlay = patchOverlay([{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js', config: undefined }], [])
     expect(overlay).toContain('config: {}')
   })
 
@@ -158,6 +171,7 @@ describe('patchOverlay', () => {
         {
           package: '@deepseek-ai/dsh-hooks-claude-code',
           entryPath: '/tmp/hooks/lib/index.js',
+          name: '/tmp/hooks/lib/index.js',
           configPath: '/tmp/hooks.json',
           config: { ignored: true },
         },

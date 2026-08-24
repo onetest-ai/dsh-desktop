@@ -101,7 +101,7 @@ export function validSpecShape(spec: string): boolean {
  * @param pkg - the package name.
  * @returns the package's own directory under `installDir/node_modules`.
  */
-function packageDirIn(installDir: string, pkg: string): string {
+export function packageDirIn(installDir: string, pkg: string): string {
   return join(installDir, 'node_modules', ...pkg.split('/'))
 }
 
@@ -176,11 +176,15 @@ export function resolvePluginEntry(installDir: string, pkg: string): string {
  * is about to boot.
  *
  * `ready` carries the absolute entry file the cordis overlay's `insert` must
- * point at — the cordis loader resolves a directory `name` by looking only
- * for `index.jsx` and ignores `package.json`, so a package directory does
- * not work there, only its entry file does — plus the directory the
- * loadability probe should check from. `unavailable` carries why the entry
- * cannot be mounted, surfaced by the caller instead of blocking boot.
+ * point at when it cannot be linked by name — the cordis loader resolves a
+ * directory `name` by looking only for `index.jsx` and ignores
+ * `package.json`, so a package directory does not work there, only its entry
+ * file does — plus the directory the loadability probe should check from,
+ * and the package's own directory under the managed install (`packageDir`),
+ * which `plugin-link.ts` symlinks into the profile's `node_modules` so the
+ * overlay can refer to the entry by bare package name instead. `unavailable`
+ * carries why the entry cannot be mounted, surfaced by the caller instead of
+ * blocking boot.
  *
  * `config` carries the entry's own stored configuration, when set; `configPath`
  * is a separate, privileged override used only for the hook bridge and takes
@@ -195,6 +199,7 @@ export type PluginStatus =
       package: string
       entryPath: string
       probeDirectory: string
+      packageDir: string
       configPath?: string
       config?: Record<string, unknown>
     }
@@ -234,6 +239,7 @@ export function pluginStatus(
       package: pkg,
       entryPath: resolvePluginEntry(installDir, pkg),
       probeDirectory: installDir,
+      packageDir: packageDirIn(installDir, pkg),
       configPath,
       config: entry.config,
     }

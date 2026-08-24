@@ -118,7 +118,15 @@ describe('pluginStatus', () => {
     const deps = fakeDeps([join(pkgDir, 'package.json')])
     const status = pluginStatus(deps, DSH_HOME, { spec: PKG, version: '0.2.1' })
 
-    expect(status).toEqual({ kind: 'ready', package: PKG, entryPath: join(pkgDir, 'lib', 'index.js'), probeDirectory: installDir, configPath: undefined })
+    expect(status).toEqual({
+      kind: 'ready',
+      package: PKG,
+      entryPath: join(pkgDir, 'lib', 'index.js'),
+      probeDirectory: installDir,
+      packageDir: pkgDir,
+      configPath: undefined,
+      config: undefined,
+    })
   })
 
   it('carries the configPath through for the entry the caller privileges with one', () => {

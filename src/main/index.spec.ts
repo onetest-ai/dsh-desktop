@@ -423,9 +423,13 @@ describe('boot', () => {
       { spec: '@deepseek-ai/dsh-hooks-claude-code', version: '0.1.1-rc.2' },
       expect.stringContaining('hooks.json'),
     )
-    expect(writeRuntimeFilesMock).toHaveBeenCalledWith(expect.any(String), STORED.notifyPort, [
-      { kind: 'ready', package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: '/tmp/bridge/lib/index.js', probeDirectory: '/tmp/bridge' },
-    ])
+    expect(writeRuntimeFilesMock).toHaveBeenCalledWith(
+      expect.any(String),
+      STORED.notifyPort,
+      [{ kind: 'ready', package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: '/tmp/bridge/lib/index.js', probeDirectory: '/tmp/bridge' }],
+      undefined,
+      expect.any(Function),
+    )
   })
 
   it('still boots, with the insert omitted, when a plugin is unavailable', async () => {
@@ -573,6 +577,8 @@ describe('plugin-caused boot failures', () => {
       expect.any(String),
       STORED.notifyPort,
       expect.arrayContaining([expect.objectContaining({ package: OTHER })]),
+      undefined,
+      expect.any(Function),
     )
     expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining(`${DECK} disabled`))
@@ -605,7 +611,7 @@ describe('plugin-caused boot failures', () => {
     await settle()
 
     expect(startServer).toHaveBeenCalledTimes(2)
-    expect(writeRuntimeFilesMock).toHaveBeenLastCalledWith(expect.any(String), STORED.notifyPort, [])
+    expect(writeRuntimeFilesMock).toHaveBeenLastCalledWith(expect.any(String), STORED.notifyPort, [], undefined, expect.any(Function))
     expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('disabled'))
     expect(capturedSettingsDeps?.disabledPlugins()).toEqual({

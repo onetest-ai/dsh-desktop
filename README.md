@@ -62,7 +62,7 @@ Reopen Settings any time from **File → Settings…** (⌘,), the application m
 
 The notification port restart is deliberate: the port is written into the harness hook config when the child boots, so a change only reaches it through a respawn.
 
-Settings are stored at `~/.dsh/desktop.json`, beside the harness's own state. The app writes that one file and nothing else in `~/.dsh`. You can edit it directly if you prefer:
+Settings are stored at `~/.dsh/desktop.json`, beside the harness's own state. The app writes that file, `~/.dsh/runtimes` (every managed install), and — for a plugin it can link by name, see below — a symlink under `~/.dsh/profiles/web/node_modules`; nothing else in `~/.dsh` is touched. You can edit `desktop.json` directly if you prefer:
 
 ```json
 {
@@ -103,12 +103,12 @@ The **Plugins** tab has an Add field, typed the way you would type a package on 
 
 A spec is validated the moment you click Add — a malformed spec or one naming a package already in the list is rejected right there, next to the Add field, rather than only surfacing after Save.
 
-Each entry installs under `$DSH_HOME/runtimes` and is inserted into the harness overlay at its own resolved entry file — the same managed-install machinery a managed harness source uses, so an install is a cache hit on every later save that does not change it. A plugin that fails to install, or that cannot actually be loaded once installed (a missing dependency, most commonly), is left out of that boot's overlay with the reason shown in the tray status; it never stops the harness from starting. A plugin that requires its own configuration is a separate case the app cannot protect against yet — see Known limitations. Removing a row removes that plugin from the next boot; it does not uninstall its files from `$DSH_HOME`.
+Each entry installs under `$DSH_HOME/runtimes` — the same managed-install machinery a managed harness source uses, so an install is a cache hit on every later save that does not change it. At every boot, each ready entry is also symlinked into `$DSH_HOME/profiles/web/node_modules` under its own bare package name — the same directory `dsh plugin --profile web add` itself writes real installs into — so the harness overlay, and everywhere the harness reports the plugin, uses the name you typed (`@onetest/dsh-deck`) instead of its resolved entry file, an absolute path with base64-encoded directory segments. Linking never touches a path that is not already this app's own symlink: a real install already at that location — the user's own `dsh plugin --profile web add`, or anything else that put a real directory there — is left completely alone, and that one entry falls back to the old path-based reference instead. The same fallback covers any other way linking can fail (a read-only `$DSH_HOME`, a permissions error): a cosmetic name never costs a working plugin. The link is repointed when a pinned version changes, and removed — along with any link whose target no longer exists — for a plugin no longer configured; this reconciliation runs on every boot, not only on Settings saves, so it also cleans up after changes made outside the app. A plugin that fails to install, or that cannot actually be loaded once installed (a missing dependency, most commonly), is left out of that boot's overlay with the reason shown in the tray status; it never stops the harness from starting. A plugin that requires its own configuration is a separate case the app cannot protect against yet — see Known limitations. Removing a row removes that plugin from the next boot; it does not uninstall its files from `$DSH_HOME`.
 
 ## Development
 
 ```bash
-npm test           # 318 unit tests
+npm test           # 429 unit tests
 npm run test:smoke # Playwright, against a packaged build (run `npm run pack` first)
 npm run build      # compile only
 ```

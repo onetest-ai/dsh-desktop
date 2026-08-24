@@ -4,12 +4,13 @@ import { join } from 'node:path'
 import { checkBinaries } from './check-binaries'
 import { loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
 import { ConfigurationError } from './configuration-error'
-import { configPath, resolveDshHome, type HarnessSource } from './harness-source'
+import { configPath, PROFILE, resolveDshHome, type HarnessSource } from './harness-source'
 import { createInstallRunner } from './install-process'
 import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { openConfigFile } from './open-config-file'
-import { HOOKS_PACKAGE, parseSpec, pluginInstallMarker, pluginStatus, type PluginEntry } from './plugin-entries'
+import { HOOKS_PACKAGE, parseSpec, pluginInstallMarker, pluginStatus, type PluginEntry, type PluginStatus } from './plugin-entries'
+import { ensurePluginLink, reconcilePluginLinks } from './plugin-link'
 import { preflight } from './preflight'
 import { attributeBootFailure, runtimeFilePaths, writeRuntimeFiles } from './runtime-files'
 import type { InstallDeps } from './runtime-install'
@@ -565,7 +566,22 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
     const statuses = (config.plugins ?? [])
       .filter((entry) => !excludePackages.has(parseSpec(entry.spec).package))
       .map((entry) => pluginStatus(installDeps, DSH_HOME, entry, parseSpec(entry.spec).package === HOOKS_PACKAGE ? hooksPath : undefined))
-    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses)
+    // Linked (bare package name) whenever `ensurePluginLink` succeeds;
+    // falls back to the resolved absolute entry path otherwise — a
+    // permissions error, a name collision with a real install, or any other
+    // failure never costs the plugin itself, only its display name. Every
+    // package this boot links is collected into `linked` so the prune pass
+    // below removes exactly the links that are not (or no longer) wanted.
+    const linked = new Set<string>()
+    const resolveName = (status: Extract<PluginStatus, { kind: 'ready' }>): string => {
+      if (ensurePluginLink(DSH_HOME, PROFILE, status.package, status.packageDir)) {
+        linked.add(status.package)
+        return status.package
+      }
+      return status.entryPath
+    }
+    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses, undefined, resolveName)
+    reconcilePluginLinks(DSH_HOME, PROFILE, linked)
     patchPath = files.patchPath
     omitted = files.omitted
     ready = files.ready
