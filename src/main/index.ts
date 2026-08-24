@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, globalShortcut, Notification, shell } from 'electron'
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { loadDeclaredPatchRows } from './bundle-patch'
 import { checkBinaries } from './check-binaries'
 import { loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
 import { ConfigurationError } from './configuration-error'
@@ -10,6 +11,7 @@ import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { openConfigFile } from './open-config-file'
 import {
+  bundlePatchDeclaration,
   declaresClientHalf,
   HOOKS_PACKAGE,
   parseSpec,
@@ -646,7 +648,17 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
       if (declaresClientHalf(status.packageDir)) warnings.push({ package: status.package, reason: result.reason })
       return status.entryPath
     }
-    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses, undefined, resolveName)
+    // A package's own declared mount (`plugin-entries.ts`'s
+    // `bundlePatchDeclaration`) is read and parsed independently of linking
+    // or presets above: `patchOverlay` decides whether to use it (falling
+    // back to a synthesized row on a collision or a missing/malformed
+    // declaration) so this resolver only ever surfaces what the package
+    // itself declared.
+    const resolveDeclaredPatch = (status: Extract<PluginStatus, { kind: 'ready' }>) => {
+      const declaredPath = bundlePatchDeclaration(status.packageDir)
+      return declaredPath !== undefined ? loadDeclaredPatchRows(status.packageDir, declaredPath) : undefined
+    }
+    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses, undefined, resolveName, resolveDeclaredPatch)
     reconcilePluginLinks(DSH_HOME, PROFILE, linked)
     reconcilePluginPresets(DSH_HOME, presetIds)
     patchPath = files.patchPath

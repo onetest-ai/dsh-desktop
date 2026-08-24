@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0",
@@ -31,7 +32,9 @@
     "asar": true,
     "files": [
       "dist/**/*",
-      "assets/**/*"
+      "assets/**/*",
+      "node_modules/js-yaml/**/*",
+      "node_modules/argparse/**/*"
     ],
     "extraMetadata": {
       "main": "dist/main/index.js"
@@ -55,5 +58,8 @@
         }
       ]
     }
+  },
+  "dependencies": {
+    "js-yaml": "^4.3.1"
   }
 }

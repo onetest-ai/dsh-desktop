@@ -125,11 +125,16 @@ export function pluginInstallMarker(installDir: string, pkg: string): string {
 
 /**
  * The `package.json` fields this module reads: `main`/`exports` for
- * `resolvePluginEntry`, and the `dsh` namespace a plugin uses to declare two
- * optional, independent things about itself — a browser half
- * (`dsh.client.platform`) and a directory of agent presets to install
- * (`dsh.presets`). Both are opt-in: their absence means exactly what it says
- * (no browser half; nothing to install), never "unknown, so scan for one".
+ * `resolvePluginEntry`, and the `dsh` namespace a plugin uses to declare
+ * three optional, independent things about itself — a browser half
+ * (`dsh.client.platform`), a directory of agent presets to install
+ * (`dsh.presets`), and how it wants to be mounted into the harness overlay
+ * (`dsh.bundle.patch`), the same field name the harness's own profile
+ * composer reads for a `dsh.profile.bundles` layer (see
+ * `packages/boot/app-boot/src/profile.ts` in the deepseek-harness repo).
+ * All three are opt-in: their absence means exactly what it says (no
+ * browser half; nothing to install; synthesize the mount), never "unknown,
+ * so scan for one".
  */
 interface EntryManifest {
   main?: string
@@ -137,6 +142,7 @@ interface EntryManifest {
   dsh?: {
     client?: { platform?: string }
     presets?: string
+    bundle?: { patch?: string }
   }
 }
 
@@ -234,6 +240,27 @@ export function declaresClientHalf(packageDir: string): boolean {
 export function presetsDeclaration(packageDir: string): string | undefined {
   try {
     return readManifest(packageDir).dsh?.presets
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * A package's own declared bundle patch file, relative to its own root —
+ * e.g. `dsh.bundle.patch: "./cordis.patch.yml"` resolving to
+ * `<packageDir>/cordis.patch.yml`.
+ *
+ * Deliberately opt-in, read from the manifest rather than inferred by
+ * scanning: a package that never declared this field keeps today's
+ * synthesized overlay row (`runtime-files.ts`'s `patchOverlay`) unchanged,
+ * exactly like `presetsDeclaration` above for agent presets.
+ * @param packageDir - the package's own directory (see `packageDirIn`).
+ * @returns the declared relative path, or undefined when the manifest is
+ *   unreadable or does not declare one.
+ */
+export function bundlePatchDeclaration(packageDir: string): string | undefined {
+  try {
+    return readManifest(packageDir).dsh?.bundle?.patch
   } catch {
     return undefined
   }

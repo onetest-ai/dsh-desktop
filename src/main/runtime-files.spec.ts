@@ -165,6 +165,106 @@ describe('patchOverlay', () => {
     expect(overlay).toContain('config: {}')
   })
 
+  it("mounts a package's own declared patch rows, its own id and name, instead of a synthesized row", () => {
+    const overlay = patchOverlay(
+      [
+        {
+          package: '@onetest/dsh-deck',
+          entryPath: '/tmp/deck/lib/index.js',
+          name: '@onetest/dsh-deck',
+          declaredPatch: [{ id: 'deck', name: '@onetest/dsh-deck', config: { base: '/deck' } }],
+        },
+      ],
+      [],
+    )
+    expect(overlay).toContain('id: deck')
+    expect(overlay).not.toContain('id: onetest-dsh-deck')
+    expect(overlay).toContain('base: /deck')
+  })
+
+  it("replaces a declared row's own config with the user's stored config, never merging", () => {
+    const overlay = patchOverlay(
+      [
+        {
+          package: '@onetest/dsh-deck',
+          entryPath: '/tmp/deck/lib/index.js',
+          name: '@onetest/dsh-deck',
+          config: { base: '/typed' },
+          declaredPatch: [{ id: 'deck', name: '@onetest/dsh-deck', config: { base: '/deck', extra: true } }],
+        },
+      ],
+      [],
+    )
+    expect(overlay).toContain('base: /typed')
+    expect(overlay).not.toContain('base: /deck')
+    expect(overlay).not.toContain('extra')
+  })
+
+  it('keeps every other declared field (e.g. an extra companion row) untouched', () => {
+    const overlay = patchOverlay(
+      [
+        {
+          package: '@onetest/dsh-deck',
+          entryPath: '/tmp/deck/lib/index.js',
+          name: '@onetest/dsh-deck',
+          declaredPatch: [
+            { id: 'deck', name: '@onetest/dsh-deck' },
+            { id: 'deck-companion', name: '@onetest/dsh-deck-companion' },
+          ],
+        },
+      ],
+      [],
+    )
+    expect(overlay).toContain('id: deck-companion')
+    expect(overlay).toContain("name: '@onetest/dsh-deck-companion'")
+  })
+
+  it('falls back to a synthesized row when a declared row id collides with an already-used id', () => {
+    const overlay = patchOverlay(
+      [
+        {
+          package: '@onetest/dsh-webserver-lookalike',
+          entryPath: '/tmp/lookalike/lib/index.js',
+          name: '@onetest/dsh-webserver-lookalike',
+          declaredPatch: [{ id: 'webserver', name: '@onetest/dsh-webserver-lookalike' }],
+        },
+      ],
+      [],
+    )
+    // The one, reserved `webserver` row is the pinned host binding; a
+    // declared row claiming that id must never shadow it.
+    expect(overlay.match(/id: webserver/g)).toHaveLength(1)
+    expect(overlay).toContain('id: onetest-dsh-webserver-lookalike')
+  })
+
+  it('falls back to a synthesized row when a package with no configPath still carries an empty declared patch', () => {
+    // Defensive: `loadDeclaredPatchRows` never returns an empty array (see
+    // its own tests), but `patchOverlay` must not crash if a caller ever did.
+    const overlay = patchOverlay(
+      [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '@onetest/dsh-deck', declaredPatch: [] }],
+      [],
+    )
+    expect(overlay).toContain('id: onetest-dsh-deck')
+  })
+
+  it('ignores a declared patch when the privileged configPath override is set', () => {
+    const overlay = patchOverlay(
+      [
+        {
+          package: '@deepseek-ai/dsh-hooks-claude-code',
+          entryPath: '/tmp/bridge/lib/index.js',
+          name: '@deepseek-ai/dsh-hooks-claude-code',
+          configPath: '/tmp/hooks.json',
+          declaredPatch: [{ id: 'bridge', name: '@deepseek-ai/dsh-hooks-claude-code' }],
+        },
+      ],
+      [],
+    )
+    expect(overlay).toContain('id: deepseek-ai-dsh-hooks-claude-code')
+    expect(overlay).not.toContain('id: bridge')
+    expect(overlay).toContain("configPath: '/tmp/hooks.json'")
+  })
+
   it('prefers the privileged configPath over a stored config when both are set', () => {
     const overlay = patchOverlay(
       [
@@ -352,6 +452,29 @@ describe('writeRuntimeFiles', () => {
     const files = writeRuntimeFiles(directory, 44001, [ready('@onetest/dsh-deck', '/irrelevant/lib/index.js')], alwaysLoadable)
 
     expect(files.ready).toEqual([{ package: '@onetest/dsh-deck', entryPath: '/irrelevant/lib/index.js' }])
+  })
+
+  it("threads a ready entry's own declared patch rows through resolveDeclaredPatch into the overlay", () => {
+    const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
+    const files = writeRuntimeFiles(
+      directory,
+      44001,
+      [ready('@onetest/dsh-deck', '/irrelevant/lib/index.js')],
+      alwaysLoadable,
+      (status) => status.package,
+      () => [{ id: 'deck', name: '@onetest/dsh-deck', config: { base: '/deck' } }],
+    )
+    expect(files.omitted).toEqual([])
+    const overlay = readFileSync(files.patchPath, 'utf8')
+    expect(overlay).toContain('id: deck')
+    expect(overlay).toContain('base: /deck')
+  })
+
+  it('keeps the synthesized row when resolveDeclaredPatch is not supplied, unchanged from before this feature', () => {
+    const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
+    const files = writeRuntimeFiles(directory, 44001, [ready('@onetest/dsh-deck', '/irrelevant/lib/index.js')], alwaysLoadable)
+    const overlay = readFileSync(files.patchPath, 'utf8')
+    expect(overlay).toContain('id: onetest-dsh-deck')
   })
 })
 

@@ -457,6 +457,7 @@ describe('boot', () => {
       [{ kind: 'ready', package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: '/tmp/bridge/lib/index.js', probeDirectory: '/tmp/bridge' }],
       undefined,
       expect.any(Function),
+      expect.any(Function),
     )
   })
 
@@ -656,6 +657,7 @@ describe('plugin-caused boot failures', () => {
       expect.arrayContaining([expect.objectContaining({ package: OTHER })]),
       undefined,
       expect.any(Function),
+      expect.any(Function),
     )
     expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining(`${DECK} disabled`))
@@ -688,7 +690,14 @@ describe('plugin-caused boot failures', () => {
     await settle()
 
     expect(startServer).toHaveBeenCalledTimes(2)
-    expect(writeRuntimeFilesMock).toHaveBeenLastCalledWith(expect.any(String), STORED.notifyPort, [], undefined, expect.any(Function))
+    expect(writeRuntimeFilesMock).toHaveBeenLastCalledWith(
+      expect.any(String),
+      STORED.notifyPort,
+      [],
+      undefined,
+      expect.any(Function),
+      expect.any(Function),
+    )
     expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('disabled'))
     expect(capturedSettingsDeps?.disabledPlugins()).toEqual({

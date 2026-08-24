@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { managedDir } from './harness-source'
 import {
+  bundlePatchDeclaration,
   declaresClientHalf,
   defaultPlugins,
   HOOKS_PACKAGE,
@@ -122,6 +123,24 @@ describe('presetsDeclaration', () => {
 
   it('is undefined, not throwing, for an unreadable package.json', () => {
     expect(presetsDeclaration('/does/not/exist')).toBeUndefined()
+  })
+})
+
+describe('bundlePatchDeclaration', () => {
+  it("returns the manifest's own dsh.bundle.patch value", () => {
+    const installDir = installPackage(PKG, { main: 'lib/index.js', dsh: { bundle: { patch: './cordis.patch.yml' } } })
+    const pkgDir = join(installDir, 'node_modules', '@onetest', 'dsh-deck')
+    expect(bundlePatchDeclaration(pkgDir)).toBe('./cordis.patch.yml')
+  })
+
+  it('is undefined, not throwing, for a package with no dsh.bundle.patch declaration', () => {
+    const installDir = installPackage(PKG, { main: 'lib/index.js' })
+    const pkgDir = join(installDir, 'node_modules', '@onetest', 'dsh-deck')
+    expect(bundlePatchDeclaration(pkgDir)).toBeUndefined()
+  })
+
+  it('is undefined, not throwing, for an unreadable package.json', () => {
+    expect(bundlePatchDeclaration('/does/not/exist')).toBeUndefined()
   })
 })
 
