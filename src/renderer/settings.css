@@ -498,6 +498,18 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+/* A plugin that is mounted (tools work) but whose declared browser half
+   could not be linked by name and so will not load — same rhythm and
+   wrapping as `.plugin-disabled-note`, `--setup` since the plugin itself is
+   otherwise working, not failed. */
+.plugin-client-warning-note {
+  color: var(--setup);
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
 /* The inline control that opens this row's own Config editor and focuses
    its textarea — the fix for a needs-configuration row is always "fill in
    Config below", so the note leads there directly instead of just naming

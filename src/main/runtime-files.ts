@@ -230,14 +230,24 @@ export function patchOverlay(
   if (ready.length === 0) return `${webserver}\n${comments}`
 
   // Each `name` is either the plugin's bare package name — when
-  // `plugin-link.ts` has symlinked it into the profile's `node_modules`, so
-  // the harness reports it under the name the user typed rather than an
-  // absolute path with encoded directory segments — or, when linking was
-  // skipped or failed, the plugin's own resolved absolute entry file, same
-  // as before that fallback existed. Never the install directory: the
-  // cordis loader resolves a directory `name` by looking only for
-  // `index.jsx` and ignores `package.json`, so only a bare package name
-  // (resolved via `node_modules`) or the entry file itself works here.
+  // `plugin-link.ts` has symlinked it into the profile's `node_modules` —
+  // or, when linking was skipped or failed, the plugin's own resolved
+  // absolute entry file. This is not a display preference: cordis's own
+  // loader accepts either form (an `import()` resolves both), but
+  // `@deepseek-ai/dsh-client-modules`' `ClientModuleRegistry` discovers a
+  // plugin's browser bundle only by resolving `name` as a package specifier
+  // — `require.resolve(name + '/package.json')` against the profile's own
+  // `cordis.yml`. An absolute path is not a valid specifier there, so a
+  // path-based `name` silently drops the plugin's entire browser half: no
+  // error, nothing in the shell's own "Failed to load plugins" screen, just
+  // a plugin whose tools work and whose UI never appears. The bare-name
+  // form is therefore the only complete mount; the path form is a
+  // last-resort fallback for when linking genuinely cannot happen (see
+  // `plugin-link.ts`'s `ensurePluginLink`), not an equivalent alternative.
+  // Never the install directory: the cordis loader resolves a directory
+  // `name` by looking only for `index.jsx` and ignores `package.json`, so
+  // only a bare package name (resolved via `node_modules`) or the entry
+  // file itself works here.
   //
   // `config` is always present, even for a generic entry with nothing to
   // configure: cordis's own config resolution rejects an insert with no

@@ -56,6 +56,7 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     checkManagedUpdate: vi.fn(async () => undefined),
     checkBinaries: vi.fn(async () => ({ pnpm: { ok: true, version: '9.0.0' }, npm: { ok: true, version: '10.0.0' } })),
     disabledPlugins: vi.fn(() => ({})),
+    clientLinkWarnings: vi.fn(() => ({})),
     openConfigFile: vi.fn(async () => ({ ok: true }) as const),
     ...overrides,
   }

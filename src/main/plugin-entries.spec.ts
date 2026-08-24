@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { managedDir } from './harness-source'
 import {
+  declaresClientHalf,
   defaultPlugins,
   HOOKS_PACKAGE,
   parseSpec,
   pluginInstallMarker,
   pluginStatus,
+  presetsDeclaration,
   resolvePluginEntry,
 } from './plugin-entries'
 import type { InstallDeps } from './runtime-install'
@@ -84,6 +86,42 @@ describe('resolvePluginEntry', () => {
   it('throws naming the package when neither exports nor main is declared', () => {
     const installDir = installPackage(PKG, {})
     expect(() => resolvePluginEntry(installDir, PKG)).toThrow(/exports\["\."\]|"main"/)
+  })
+})
+
+describe('declaresClientHalf', () => {
+  it('is true when the manifest declares dsh.client.platform "web"', () => {
+    const installDir = installPackage(PKG, { main: 'lib/index.js', dsh: { client: { platform: 'web' } } })
+    const pkgDir = join(installDir, 'node_modules', '@onetest', 'dsh-deck')
+    expect(declaresClientHalf(pkgDir)).toBe(true)
+  })
+
+  it('is false, not throwing, for a package with no dsh.client declaration', () => {
+    const installDir = installPackage(PKG, { main: 'lib/index.js' })
+    const pkgDir = join(installDir, 'node_modules', '@onetest', 'dsh-deck')
+    expect(declaresClientHalf(pkgDir)).toBe(false)
+  })
+
+  it('is false, not throwing, for an unreadable package.json', () => {
+    expect(declaresClientHalf('/does/not/exist')).toBe(false)
+  })
+})
+
+describe('presetsDeclaration', () => {
+  it("returns the manifest's own dsh.presets value", () => {
+    const installDir = installPackage(PKG, { main: 'lib/index.js', dsh: { presets: './presets' } })
+    const pkgDir = join(installDir, 'node_modules', '@onetest', 'dsh-deck')
+    expect(presetsDeclaration(pkgDir)).toBe('./presets')
+  })
+
+  it('is undefined, not throwing, for a package with no dsh.presets declaration', () => {
+    const installDir = installPackage(PKG, { main: 'lib/index.js' })
+    const pkgDir = join(installDir, 'node_modules', '@onetest', 'dsh-deck')
+    expect(presetsDeclaration(pkgDir)).toBeUndefined()
+  })
+
+  it('is undefined, not throwing, for an unreadable package.json', () => {
+    expect(presetsDeclaration('/does/not/exist')).toBeUndefined()
   })
 })
 

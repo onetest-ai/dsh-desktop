@@ -111,3 +111,144 @@ confirming the loader resolved the bare package name through the symlink.
 The verification process was stopped by its own captured PID; the user's
 running app and `~/.dsh` were never touched, and `deepseek-harness` was left
 with no working-tree changes.
+
+## Addendum: the bare name is load-bearing, and agent presets
+
+A follow-up investigation (`octodeck`'s
+`docs/design/2026-08-24-npm-install-gaps-handoff.md`) reproduced the actual
+consequence of a path-shaped overlay `name`: the harness's own
+`ClientModuleRegistry` (`@deepseek-ai/dsh-client-modules`) discovers a
+plugin's browser bundle by resolving the overlay's insert `name` as a
+package specifier (`require.resolve(name + '/package.json')`). An absolute
+path is not a valid specifier there, so a plugin inserted by path loses its
+entire browser half — no error, nothing in the shell's "Failed to load
+plugins" screen — while its tools (inserted the same way by the cordis
+loader, which accepts either form) keep working. This is exactly the
+symptom the investigation traced: `deck_create`/`deck_view` worked, no
+canvas ever appeared. Every doc comment in `plugin-link.ts` and
+`runtime-files.ts` that framed linking as a display-name nicety was rewritten
+to state this — the bare name is the only way the browser half is found, not
+a cosmetic improvement over the path form.
+
+### A failed link no longer silently half-mounts a plugin
+
+`plugin-entries.ts` gained `declaresClientHalf(packageDir)`, reading
+`pkg.dsh?.client?.platform === 'web'` from the package's own manifest.
+`ensurePluginLink` (`plugin-link.ts`) now returns a `LinkResult`
+(`{ linked: true } | { linked: false; reason: string }`) instead of a bare
+boolean, so a failure carries *why*. `index.ts`'s `resolveName` still falls
+back to the plugin's resolved entry path on any link failure — the plugin
+stays mounted, tools still work — but when the package also declares a
+browser half, the failure is collected into `clientWarnings` and surfaced
+two ways: appended to the tray's boot note (`"<pkg> browser UI unavailable —
+not linked by name: <reason>"`) and through a new, symmetric
+`clientLinkWarnings()` module-scope map (mirroring `disabledPlugins`),
+threaded through `SettingsDeps`/`PluginInfo.clientWarning` to a new note on
+the plugin's Settings row (`src/renderer/settings.js`/`.css`). A plugin with
+no declared browser half still falls back silently — there is nothing to
+report losing.
+
+### Agent presets: `plugin-presets.ts` (new)
+
+`@deepseek-ai/dsh-agent-presets` only discovers presets from its configured
+roots plus `$DSH_HOME/.agent-presets`; a plugin cannot add its own root
+(`composeProfile` replaces `roots` wholesale), so a plugin's shipped
+`presets/<id>/{preset.yml,agent.cordis.yml}` is copied into
+`$DSH_HOME/.agent-presets/<id>/` directly. Opt-in only: a package's own
+`dsh.presets` manifest field (read by `plugin-entries.ts`'s
+`presetsDeclaration`) names the directory to scan; absent, nothing is
+copied, regardless of what the package's own directories happen to contain.
+
+**Ownership tracking**: unlike a symlink, a copied directory carries no
+built-in back-reference to its source. `ensurePluginPresets` writes a marker
+file, `.dsh-desktop-source.json` (`{ "package": pkg }`), inside every
+directory it copies; `classify` in `plugin-presets.ts` treats a directory as
+this app's own only when that exact marker is present and parses. Anything
+else — the user's own hand-authored preset of the same id, a directory some
+other tool created — is `foreign` and is never overwritten or removed,
+mirroring `plugin-link.ts`'s symlink-target-under-`runtimes` rule for links.
+
+**Reconciliation timing**: `reconcilePluginPresets` runs in the same place
+and for the same reason as `reconcilePluginLinks` — once per boot attempt in
+`attemptBoot`, after every ready entry has gone through
+`ensurePluginPresets` (via the same `resolveName` closure `writeRuntimeFiles`
+calls), the only point at which "every preset this boot's plugins actually
+provide" is known. It prunes an owned preset whose package is no longer
+configured. A version change re-copies (via `rmSync` + `cpSync`) rather than
+leaving the old content in place.
+
+**Failure handling**: a copy failure is caught and skipped per-preset,
+matching `plugin-link.ts`'s "never fatal" rule — a preset is a UX
+enhancement, never a precondition for a plugin's tools to mount.
+
+### Tests
+
+`src/main/plugin-presets.spec.ts` (new, 8 tests): copies declared presets by
+id; copies nothing without a declaration; never overwrites a directory the
+app did not write (sentinel-file proof); re-copies on a version bump;
+`reconcilePluginPresets` prunes an unconfigured plugin's preset, keeps one
+still wanted, and never touches a foreign directory; a copy failure
+(chmod'd read-only presets root) does not throw.
+
+`src/main/plugin-entries.spec.ts` gained 6 tests for `declaresClientHalf`/
+`presetsDeclaration` (present, absent, unreadable manifest — all
+non-throwing). `src/main/plugin-link.spec.ts` was updated for
+`ensurePluginLink`'s new `LinkResult` return shape. `src/main/index.spec.ts`
+gained two integration tests exercising `index.ts`'s `resolveName` closure
+end to end (via mocks for `./plugin-entries`, `./plugin-link`,
+`./plugin-presets`): a plugin declaring a browser half that fails to link
+reports it (tray note + `clientLinkWarnings()`), and one without a browser
+half falls back with nothing reported.
+
+### Non-vacuity
+
+Removing the `declaresClientHalf` check before pushing into `clientWarnings`
+(index.ts) made "reports a plugin whose declared browser half could not be
+linked" fail: `clientLinkWarnings()` came back `{}` instead of naming the
+package. Restored, it passes again.
+
+Removing the ownership guard in `ensurePluginPresets` (`plugin-presets.ts`)
+made "never overwrites an existing directory the app did not write" fail:
+the hand-authored `preset.yml` and sentinel file were replaced by the
+plugin's own copy. Restored, it passes again.
+
+(The two `plugin-link.ts` checks from the original pass — "never clobbered"
+and "link failure falls back" — were re-run against the current code as a
+sanity check and reproduced the same pass/fail behavior reported above;
+their guards were untouched by this addendum.)
+
+### Verification against the real harness
+
+Using a second isolated `DSH_HOME` under `/tmp`, `@onetest/dsh-deck@0.2.1`
+was installed through this code (this time passing the plugin's own
+completion marker to `ensureInstalled`, not the default `dsh`-binary one —
+a mistake in the first verification script that was silently reinstalling
+and wiping manifest edits until corrected). `declaresClientHalf` returned
+`true` against the real published manifest (`dsh.client.platform: "web"`
+is really there). `presetsDeclaration` returned `undefined` against the
+real published manifest — the investigation notes `dsh.presets` has not
+been added to the real package yet (field name still being agreed) — so
+`dsh.presets: "./presets"` was patched into the installed copy's
+`package.json` in place to exercise the preset path against real, unmodified
+`presets/deck-creator/{preset.yml,agent.cordis.yml}` content already present
+in the published tarball.
+
+1. Generated `desktop.patch.yml`: `name: '@onetest/dsh-deck'`.
+2. Booted the real harness (`pnpm dsh --profile web --patch ... --no-open`)
+   from `deepseek-harness`: `dsh web: http://127.0.0.1:58814`, no loader
+   error.
+3. `curl -s http://127.0.0.1:58814/plugins/@onetest/dsh-deck/client.js | head -c 200`
+   returned:
+   ```
+   window.__ModuleLoader__.load({
+   	id: "@onetest/dsh-deck",
+   	factory: (require) => {
+   ```
+   — confirming the client-module registry actually resolved and served the
+   browser bundle, the check that proves finding A is fixed.
+4. `$DSH_HOME/.agent-presets/deck-creator/` contained `preset.yml` and
+   `agent.cordis.yml`, copied from the installed package.
+
+Process stopped by its own captured PID; the user's running app, `~/.dsh`,
+and `deepseek-harness` were untouched throughout (`git status --porcelain`
+empty before and after).

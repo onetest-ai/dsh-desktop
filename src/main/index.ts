@@ -9,8 +9,18 @@ import { createInstallRunner } from './install-process'
 import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { openConfigFile } from './open-config-file'
-import { HOOKS_PACKAGE, parseSpec, pluginInstallMarker, pluginStatus, type PluginEntry, type PluginStatus } from './plugin-entries'
+import {
+  declaresClientHalf,
+  HOOKS_PACKAGE,
+  parseSpec,
+  pluginInstallMarker,
+  pluginStatus,
+  presetsDeclaration,
+  type PluginEntry,
+  type PluginStatus,
+} from './plugin-entries'
 import { ensurePluginLink, reconcilePluginLinks } from './plugin-link'
+import { ensurePluginPresets, reconcilePluginPresets } from './plugin-presets'
 import { preflight } from './preflight'
 import { attributeBootFailure, runtimeFilePaths, writeRuntimeFiles } from './runtime-files'
 import type { InstallDeps } from './runtime-install'
@@ -218,6 +228,7 @@ const settingsHandlers = createSettingsHandlers({
     createUpdateChecker(installDeps, resolveBinary(npmPath, 'npm', process.env))(pkg, installed),
   checkBinaries: (pnpmPath, npmPath) => checkBinaries(pnpmPath, npmPath, process.env, CHECK_BINARY_TIMEOUT_MS),
   disabledPlugins: () => Object.fromEntries(disabledPlugins),
+  clientLinkWarnings: () => Object.fromEntries(clientLinkWarnings),
   openConfigFile: () => openConfigFile(CONFIG_PATH, existsSync, (path) => shell.openPath(path)),
 })
 
@@ -278,6 +289,29 @@ function summariseDisabled(isolated: readonly { package: string }[]): string {
 
 function recordDisabledPlugins(omitted: { package: string; reason: string }[], isolated: { package: string; reason: string }[]): void {
   disabledPlugins = new Map([...omitted, ...isolated].map((entry) => [entry.package, entry.reason]))
+}
+
+/**
+ * Why a currently-mounted plugin's browser half did not load, keyed by
+ * package name; absent means either the plugin has no declared browser half
+ * (see `plugin-entries.ts`'s `declaresClientHalf`) or its half loaded fine.
+ *
+ * Distinct from `disabledPlugins`: an entry here is still mounted — its
+ * tools work — but `ensurePluginLink` could not link it by name, which is
+ * the only way `@deepseek-ai/dsh-client-modules` ever discovers a browser
+ * bundle (see `plugin-link.ts`). Held at module scope for the same reason
+ * `disabledPlugins` is: a Settings window opened long after the boot that
+ * discovered this must still see it. Replaced wholesale, never merged, at
+ * the end of every boot attempt that reaches a final outcome.
+ */
+let clientLinkWarnings = new Map<string, string>()
+
+/**
+ * Replace the client-link-warning state a Settings window reads.
+ * @param warnings - package/reason pairs from the boot attempt that ultimately ran.
+ */
+function recordClientLinkWarnings(warnings: { package: string; reason: string }[]): void {
+  clientLinkWarnings = new Map(warnings.map((entry) => [entry.package, entry.reason]))
 }
 
 /**
@@ -415,6 +449,7 @@ async function bootNow(): Promise<void> {
       return
     }
     recordDisabledPlugins(attempt.omitted, [])
+    recordClientLinkWarnings(attempt.clientWarnings)
     setStatus('running', attempt.hooksNote)
     if (window !== undefined && !window.isDestroyed()) void window.loadURL(attempt.handle.url)
     return
@@ -494,6 +529,7 @@ async function bootNow(): Promise<void> {
 
     if (retry.ok) {
       recordDisabledPlugins(retry.omitted, isolated)
+      recordClientLinkWarnings(retry.clientWarnings)
       setStatus(
         'running',
         [retry.hooksNote, summariseDisabled(isolated)]
@@ -521,6 +557,7 @@ async function bootNow(): Promise<void> {
   // an unrecoverable failure, so Settings can show why a plugin dropped
   // along the way is disabled, not just the final error pane.
   recordDisabledPlugins([], isolated)
+  recordClientLinkWarnings(current.stage === 'server' ? current.clientWarnings : [])
 
   if (current.stage === 'server' && current.error instanceof ConfigurationError) {
     failConfiguration('The harness failed to start', current.error.message)
@@ -531,9 +568,22 @@ async function bootNow(): Promise<void> {
 
 /** What one `attemptBoot` call produced. */
 type BootAttempt =
-  | { ok: true; handle: ServerHandle; hooksNote?: string; omitted: { package: string; reason: string }[] }
+  | {
+      ok: true
+      handle: ServerHandle
+      hooksNote?: string
+      omitted: { package: string; reason: string }[]
+      clientWarnings: { package: string; reason: string }[]
+    }
   | { ok: false; stage: 'files'; message: string }
-  | { ok: false; stage: 'server'; error: Error; insertedCount: number; ready: { package: string; entryPath: string }[] }
+  | {
+      ok: false
+      stage: 'server'
+      error: Error
+      insertedCount: number
+      ready: { package: string; entryPath: string }[]
+      clientWarnings: { package: string; reason: string }[]
+    }
 
 /**
  * Write the runtime files and spawn the harness once, with every configured
@@ -556,6 +606,7 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
   let hooksNote: string | undefined
   let omitted: { package: string; reason: string }[] = []
   let ready: { package: string; entryPath: string }[] = []
+  let clientWarnings: { package: string; reason: string }[] = []
   try {
     // Where each configured plugin entry would load from, or why it is
     // unavailable — from whatever a Settings save last resolved and
@@ -566,30 +617,48 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
     const statuses = (config.plugins ?? [])
       .filter((entry) => !excludePackages.has(parseSpec(entry.spec).package))
       .map((entry) => pluginStatus(installDeps, DSH_HOME, entry, parseSpec(entry.spec).package === HOOKS_PACKAGE ? hooksPath : undefined))
-    // Linked (bare package name) whenever `ensurePluginLink` succeeds;
-    // falls back to the resolved absolute entry path otherwise — a
-    // permissions error, a name collision with a real install, or any other
-    // failure never costs the plugin itself, only its display name. Every
-    // package this boot links is collected into `linked` so the prune pass
-    // below removes exactly the links that are not (or no longer) wanted.
+    // Linked (bare package name) whenever `ensurePluginLink` succeeds — the
+    // only way `@deepseek-ai/dsh-client-modules` ever discovers a plugin's
+    // browser bundle, see `plugin-link.ts`. Falls back to the resolved
+    // absolute entry path when linking fails, which still mounts the
+    // plugin's tools; a plugin that declares a browser half
+    // (`declaresClientHalf`) and lost it to that fallback is collected into
+    // `clientWarnings` rather than silently downgraded. Every package this
+    // boot links is collected into `linked` so the prune pass below removes
+    // exactly the links that are not (or no longer) wanted; `presetIds`
+    // does the same for the agent presets a plugin's own manifest declares
+    // (see `plugin-entries.ts`'s `presetsDeclaration`), independent of
+    // whether linking itself succeeded.
     const linked = new Set<string>()
+    const presetIds = new Set<string>()
+    const warnings: { package: string; reason: string }[] = []
     const resolveName = (status: Extract<PluginStatus, { kind: 'ready' }>): string => {
-      if (ensurePluginLink(DSH_HOME, PROFILE, status.package, status.packageDir)) {
+      const declaration = presetsDeclaration(status.packageDir)
+      if (declaration !== undefined) {
+        for (const id of ensurePluginPresets(DSH_HOME, status.package, status.packageDir, declaration)) presetIds.add(id)
+      }
+
+      const result = ensurePluginLink(DSH_HOME, PROFILE, status.package, status.packageDir)
+      if (result.linked) {
         linked.add(status.package)
         return status.package
       }
+      if (declaresClientHalf(status.packageDir)) warnings.push({ package: status.package, reason: result.reason })
       return status.entryPath
     }
     const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses, undefined, resolveName)
     reconcilePluginLinks(DSH_HOME, PROFILE, linked)
+    reconcilePluginPresets(DSH_HOME, presetIds)
     patchPath = files.patchPath
     omitted = files.omitted
     ready = files.ready
+    clientWarnings = warnings
     const bridgeOmitted = omitted.find((entry) => entry.package === HOOKS_PACKAGE)
     const otherOmitted = omitted.filter((entry) => entry.package !== HOOKS_PACKAGE)
     const notes: string[] = []
     if (bridgeOmitted !== undefined) notes.push(`notifications unavailable — hook bridge not loaded: ${bridgeOmitted.reason}`)
     for (const entry of otherOmitted) notes.push(`${entry.package} not loaded: ${entry.reason}`)
+    for (const entry of clientWarnings) notes.push(`${entry.package} browser UI unavailable — not linked by name: ${entry.reason}`)
     hooksNote = notes.length > 0 ? notes.join('; ') : undefined
   } catch (error) {
     return { ok: false, stage: 'files', message: (error as Error).message }
@@ -608,10 +677,10 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
         fail(`The harness exited (code ${String(code)})`, tail || 'No output captured.')
       },
     })
-    return { ok: true, handle, hooksNote, omitted }
+    return { ok: true, handle, hooksNote, omitted, clientWarnings }
   } catch (error) {
     const insertedCount = ready.length
-    return { ok: false, stage: 'server', error: error as Error, insertedCount, ready }
+    return { ok: false, stage: 'server', error: error as Error, insertedCount, ready, clientWarnings }
   }
 }
 

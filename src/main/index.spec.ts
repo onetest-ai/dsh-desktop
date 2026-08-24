@@ -179,11 +179,19 @@ vi.mock('./config', () => ({
  * plumbing, which has its own tests for turning this into `PluginInfo.disabledReason`.
  */
 let capturedSettingsDeps:
-  | { disabledPlugins(): Record<string, string>; openConfigFile(): Promise<OpenConfigFileResult> }
+  | {
+      disabledPlugins(): Record<string, string>
+      clientLinkWarnings(): Record<string, string>
+      openConfigFile(): Promise<OpenConfigFileResult>
+    }
   | undefined
 vi.mock('./settings-ipc', () => ({
   createSettingsHandlers: vi.fn(
-    (deps: { disabledPlugins(): Record<string, string>; openConfigFile(): Promise<OpenConfigFileResult> }) => {
+    (deps: {
+      disabledPlugins(): Record<string, string>
+      clientLinkWarnings(): Record<string, string>
+      openConfigFile(): Promise<OpenConfigFileResult>
+    }) => {
       capturedSettingsDeps = deps
       return { read: vi.fn(), pickFolder: vi.fn(), save: vi.fn() }
     },
@@ -238,6 +246,9 @@ vi.mock('./runtime-files', async () => {
 
 /** Controlled by tests that assert what `bootNow` derives for each configured plugin entry. */
 const pluginStatusMock = vi.fn(() => ({ kind: 'unavailable', package: '@deepseek-ai/dsh-hooks-claude-code', reason: 'not installed yet' }))
+/** Controlled by tests exercising `resolveName`'s client-half-warning path. */
+const declaresClientHalfMock = vi.fn(() => false)
+const presetsDeclarationMock = vi.fn((): string | undefined => undefined)
 vi.mock('./plugin-entries', () => ({
   pluginStatus: (...args: unknown[]) => pluginStatusMock(...(args as [])),
   pluginInstallMarker: vi.fn(),
@@ -246,6 +257,20 @@ vi.mock('./plugin-entries', () => ({
     return at === -1 ? { package: spec } : { package: spec.slice(0, at), pinnedVersion: spec.slice(at + 1) }
   },
   HOOKS_PACKAGE: '@deepseek-ai/dsh-hooks-claude-code',
+  declaresClientHalf: (...args: unknown[]) => declaresClientHalfMock(...(args as [string])),
+  presetsDeclaration: (...args: unknown[]) => presetsDeclarationMock(...(args as [string])),
+}))
+
+/** Controlled by tests exercising `resolveName`'s link-failure path. */
+const ensurePluginLinkMock = vi.fn(() => ({ linked: true }) as { linked: true } | { linked: false; reason: string })
+vi.mock('./plugin-link', () => ({
+  ensurePluginLink: (...args: unknown[]) => ensurePluginLinkMock(...(args as [])),
+  reconcilePluginLinks: vi.fn(),
+}))
+
+vi.mock('./plugin-presets', () => ({
+  ensurePluginPresets: vi.fn(() => []),
+  reconcilePluginPresets: vi.fn(),
 }))
 
 /** One spawned harness child, controlled by the test. */
@@ -383,6 +408,9 @@ beforeEach(() => {
   }))
   installStopAll.mockImplementation(async () => {})
   settingsOnClosed = undefined
+  declaresClientHalfMock.mockImplementation(() => false)
+  presetsDeclarationMock.mockImplementation(() => undefined)
+  ensurePluginLinkMock.mockImplementation(() => ({ linked: true }))
   vi.clearAllMocks()
   fake.resetReady()
   fake.app.requestSingleInstanceLock.mockReturnValue(true)
@@ -430,6 +458,55 @@ describe('boot', () => {
       undefined,
       expect.any(Function),
     )
+  })
+
+  it('reports a plugin whose declared browser half could not be linked, rather than silently downgrading it', async () => {
+    const DECK = '@onetest/dsh-deck'
+    configResult = { configured: true, config: { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }] } }
+    const readyStatus = { kind: 'ready' as const, package: DECK, entryPath: '/tmp/deck/lib/index.js', probeDirectory: '/tmp/deck', packageDir: '/tmp/deck/pkg' }
+    pluginStatusMock.mockImplementation(() => readyStatus)
+    ensurePluginLinkMock.mockImplementation(() => ({ linked: false, reason: 'could not link: EACCES' }))
+    declaresClientHalfMock.mockImplementation(() => true)
+    writeRuntimeFilesMock.mockImplementation((_directory: string, _port: number, statuses: PluginStatus[], _probe: unknown, resolveName: (s: unknown) => string) => {
+      const name = resolveName(readyStatus)
+      return {
+        patchPath: '/tmp/p.yml',
+        hooksPath: '/tmp/h.json',
+        omitted: [],
+        ready: [{ package: readyStatus.package, entryPath: name }],
+      }
+    })
+
+    await bootReady()
+
+    // The plugin is still mounted (no omission), but its browser half is
+    // named — on the tray note and, via `clientLinkWarnings`, on its
+    // Settings row — instead of vanishing with nothing said about it.
+    expect(capturedSettingsDeps?.clientLinkWarnings()).toEqual({ [DECK]: 'could not link: EACCES' })
+    expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining(`${DECK} browser UI unavailable`))
+  })
+
+  it('falls back quietly when a plugin with no declared browser half fails to link', async () => {
+    const DECK = '@onetest/dsh-deck'
+    configResult = { configured: true, config: { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }] } }
+    const readyStatus = { kind: 'ready' as const, package: DECK, entryPath: '/tmp/deck/lib/index.js', probeDirectory: '/tmp/deck', packageDir: '/tmp/deck/pkg' }
+    pluginStatusMock.mockImplementation(() => readyStatus)
+    ensurePluginLinkMock.mockImplementation(() => ({ linked: false, reason: 'could not link: EACCES' }))
+    declaresClientHalfMock.mockImplementation(() => false)
+    writeRuntimeFilesMock.mockImplementation((_directory: string, _port: number, statuses: PluginStatus[], _probe: unknown, resolveName: (s: unknown) => string) => {
+      const name = resolveName(readyStatus)
+      return {
+        patchPath: '/tmp/p.yml',
+        hooksPath: '/tmp/h.json',
+        omitted: [],
+        ready: [{ package: readyStatus.package, entryPath: name }],
+      }
+    })
+
+    await bootReady()
+
+    expect(capturedSettingsDeps?.clientLinkWarnings()).toEqual({})
+    expect(setTrayStatus).toHaveBeenLastCalledWith('running')
   })
 
   it('still boots, with the insert omitted, when a plugin is unavailable', async () => {

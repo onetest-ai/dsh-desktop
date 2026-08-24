@@ -28,9 +28,9 @@ describe('ensurePluginLink', () => {
     const pkg = '@onetest/dsh-deck'
     const packageDir = installedPackageDir(dshHome, pkg, '0.2.1')
 
-    const linked = ensurePluginLink(dshHome, PROFILE, pkg, packageDir)
+    const result = ensurePluginLink(dshHome, PROFILE, pkg, packageDir)
 
-    expect(linked).toBe(true)
+    expect(result).toEqual({ linked: true })
     const path = pluginLinkPath(dshHome, PROFILE, pkg)
     expect(lstatSync(path).isSymbolicLink()).toBe(true)
     expect(readlinkSync(path)).toBe(packageDir)
@@ -47,9 +47,10 @@ describe('ensurePluginLink', () => {
     writeFileSync(join(path, 'package.json'), JSON.stringify({ name: pkg, main: 'index.js' }))
     writeFileSync(join(path, 'sentinel.txt'), 'do not touch')
 
-    const linked = ensurePluginLink(dshHome, PROFILE, pkg, packageDir)
+    const result = ensurePluginLink(dshHome, PROFILE, pkg, packageDir)
 
-    expect(linked).toBe(false)
+    expect(result.linked).toBe(false)
+    if (!result.linked) expect(result.reason).toContain(path)
     expect(lstatSync(path).isSymbolicLink()).toBe(false)
     // Non-vacuity for "never clobbered": the sentinel file only survives if
     // `ensurePluginLink` genuinely skipped this path rather than unlinking
@@ -63,8 +64,8 @@ describe('ensurePluginLink', () => {
     const oldDir = installedPackageDir(dshHome, pkg, '0.2.1')
     const newDir = installedPackageDir(dshHome, pkg, '0.3.0')
 
-    expect(ensurePluginLink(dshHome, PROFILE, pkg, oldDir)).toBe(true)
-    expect(ensurePluginLink(dshHome, PROFILE, pkg, newDir)).toBe(true)
+    expect(ensurePluginLink(dshHome, PROFILE, pkg, oldDir)).toEqual({ linked: true })
+    expect(ensurePluginLink(dshHome, PROFILE, pkg, newDir)).toEqual({ linked: true })
 
     const path = pluginLinkPath(dshHome, PROFILE, pkg)
     expect(readlinkSync(path)).toBe(newDir)
@@ -81,12 +82,12 @@ describe('ensurePluginLink', () => {
     mkdirSync(nodeModules, { recursive: true })
     chmodSync(nodeModules, 0o444)
     try {
-      const linked = ensurePluginLink(dshHome, PROFILE, pkg, packageDir)
+      const result = ensurePluginLink(dshHome, PROFILE, pkg, packageDir)
       // Non-vacuity for "a link failure must not be fatal": this call must
       // not throw — the plugin is still resolvable by its `entryPath`, which
       // `index.ts`'s `resolveName` falls back to whenever this returns
-      // false, exactly like an unreadable directory.
-      expect(linked).toBe(false)
+      // `linked: false`, exactly like an unreadable directory.
+      expect(result.linked).toBe(false)
     } finally {
       chmodSync(nodeModules, 0o755)
     }

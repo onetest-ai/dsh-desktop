@@ -77,6 +77,18 @@ export interface SettingsDeps {
    */
   disabledPlugins(): Record<string, string>
   /**
+   * Why a currently-mounted plugin's browser half did not load, keyed by
+   * package name — distinct from `disabledPlugins`: an entry here is still
+   * mounted (its tools work) but `plugin-link.ts`'s `ensurePluginLink`
+   * could not link it into the profile's `node_modules` by its bare
+   * package name, which is the only way
+   * `@deepseek-ai/dsh-client-modules`' `ClientModuleRegistry` ever
+   * discovers a plugin's browser bundle. A package absent from the result
+   * either has no declared browser half (`plugin-entries.ts`'s
+   * `declaresClientHalf`) or linked successfully.
+   */
+  clientLinkWarnings(): Record<string, string>
+  /**
    * Open `desktop.json` in whatever the OS associates with `.json` files, for
    * manual editing.
    *
@@ -128,6 +140,14 @@ export interface PluginInfo {
    * see `error-summary.ts`'s `isConfigurationProblem`.
    */
   disabledKind?: 'needs-configuration' | 'failed'
+  /**
+   * Set only when this plugin is mounted (its tools work) but its browser
+   * half is not: it declares one (`dsh.client.platform` in its own
+   * `package.json`) and `ensurePluginLink` could not link it by name, the
+   * only way the harness's client-module registry ever discovers it. From
+   * `SettingsDeps.clientLinkWarnings`.
+   */
+  clientWarning?: string
 }
 
 /** Outcome of a save attempt. `warnings` carries non-blocking problems, such as a rejected hotkey. */
@@ -589,6 +609,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
 
       const storedPlugins = stored.configured ? (stored.config.plugins ?? []) : []
       const disabled = deps.disabledPlugins()
+      const clientWarnings = deps.clientLinkWarnings()
       const plugins: PluginInfo[] = storedPlugins.map((entry) => {
         const { package: pkg, pinnedVersion } = parseSpec(entry.spec)
         const disabledReason = disabled[pkg]
@@ -601,6 +622,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
           disabledReason,
           disabledSummary: disabledReason === undefined ? undefined : summarizeFailure(disabledReason),
           disabledKind: disabledReason === undefined ? undefined : isConfigurationProblem(disabledReason) ? 'needs-configuration' : 'failed',
+          clientWarning: clientWarnings[pkg],
         }
       })
 

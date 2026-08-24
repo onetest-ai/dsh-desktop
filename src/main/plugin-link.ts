@@ -7,10 +7,11 @@ import { runtimesRoot } from './harness-source'
  * add` itself writes real installs into.
  *
  * Linking here — rather than anywhere under the app's own `runtime`
- * directory — is what lets the cordis loader resolve a linked plugin's own
- * entry by bare package name: the loader's module resolution walks up from
- * the profile's working directory looking for `node_modules/<name>`, the
- * same as any other Node package resolution.
+ * directory — is what lets the cordis loader, and separately
+ * `@deepseek-ai/dsh-client-modules`' `ClientModuleRegistry`, resolve a
+ * linked plugin by bare package name: both do ordinary Node module
+ * resolution (`require.resolve`), which walks up from the profile's own
+ * directory looking for `node_modules/<name>`.
  * @param dshHome - the resolved `$DSH_HOME` directory.
  * @param profile - the harness profile being booted (see `harness-source.ts`'s `PROFILE`).
  * @returns the profile's own `node_modules` directory.
@@ -72,39 +73,61 @@ function classify(path: string, dshHome: string): ExistingEntry {
 }
 
 /**
+ * Outcome of `ensurePluginLink`. `reason` is set on failure so a caller can
+ * surface *why* a plugin that declares a browser half — see
+ * `plugin-entries.ts`'s `declaresClientHalf` — lost it, rather than only
+ * knowing that it did.
+ */
+export type LinkResult = { linked: true } | { linked: false; reason: string }
+
+/**
  * Link a ready plugin entry into the profile's `node_modules` by its bare
- * package name, so the generated overlay can refer to it the way the user
- * typed it instead of by its resolved entry path.
+ * package name.
+ *
+ * This is not a display-name nicety: `@deepseek-ai/dsh-client-modules`'
+ * `ClientModuleRegistry` discovers a plugin's browser bundle by resolving
+ * the overlay's own insert `name` as a package specifier
+ * (`require.resolve(\`${name}/package.json\`)`); an absolute entry-file path
+ * cannot resolve that way. A plugin whose entry is inserted by path instead
+ * of by name is therefore silently missing its entire browser half — no
+ * error, nothing in the shell's "Failed to load plugins" screen — while its
+ * tools keep working, because the cordis loader's own `import()` accepts
+ * either form. This link is what lets an inserted-by-path fallback still be
+ * a last resort rather than the normal path: the caller (`index.ts`'s
+ * `resolveName`) uses `declaresClientHalf` on a failure here to decide
+ * whether that fallback is now silently dropping working functionality, and
+ * reports it if so — see `runtime-files.ts` for where that surfaces.
  *
  * Never clobbers anything not already identified as this app's own link
  * (see `classify`): a real install directory — the user's own `dsh plugin
- * --profile web add`, or residue from any other tool — is left untouched
- * and this call reports failure, which the caller (`resolveOverlayName`)
- * turns into the existing path-based overlay reference for that one entry.
+ * --profile web add`, or residue from any other tool — is left untouched.
  * The same fallback covers every other way linking can fail — a read-only
  * `$DSH_HOME`, a permissions error, a name collision this classification
- * missed — because a cosmetic name improvement must never cost the user a
- * working plugin.
+ * missed — because a working plugin must never disappear over a link this
+ * app could not make.
  * @param dshHome - the resolved `$DSH_HOME` directory.
  * @param profile - the harness profile being booted.
  * @param pkg - the package name to link.
  * @param packageDir - the managed install's own directory for this package
  *   (`PluginStatus.packageDir`), the link's target.
- * @returns whether the package is now linked by name (already correct, or
- *   just repointed/created) — false when linking was skipped or failed.
+ * @returns linked, when the package is now correctly linked by name
+ *   (already correct, or just repointed/created); otherwise the reason
+ *   linking was skipped or failed.
  */
-export function ensurePluginLink(dshHome: string, profile: string, pkg: string, packageDir: string): boolean {
+export function ensurePluginLink(dshHome: string, profile: string, pkg: string, packageDir: string): LinkResult {
   const path = pluginLinkPath(dshHome, profile, pkg)
   const existing = classify(path, dshHome)
-  if (existing.kind === 'foreign') return false
-  if (existing.kind === 'own-link' && existing.target === packageDir) return true
+  if (existing.kind === 'own-link' && existing.target === packageDir) return { linked: true }
+  if (existing.kind === 'foreign') {
+    return { linked: false, reason: `${path} already exists and is not a link this app created` }
+  }
   try {
     if (existing.kind === 'own-link') unlinkSync(path)
     mkdirSync(dirname(path), { recursive: true })
     symlinkSync(packageDir, path)
-    return true
-  } catch {
-    return false
+    return { linked: true }
+  } catch (error) {
+    return { linked: false, reason: `could not link ${path} to ${packageDir}: ${(error as Error).message}` }
   }
 }
 
@@ -153,7 +176,9 @@ function listPackageNames(nodeModules: string): string[] {
  * across ordinary boots that change nothing in Settings — a runtime removed
  * from disk by other means, or a boot that isolates a previously-linked
  * plugin after a runtime failure — so reconciliation is tied to boot, not to
- * save.
+ * save. Leaving a stale link behind is not merely untidy: a dangling or
+ * wrongly-pointed link is exactly the state that would make the client
+ * registry resolve the wrong (or no) package.json for that name.
  *
  * A foreign entry (a real install, or a symlink this app did not write) is
  * always left alone, regardless of `keep` — the same rule `ensurePluginLink`
@@ -175,11 +200,13 @@ export function reconcilePluginLinks(dshHome: string, profile: string, keep: Rea
       // is still linked) and ENOENT are both fine outcomes here.
       if (pkg.includes('/')) rmdirSync(dirname(path))
     } catch {
-      // Removal failing leaves a dangling or stale link behind, which costs
-      // nothing beyond the cosmetic name it would have granted — the
-      // path-based overlay reference for this package, if still configured,
-      // is unaffected because `resolveOverlayName` never trusted this link
-      // to already be correct.
+      // Removal failing leaves a dangling or stale link behind. This is a
+      // real regression (see above — it can misresolve the client
+      // registry), but there is no better fallback here than "try again
+      // next boot": the entry it belonged to, if still configured, already
+      // fell back to its path-based overlay reference this same boot,
+      // because `ensurePluginLink` never trusted this stale link to already
+      // be correct.
     }
   }
 }

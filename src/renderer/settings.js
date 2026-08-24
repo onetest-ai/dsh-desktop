@@ -345,6 +345,17 @@ function renderPluginRows() {
       row.append(detail)
     }
 
+    // Mounted (tools work) but the browser half this plugin declares could
+    // not be linked by name — the only way the harness discovers it — so
+    // its UI silently would not appear without this note; see
+    // `plugin-link.ts`'s `ensurePluginLink` and `runtime-files.ts`.
+    if (plugin.clientWarning) {
+      const note = document.createElement('p')
+      note.className = 'plugin-client-warning-note'
+      note.textContent = `Its UI will not load: ${plugin.clientWarning}`
+      row.append(note)
+    }
+
     row.append(configWrap)
 
     list.append(row)
