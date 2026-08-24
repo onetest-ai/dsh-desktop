@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSettingsHandlers, SAVE_IN_PROGRESS, type SettingsDeps } from './settings-ipc'
+import { createSettingsHandlers, type SettingsDeps } from './settings-ipc'
 import type { SettingsForm } from './settings-validate'
 import type { DesktopConfig } from './config'
 
@@ -472,6 +472,10 @@ describe('save', () => {
       // the loop would keep calling `installPlugin` for every remaining
       // entry — each one a detached `npm` that `shutdown`'s single, already-
       // finished `installs.stopAll()` would never reap again.
+      //
+      // The save itself still succeeds: its write already happened before
+      // any of this ran (see `performSave`'s provisional write), so quitting
+      // mid-install only cuts the install/apply job short, not the save.
       let quitting = false
       const installPlugin = vi.fn(async (pkg: string) => {
         quitting = true
@@ -484,9 +488,8 @@ describe('save', () => {
       )
 
       expect(installPlugin).toHaveBeenCalledTimes(1)
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.errors.kind).toMatch(/quitting|shutting down/i)
-      expect(d.writeConfig).not.toHaveBeenCalled()
+      expect(result).toEqual({ ok: true, warnings: [] })
+      expect(d.writeConfig).toHaveBeenCalled()
       expect(d.apply).not.toHaveBeenCalled()
     })
   })
@@ -578,7 +581,7 @@ describe('acceptPluginUpdate', () => {
     expect(installPlugin).not.toHaveBeenCalled()
   })
 
-  it('is serialized with save through the same lock', async () => {
+  it('shares the install/apply queue with save: a save arriving mid-update still writes immediately', async () => {
     let release: (version: string) => void = () => {}
     const installPlugin = vi.fn(
       () =>
@@ -586,15 +589,29 @@ describe('acceptPluginUpdate', () => {
           release = resolve
         }),
     )
-    const d = deps({ installPlugin, readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }) })
+    const apply = vi.fn(async () => [])
+    const d = deps({ installPlugin, apply, readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }) })
     const handlers = createSettingsHandlers(d)
 
     const first = handlers.acceptPluginUpdate(DECK, '0.3.0')
-    const second = await handlers.save(form())
-    release('0.3.0')
-    await first
+    await vi.waitFor(() => expect(installPlugin).toHaveBeenCalledTimes(1))
 
-    expect(second).toEqual({ ok: false, errors: { kind: SAVE_IN_PROGRESS } })
+    // The update's own install is still pending, so its write hasn't
+    // happened yet — but a save arriving now writes on its own, unblocked.
+    const writesBefore = d.writeConfig.mock.calls.length
+    const second = handlers.save(form({ hotkey: 'CommandOrControl+Shift+K' }))
+    await vi.waitFor(() => expect(d.writeConfig.mock.calls.length).toBeGreaterThan(writesBefore))
+    expect(d.writeConfig).toHaveBeenCalledWith(expect.objectContaining({ hotkey: 'CommandOrControl+Shift+K' }))
+
+    release('0.3.0')
+    await Promise.all([first, second])
+
+    // Neither ran concurrently with the other: `apply` was called once for
+    // the update and once for the save, never overlapping (the mock itself
+    // is not concurrency-checked here since both resolve immediately once
+    // installPlugin releases — the queue's serialization is exercised
+    // directly in `describe('the shared install/apply queue')` below).
+    expect(apply).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -637,41 +654,7 @@ describe('a failing update lookup', () => {
   })
 })
 
-describe('concurrent saves', () => {
-  it('refuses a second save instead of reporting the first one\'s outcome as its own', async () => {
-    // The reachable paths: the update hint's "use latest" button, which the
-    // renderer never disables, and a settings window reopened mid-install,
-    // whose Save starts enabled. Each save carries different values, so the
-    // running save's outcome is not an answer to this one — being told
-    // "Settings saved." for a form that was never applied drops the user's
-    // intent and removes the cue that would make them retry.
-    let releaseInstall: (version: string) => void = () => {}
-    let hungOnce = false
-    const installManaged = vi.fn((_pkg: string, version: string) => {
-      if (!hungOnce) {
-        hungOnce = true
-        return new Promise<string>((resolve) => {
-          releaseInstall = resolve
-        })
-      }
-      return Promise.resolve(version)
-    })
-    const writeConfig = vi.fn()
-    const apply = vi.fn(async () => [])
-    const handlers = createSettingsHandlers(deps({ installManaged, writeConfig, apply }))
-
-    const first = handlers.save(form({ kind: 'managed', version: '0.1.1-rc.2', workspace: REPO }))
-    const second = await handlers.save(form({ kind: 'local', repo: REPO }))
-    releaseInstall('0.1.1-rc.2')
-    await first
-
-    expect(second).toEqual({ ok: false, errors: { kind: SAVE_IN_PROGRESS } })
-    expect(installManaged).toHaveBeenCalledTimes(1)
-    expect(writeConfig).toHaveBeenCalledTimes(1)
-    expect(apply).toHaveBeenCalledTimes(1)
-    expect(writeConfig).toHaveBeenCalledWith(expect.objectContaining({ harness: expect.objectContaining({ kind: 'managed' }) }))
-  })
-
+describe('the shared install/apply queue', () => {
   it('starts a fresh save once the previous one has finished', async () => {
     const writeConfig = vi.fn()
     const handlers = createSettingsHandlers(deps({ writeConfig }))
@@ -679,21 +662,109 @@ describe('concurrent saves', () => {
     await handlers.save(form())
     await handlers.save(form())
 
-    expect(writeConfig).toHaveBeenCalledTimes(2)
+    expect(writeConfig).toHaveBeenCalledTimes(4) // provisional + resolved write, twice
   })
 
-  it('never applies the values of a save it refused', async () => {
+  it('a save arriving while an apply is in flight still writes to disk', async () => {
+    // Non-vacuity: reverting `performSave` to write only after `apply`
+    // resolves (the pre-fix shape) makes this test fail — the second save's
+    // write never lands while the first apply is still pending.
+    let release: (() => void) | undefined
+    const apply = vi.fn(
+      () =>
+        new Promise<string[]>((resolve) => {
+          release = () => resolve([])
+        }),
+    )
+    const d = deps({ apply })
+    const handlers = createSettingsHandlers(d)
+
+    const first = handlers.save(form())
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1))
+
+    const writesBefore = d.writeConfig.mock.calls.length
+    const second = handlers.save(form({ hotkey: 'CommandOrControl+Shift+K' }))
+    await vi.waitFor(() => expect(d.writeConfig.mock.calls.length).toBeGreaterThan(writesBefore))
+    expect(d.writeConfig).toHaveBeenCalledWith(expect.objectContaining({ hotkey: 'CommandOrControl+Shift+K' }))
+
+    // Two applies to release in turn: the first save's, and — once it clears
+    // the queue — the second save's own job running behind it.
+    release?.()
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(2))
+    release?.()
+    await Promise.all([first, second])
+  })
+
+  it('an apply that never settles cannot block a subsequent save indefinitely', async () => {
+    const apply = vi.fn(() => new Promise<string[]>(() => {}))
+    const d = deps({ apply })
+    const handlers = createSettingsHandlers(d)
+
+    void handlers.save(form())
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1))
+
+    const writesBefore = d.writeConfig.mock.calls.length
+    void handlers.save(form({ hotkey: 'CommandOrControl+Shift+K' }))
+    await vi.waitFor(() => expect(d.writeConfig.mock.calls.length).toBeGreaterThan(writesBefore))
+    expect(d.writeConfig).toHaveBeenCalledWith(expect.objectContaining({ hotkey: 'CommandOrControl+Shift+K' }))
+  })
+
+  it('never runs two applies concurrently, and the latest config wins over one still queued', async () => {
+    // Non-vacuity: replacing `scheduleJob`'s supersede-and-serialize
+    // behavior with plain unserialized `Promise.all`-style concurrency (each
+    // save's job running independently, in parallel) makes this test fail —
+    // `inFlight` observes 2, and/or the superseded 'B' config gets applied.
+    const applied: string[] = []
+    let inFlight = 0
+    let releaseFirst: (() => void) | undefined
+    const apply = vi.fn(async (_previous: DesktopConfig | undefined, next: DesktopConfig) => {
+      inFlight += 1
+      expect(inFlight).toBe(1)
+      if (releaseFirst === undefined) {
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve
+        })
+      }
+      applied.push(next.hotkey)
+      inFlight -= 1
+      return []
+    })
+    const d = deps({ apply })
+    const handlers = createSettingsHandlers(d)
+
+    const first = handlers.save(form({ hotkey: 'CommandOrControl+Shift+A' }))
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1))
+
+    const second = handlers.save(form({ hotkey: 'CommandOrControl+Shift+B' }))
+    await vi.waitFor(() =>
+      expect(d.writeConfig).toHaveBeenCalledWith(expect.objectContaining({ hotkey: 'CommandOrControl+Shift+B' })),
+    )
+    const third = handlers.save(form({ hotkey: 'CommandOrControl+Shift+C' }))
+    await vi.waitFor(() =>
+      expect(d.writeConfig).toHaveBeenCalledWith(expect.objectContaining({ hotkey: 'CommandOrControl+Shift+C' })),
+    )
+
+    releaseFirst?.()
+    const [r1, r2, r3] = await Promise.all([first, second, third])
+
+    expect(applied).toEqual(['CommandOrControl+Shift+A', 'CommandOrControl+Shift+C'])
+    expect(apply).toHaveBeenCalledTimes(2)
+    expect(r1).toEqual({ ok: true, warnings: [] })
+    expect(r2).toEqual({ ok: true, warnings: [] })
+    expect(r3).toEqual({ ok: true, warnings: [] })
+  })
+
+  it('still refuses a save while the app is quitting, even with the lock gone', async () => {
     const writeConfig = vi.fn()
     const apply = vi.fn(async () => [])
-    const handlers = createSettingsHandlers(deps({ writeConfig, apply, probePort: vi.fn(async () => true) }))
+    const handlers = createSettingsHandlers(deps({ writeConfig, apply, isQuitting: () => true }))
 
-    const first = handlers.save(form({ hotkey: 'CommandOrControl+Shift+D' }))
-    const second = await handlers.save(form({ hotkey: 'CommandOrControl+Shift+K' }))
-    await first
+    const result = await handlers.save(form())
 
-    expect(second).toEqual({ ok: false, errors: { kind: SAVE_IN_PROGRESS } })
-    expect(writeConfig).toHaveBeenCalledTimes(1)
-    expect(writeConfig).toHaveBeenCalledWith(expect.objectContaining({ hotkey: 'CommandOrControl+Shift+D' }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.kind).toMatch(/quitting|shutting down/i)
+    expect(writeConfig).not.toHaveBeenCalled()
+    expect(apply).not.toHaveBeenCalled()
   })
 })
 

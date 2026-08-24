@@ -7,6 +7,22 @@ export interface NotifyServer {
 }
 
 /**
+ * Upper bound on `close()`'s graceful wait before forcing every remaining
+ * connection shut.
+ *
+ * Node's `http.Server.close()` invokes its callback only once every
+ * connection it accepted has ended — including one accepted but never
+ * completing a request (a stalled or malformed client), which otherwise
+ * keeps the callback from ever firing at all. `applySettings` awaits this
+ * `close()` before rebinding to a new port, so an unbounded wait here would
+ * hold a settings save's install-and-apply job open indefinitely — the same
+ * failure mode `startServer`'s own readiness timeout exists to prevent for
+ * the harness child. The bound is short because the normal case (no
+ * lingering connection) already resolves within a tick.
+ */
+const CLOSE_TIMEOUT_MS = 3000
+
+/**
  * Listen on loopback for turn-end pings from the harness Stop hook.
  *
  * The port is the configured one rather than OS-assigned because the harness
@@ -42,7 +58,23 @@ export function startNotifyListener(port: number, onTurnEnd: () => void): Promis
       const address = server.address()
       resolve({
         port: typeof address === 'object' && address !== null ? address.port : port,
-        close: () => new Promise<void>((done) => server.close(() => done())),
+        close: () =>
+          new Promise<void>((done) => {
+            let settled = false
+            const finish = (): void => {
+              if (settled) return
+              settled = true
+              clearTimeout(forceTimer)
+              done()
+            }
+            server.close(finish)
+            const forceTimer = setTimeout(() => {
+              // Graceful close hasn't finished within the bound — force every
+              // remaining connection (including one stuck mid-request) shut;
+              // `server.close`'s own callback still fires once that completes.
+              server.closeAllConnections()
+            }, CLOSE_TIMEOUT_MS)
+          }),
       })
     })
   })

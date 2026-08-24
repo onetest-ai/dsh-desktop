@@ -120,9 +120,6 @@ export interface PluginInfo {
   disabledSummary?: string
 }
 
-/** What a save refused for overlapping another save reports on the `kind` field. */
-export const SAVE_IN_PROGRESS = 'A save is already running; wait for it to finish and try again.'
-
 /** Outcome of a save attempt. `warnings` carries non-blocking problems, such as a rejected hotkey. */
 export type SaveResult = { ok: true; warnings: string[] } | { ok: false; errors: FieldErrors }
 
@@ -160,8 +157,19 @@ export interface SettingsHandlers {
   ): { configured: boolean; form: SettingsForm; plugins: PluginInfo[] }
   pickFolder(): Promise<string | undefined>
   /**
-   * Saves one form. Saves are serialized: a call made while another is still
-   * running starts nothing and resolves with the running save's own outcome.
+   * Saves one form: validates it and writes it to disk unconditionally
+   * (never refused for overlapping another save), then installs its plugins
+   * and applies it to the running app.
+   *
+   * The install-and-apply step is serialized across every call to `save` and
+   * `acceptPluginUpdate` with latest-wins semantics: at most one is ever
+   * installing or applying at a time, and a call queued behind one already
+   * running is superseded by the next call to arrive rather than running in
+   * its own turn — so a config written but never applied because a later one
+   * superseded it is still exactly what is on disk, just not (yet, or ever,
+   * if superseded again) reflected in the running app. The returned
+   * `warnings` are this call's own install/apply outcome when it actually
+   * ran, or empty when it was superseded before running.
    * @param form - the submitted values.
    * @param onProgress - called with each line of `npm install` output while a
    *   managed source installs. Never called for a local source or an
@@ -173,10 +181,9 @@ export interface SettingsHandlers {
    * Move one already-configured floating plugin entry to a specific,
    * explicitly accepted version, without pinning it: the entry's `spec`
    * stays exactly what it was, so it keeps being offered future updates the
-   * same as before. Serialized with `save` through the same lock — this
-   * still installs and writes config, so two of these (or one of these and a
-   * `save`) running at once would race the same two hazards `save`'s own
-   * lock exists to prevent.
+   * same as before. Writes immediately, the same as `save`; its own install
+   * and apply share `save`'s latest-wins queue, so two of these (or one of
+   * these and a `save`) never install or apply concurrently.
    * @param pkg - the package name (not the raw spec) naming which entry to update.
    * @param version - the concrete version to install and store, from the
    *   update-available push this answers.
@@ -208,18 +215,18 @@ export interface SettingsHandlers {
   validatePluginConfig(text: string): PluginConfigValidation
   /**
    * Verify the Advanced tab's `pnpm`/`npm` path fields actually spawn, using
-   * the values currently typed in the form. Bypasses the save lock entirely:
-   * unlike `save` and `acceptPluginUpdate`, this reads and writes nothing, so
-   * it can run freely alongside a save already in flight without racing it.
+   * the values currently typed in the form. Bypasses `save`'s install/apply
+   * queue entirely: this reads and writes nothing, so it can run freely
+   * alongside a save already installing or applying, without racing it.
    * @param pnpmPath - the pnpm path field's current value; blank means PATH.
    * @param npmPath - the npm path field's current value; blank means PATH.
    * @returns both binaries' outcomes.
    */
   checkBinaries(pnpmPath: string, npmPath: string): Promise<BinaryChecks>
   /**
-   * Open `desktop.json` for manual editing. Bypasses the save lock, like
-   * `checkBinaries`: this reads and writes nothing settings-owned, so it can
-   * run freely alongside a save already in flight.
+   * Open `desktop.json` for manual editing. Bypasses `save`'s install/apply
+   * queue, like `checkBinaries`: this reads and writes nothing
+   * settings-owned, so it can run freely alongside a save already in flight.
    * @returns ok, or a diagnosable error — including "nothing has been saved
    *   yet" for a config that has never been written.
    */
@@ -230,30 +237,85 @@ export interface SettingsHandlers {
  * Build the settings handlers over injected dependencies.
  *
  * Validation runs before anything is written, so a rejected save never leaves
- * a partial config on disk, and `apply` runs only after a successful write.
+ * a partial config on disk. Beyond that, a save always writes — never
+ * refused for overlapping another — and only the install-and-apply work that
+ * follows is serialized; see `scheduleJob`.
  * @param deps - collaborators supplied by the main process.
  * @returns the handler set the IPC channels delegate to.
  */
 export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
   /**
-   * Whether a save is running, gating every entry point in the main process.
+   * The config last actually handed to `deps.apply`, i.e. what the running
+   * app reflects right now — distinct from what `deps.readConfig()` reports,
+   * which a save's own immediate write can race ahead of while its
+   * install-and-apply job is still queued behind another. Seeded from disk:
+   * at the moment these handlers are built, whatever is stored is what the
+   * app is about to boot, or has already booted, with.
    *
-   * A save is a minutes-long operation — `npm install`, a config write, then
-   * `applySettings` — and the renderer's disabled Save button does not bound
-   * it: the update hint's "use latest" is a second trigger, and closing and
-   * reopening Settings mid-install produces a fresh window whose Save is
-   * enabled. Two concurrent runs would mean two `npm install --prefix` into
-   * one directory, two `writeConfig`, and two `applySettings`.
-   *
-   * The second save is refused rather than joined. Joining is right for
-   * idempotent work like the tray's Restart, where every caller wants the one
-   * same outcome; each save instead carries its own values, so handing the
-   * second caller the first's result would report a local checkout as saved
-   * while a managed install was applied — dropping the user's intent and
-   * removing the very cue that would make them retry.
+   * Updated only inside `installAndApply`/`performAcceptPluginUpdate`, right
+   * after their own `deps.apply` call resolves — never from a fast write —
+   * so a config written but not yet (or never, if superseded) applied is
+   * never mistaken for the one actually running.
    */
-  // Shared by `save` and `acceptPluginUpdate`: both install and write config, so either one running blocks the other the same way it blocks a second of itself.
-  let saving = false
+  let appliedConfig: DesktopConfig | undefined = (() => {
+    const stored = deps.readConfig()
+    return stored.configured ? stored.config : undefined
+  })()
+
+  /**
+   * The single in-flight install-and-apply job, and the one waiting behind
+   * it, shared by every caller of `scheduleJob` — `save` and
+   * `acceptPluginUpdate` alike.
+   *
+   * At most one job ever runs at a time: this is what keeps two overlapping
+   * saves, or a save and an `acceptPluginUpdate`, from spawning two harness
+   * children or running two `npm install`s into the same target directory
+   * concurrently. A job queued behind one already running is never run in
+   * its own turn — the next call to arrive replaces it outright, so only the
+   * latest submission's install-and-apply ever actually happens. This is
+   * "latest wins": a superseded call's caller still has its own write
+   * durable on disk (that already happened before `scheduleJob` was ever
+   * called — see `performSave`), it just has no install/apply outcome of its
+   * own to report.
+   */
+  let runningJob: Promise<void> | undefined
+  let queuedJob: { run(): Promise<void>; supersede(): void } | undefined
+
+  /**
+   * Start the queued job if nothing is running, and keep draining the queue
+   * as each job finishes and clears the way for whatever arrived next.
+   */
+  function drain(): void {
+    if (runningJob !== undefined) return
+    const job = queuedJob
+    if (job === undefined) return
+    queuedJob = undefined
+    runningJob = job.run().finally(() => {
+      runningJob = undefined
+      drain()
+    })
+  }
+
+  /**
+   * Submit install-and-apply work to the shared, single-flight queue.
+   * @param run - performs the install(s) and apply, resolving with this call's own outcome.
+   * @param onSuperseded - the outcome to resolve with instead, if a later
+   *   submission replaces this one before it starts running.
+   * @returns this call's own outcome, or `onSuperseded`'s if replaced first.
+   */
+  function scheduleJob<T>(run: () => Promise<T>, onSuperseded: () => T): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      queuedJob?.supersede()
+      // `run().then(resolve, reject)` forwards this call's own outcome —
+      // success or failure alike — to its caller while itself always
+      // fulfilling, so a rejection (e.g. `writeConfig` throwing) still
+      // propagates to whoever called `scheduleJob` instead of leaving
+      // `drain`'s chain, and therefore the whole queue, stuck on a rejected
+      // `runningJob` nothing ever observes.
+      queuedJob = { run: () => run().then(resolve, reject), supersede: () => resolve(onSuperseded()) }
+      drain()
+    })
+  }
 
   /**
    * Install or verify every configured plugin entry, in order.
@@ -310,7 +372,44 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
   }
 
   /**
-   * Validate, install, persist, and apply one settings form.
+   * Install `config`'s plugins, persist their resolved versions, and apply
+   * the result to the running app. Runs only from inside `scheduleJob`'s
+   * queue, so it can assume no other install or apply is active.
+   * @param priorPlugins - the entries to reuse or fall back to for version resolution — see `installPlugins`.
+   * @param config - the config already written to disk by `performSave`, with unresolved plugin versions.
+   * @param onProgress - receives `npm install` output lines.
+   * @returns this job's own warnings.
+   */
+  async function installAndApply(
+    priorPlugins: PluginEntry[],
+    config: DesktopConfig,
+    onProgress?: (line: string) => void,
+  ): Promise<{ warnings: string[] }> {
+    if (deps.isQuitting()) return { warnings: [] }
+
+    const { resolved, warnings: pluginWarnings } = await installPlugins(
+      config.plugins ?? [],
+      priorPlugins,
+      config.npmPath,
+      onProgress ?? (() => {}),
+    )
+    const resolvedConfig = { ...config, plugins: resolved }
+
+    // An install can run for minutes; a quit landing during it must not still
+    // land a write and an apply behind the quit's back once it finishes.
+    if (deps.isQuitting()) return { warnings: pluginWarnings }
+
+    deps.writeConfig(resolvedConfig)
+    const applyWarnings = await deps.apply(appliedConfig, resolvedConfig)
+    appliedConfig = resolvedConfig
+    return { warnings: [...pluginWarnings, ...applyWarnings] }
+  }
+
+  /**
+   * Validate one settings form and write it to disk — installing the
+   * plugins it configures, and applying the result to the running app, is
+   * deferred to a queued job (see `installAndApply`/`scheduleJob`) rather
+   * than done here, so this always finishes quickly.
    * @param form - the submitted values.
    * @param onProgress - receives `npm install` output lines, for a managed source.
    * @returns the save outcome.
@@ -324,6 +423,14 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     if (!validated.ok) return validated
 
     let config = validated.config
+
+    // The managed harness's own version must be a concrete version, never a
+    // dist-tag `resolveVersion` would re-resolve differently later, and
+    // `HarnessSource.version` is not optional — unlike a plugin entry, there
+    // is no "not installed yet" state this field can be left in. Installing
+    // it therefore stays here rather than moving to the deferred job below:
+    // a harness source change is rare, and — like every managed install —
+    // already bounded by `INSTALL_TIMEOUT_MS`.
     if (config.harness.kind === 'managed') {
       const harness = config.harness
       let concreteVersion: string
@@ -340,24 +447,16 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       config = { ...config, harness: { ...harness, version: concreteVersion } }
     }
 
-    const stored = deps.readConfig()
-    const previous = stored.configured ? stored.config : undefined
-
-    const { resolved: resolvedPlugins, warnings: pluginWarnings } = await installPlugins(
-      config.plugins ?? [],
-      previous?.plugins ?? [],
-      config.npmPath,
-      onProgress ?? (() => {}),
-    )
-    config = { ...config, plugins: resolvedPlugins }
-
-    // A save arriving while quitting is refused above; an install can run
-    // for minutes, so quitting is re-checked here too — otherwise a quit
-    // during a long install would still land a write and an apply behind
-    // its back once the install finishes.
+    // A save arriving while quitting is refused above; the harness install
+    // can run for minutes, so quitting is re-checked here too — otherwise a
+    // quit during a long install would still land a write behind its back
+    // once the install finishes.
     if (deps.isQuitting()) {
       return { ok: false, errors: { kind: 'The app is shutting down; settings were not saved.' } }
     }
+
+    const stored = deps.readConfig()
+    const previous = stored.configured ? stored.config : undefined
 
     if (previous?.notifyPort !== config.notifyPort) {
       if (!(await deps.probePort(config.notifyPort))) {
@@ -368,16 +467,37 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       }
     }
 
+    // Plugin entries are written as submitted, minus installing them: an
+    // unchanged spec keeps its previously resolved version, and a new or
+    // changed one is left unresolved until the queued job installs it.
+    // `PluginEntry.version` is already optional for exactly this state (see
+    // its own doc) — `pluginStatus` already reports it as "not installed
+    // yet" rather than failing boot — so this writes nothing the rest of the
+    // app cannot already handle. This is what lets a save that only removes
+    // or reorders rows write immediately, with no install in its way at all.
+    const priorPlugins = previous?.plugins ?? []
+    const provisionalPlugins = (config.plugins ?? []).map((entry) => {
+      const prior = priorPlugins.find((candidate) => candidate.spec === entry.spec)
+      return prior === undefined ? entry : { ...entry, version: prior.version }
+    })
+    config = { ...config, plugins: provisionalPlugins }
+
     deps.writeConfig(config)
-    const applyWarnings = await deps.apply(previous, config)
-    return { ok: true, warnings: [...pluginWarnings, ...applyWarnings] }
+
+    const { warnings } = await scheduleJob(
+      () => installAndApply(priorPlugins, config, onProgress),
+      () => ({ warnings: [] }),
+    )
+    return { ok: true, warnings }
   }
 
   /**
    * Install `version` for `pkg`'s already-configured floating entry, then
    * persist and apply just that one field change — `spec` is never touched,
    * which is what keeps the entry floating rather than silently pinning it
-   * the way writing `pkg@version` into its spec would.
+   * the way writing `pkg@version` into its spec would. Runs only from inside
+   * `scheduleJob`'s queue, so it can assume no other install or apply is
+   * active.
    * @param pkg - the package name identifying which entry to update.
    * @param version - the version to install and store.
    * @param onProgress - receives `npm install` output lines.
@@ -427,7 +547,8 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     )
     const config: DesktopConfig = { ...previous, plugins: updatedEntries }
     deps.writeConfig(config)
-    const warnings = await deps.apply(previous, config)
+    const warnings = await deps.apply(appliedConfig, config)
+    appliedConfig = config
     return { ok: true, warnings, version: concrete }
   }
 
@@ -497,28 +618,17 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       return { configured: stored.configured, form: formFor(stored), plugins }
     },
     pickFolder: () => deps.pickFolder(),
-    save: async (form, onProgress) => {
-      if (saving) {
-        return { ok: false, errors: { kind: SAVE_IN_PROGRESS } }
-      }
-      saving = true
-      try {
-        return await performSave(form, onProgress)
-      } finally {
-        saving = false
-      }
-    },
-    acceptPluginUpdate: async (pkg, version, onProgress) => {
-      if (saving) {
-        return { ok: false, errors: { kind: SAVE_IN_PROGRESS } }
-      }
-      saving = true
-      try {
-        return await performAcceptPluginUpdate(pkg, version, onProgress)
-      } finally {
-        saving = false
-      }
-    },
+    save: (form, onProgress) => performSave(form, onProgress),
+    acceptPluginUpdate: (pkg, version, onProgress) =>
+      scheduleJob(
+        () => performAcceptPluginUpdate(pkg, version, onProgress),
+        () => ({
+          ok: false,
+          errors: {
+            kind: `${pkg} was not updated — a newer settings change was applied instead. Try again if you still want this update.`,
+          },
+        }),
+      ),
     validatePlugin: (spec, existingPackages) => validatePluginSpec(spec, existingPackages),
     validatePluginConfig: (text) => parsePluginConfig(text),
     checkBinaries: (pnpmPath, npmPath) => deps.checkBinaries(pnpmPath, npmPath),

@@ -124,6 +124,18 @@ section.group {
   gap: 10px;
 }
 
+/* The Plugins tab's group has no card of its own: every row inside
+   `.plugin-rows` is already its own card, and wrapping those in a second,
+   outer card read as nested boxes. This keeps the caption-above-content
+   layout and the tight 10px rhythm between the hint, the Add control, and
+   the row list — the parts that relied on the card for grouping — while
+   dropping only its border, background, and padding. */
+.group-flat {
+  border: none;
+  background: none;
+  padding: 0;
+}
+
 /* The caption sits above its card rather than inside it: a native fieldset
    legend cuts a notch through the card's top border. Grouping for assistive
    tech comes from role="radiogroup" + aria-labelledby instead. */
@@ -279,9 +291,9 @@ button:disabled {
   padding: 0 10px;
 }
 
-/* Row-based plugin list: each entry is its own card-in-a-card, sized and
-   colored from the same tokens as the surrounding group so it reads as part
-   of this window rather than a bare list bolted onto it. */
+/* Row-based plugin list: each entry is its own card, sized and colored from
+   the same tokens the rest of this window's controls use, sitting directly
+   on the panel (see `.group-flat`) rather than inside a second, outer one. */
 .plugin-rows {
   list-style: none;
   margin: 0;

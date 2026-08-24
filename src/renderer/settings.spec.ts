@@ -1256,23 +1256,24 @@ describe('tabs', () => {
 
 describe('a refused save', () => {
   it('shows the refusal beside the Save button rather than under a control it does not name', async () => {
-    // `kind` rejects the whole save — a save already running, or the app
-    // shutting down — so it must land where the user is looking after
-    // clicking Save, not where a bad field value would.
+    // `kind` rejects the whole save — the app shutting down is the one
+    // remaining case (see `settings-ipc.ts`'s `performSave`) — so it must
+    // land where the user is looking after clicking Save, not where a bad
+    // field value would.
     const renderer = await load(async () => ({
       ok: false,
-      errors: { kind: 'A save is already running; wait for it to finish and try again.' },
+      errors: { kind: 'The app is shutting down; settings were not saved.' },
     }))
     await renderer.save()
 
     const status = renderer.elements.get('status')
-    expect(status?.textContent).toBe('A save is already running; wait for it to finish and try again.')
+    expect(status?.textContent).toBe('The app is shutting down; settings were not saved.')
     expect(status?.classes.has('status-failed')).toBe(true)
     expect(renderer.elements.get('save')?.disabled).toBe(false)
   })
 
   it('never leaves a refusal reading as a successful save', async () => {
-    const renderer = await load(async () => ({ ok: false, errors: { kind: 'A save is already running.' } }))
+    const renderer = await load(async () => ({ ok: false, errors: { kind: 'The app is shutting down; settings were not saved.' } }))
     await renderer.save()
 
     expect(renderer.elements.get('status')?.textContent).not.toBe('Settings saved.')
