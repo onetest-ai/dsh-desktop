@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { summarizeFailure } from './error-summary'
+import { isConfigurationProblem, summarizeFailure } from './error-summary'
 
 /**
  * The raw `disabledReason` text a real boot failure produced for
@@ -58,5 +58,30 @@ describe('summarizeFailure', () => {
     const reason = '@modelcontextprotocol/sdk is not resolvable from /home/x/.dsh/plugins/x: Cannot find module'
 
     expect(summarizeFailure(reason)).toBe(reason)
+  })
+})
+
+describe('isConfigurationProblem', () => {
+  it('classifies the real dsh-mcp-client config-validation failure as a configuration problem', () => {
+    expect(isConfigurationProblem(REAL_MCP_CLIENT_REASON)).toBe(true)
+  })
+
+  it('keeps the expected-shape text in what summarizeFailure extracts from that same reason, so the setup fix stays legible', () => {
+    const summary = summarizeFailure(REAL_MCP_CLIENT_REASON)
+
+    expect(summary).toContain('transport?: "stdio"')
+    expect(summary).toContain('serverName: string')
+  })
+
+  it('does not classify a module-resolution failure as a configuration problem', () => {
+    const reason = '@modelcontextprotocol/sdk is not resolvable from /home/x/.dsh/plugins/x: Cannot find module'
+
+    expect(isConfigurationProblem(reason)).toBe(false)
+  })
+
+  it('does not classify an unfamiliar error shape as a configuration problem, falling back to the failure presentation', () => {
+    const reason = 'TypeError: cannot read properties of undefined (reading \'foo\') at Entry._init (file:///plugin/lib/index.js:12:3)'
+
+    expect(isConfigurationProblem(reason)).toBe(false)
   })
 })

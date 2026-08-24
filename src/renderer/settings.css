@@ -17,6 +17,11 @@
   --primary-text: rgb(255, 255, 255);
   --danger: rgb(199, 58, 58);
   --ok: rgb(38, 128, 74);
+  /* A third status tone for "this needs a setup step", distinct from both
+     --danger (a genuine failure) and --ok (working correctly) — an
+     unconfigured plugin is neither. Amber reads as "action needed", not
+     "broken", in both color schemes. */
+  --setup: rgb(150, 96, 12);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -34,6 +39,7 @@
     --primary-text: rgb(15, 17, 21);
     --danger: rgb(255, 138, 138);
     --ok: rgb(126, 214, 160);
+    --setup: rgb(224, 168, 62);
   }
 }
 
@@ -328,6 +334,16 @@ button:disabled {
   background: color-mix(in srgb, var(--danger) 8%, var(--input-fill));
 }
 
+/* A plugin that only needs a setup step — cordis rejected its (missing or
+   misshapen) config, nothing crashed or failed to resolve. Same tint
+   treatment as `.plugin-row-disabled`, in --setup instead of --danger, so it
+   still stands out from a healthy row at a glance but reads as "configure
+   me", not "something is broken". */
+.plugin-row-needs-config {
+  border-color: var(--setup);
+  background: color-mix(in srgb, var(--setup) 8%, var(--input-fill));
+}
+
 /* The name/meta/actions line — what `.plugin-row` alone used to be, before
    the collapsible config editor below became a second, optional line. */
 .plugin-row-top {
@@ -469,6 +485,39 @@ button:disabled {
      which is one unbreakable word — without this it runs off the card and
      out of the window instead of wrapping. */
   overflow-wrap: anywhere;
+}
+
+/* A plugin that only needs a setup step: same rhythm and wrapping as
+   `.plugin-disabled-note`, --setup instead of --danger, and no "would not
+   start" wording — this is not a failure report. */
+.plugin-needs-config-note {
+  color: var(--setup);
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+/* The inline control that opens this row's own Config editor and focuses
+   its textarea — the fix for a needs-configuration row is always "fill in
+   Config below", so the note leads there directly instead of just naming
+   the problem. A button, not an anchor, since it manipulates this page's
+   own DOM rather than navigating; styled as an inline link so it reads as
+   part of the sentence, not a separate control. */
+.plugin-needs-config-action {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--setup);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.plugin-needs-config-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* The harness's raw failure text — the full stack trace the summary above

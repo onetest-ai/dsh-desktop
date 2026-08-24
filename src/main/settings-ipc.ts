@@ -1,6 +1,6 @@
 import type { BinaryChecks } from './check-binaries'
 import type { ConfigResult, DesktopConfig } from './config'
-import { summarizeFailure } from './error-summary'
+import { isConfigurationProblem, summarizeFailure } from './error-summary'
 import type { OpenConfigFileResult } from './open-config-file'
 import { parseSpec, type PluginEntry } from './plugin-entries'
 import {
@@ -118,6 +118,16 @@ export interface PluginInfo {
    * — never the harness's raw, thousands-of-characters text.
    */
   disabledSummary?: string
+  /**
+   * How the row should present `disabledReason`, when present. `'needs-configuration'`
+   * is a setup step — cordis's own `ValidationError` rejecting this entry's
+   * `config` (missing or shaped wrong) — presented calmly with a pointer to
+   * the row's own Config editor. `'failed'` is everything else (module
+   * resolution, a runtime throw, an unfamiliar error shape) and stays the
+   * loud, danger-toned presentation. Always present when `disabledReason` is;
+   * see `error-summary.ts`'s `isConfigurationProblem`.
+   */
+  disabledKind?: 'needs-configuration' | 'failed'
 }
 
 /** Outcome of a save attempt. `warnings` carries non-blocking problems, such as a rejected hotkey. */
@@ -590,6 +600,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
           config: entry.config === undefined ? '' : JSON.stringify(entry.config, undefined, 2),
           disabledReason,
           disabledSummary: disabledReason === undefined ? undefined : summarizeFailure(disabledReason),
+          disabledKind: disabledReason === undefined ? undefined : isConfigurationProblem(disabledReason) ? 'needs-configuration' : 'failed',
         }
       })
 

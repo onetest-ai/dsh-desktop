@@ -187,7 +187,12 @@ function renderPluginRows() {
   list.textContent = ''
   for (const plugin of pluginRows) {
     const row = document.createElement('li')
-    row.className = plugin.disabledReason ? 'plugin-row plugin-row-disabled' : 'plugin-row'
+    row.className =
+      plugin.disabledKind === 'needs-configuration'
+        ? 'plugin-row plugin-row-needs-config'
+        : plugin.disabledReason
+          ? 'plugin-row plugin-row-disabled'
+          : 'plugin-row'
 
     const top = document.createElement('div')
     top.className = 'plugin-row-top'
@@ -239,37 +244,16 @@ function renderPluginRows() {
     top.append(actions)
     row.append(top)
 
-    // A plugin the running harness dropped — either it never reached the
-    // overlay (not installed, not loadable) or a boot isolated it after
-    // attributing a runtime failure to it — carries the harness's own reason
-    // here, on its own row, rather than only in the tray tooltip: this is
-    // where the user is already looking to fix it. The row shows the short
-    // extracted summary by default (see `error-summary.ts`), with the full,
-    // often-thousands-of-characters raw text one click away in an expander —
-    // the same collapsed-by-default pattern the config editor below uses, so
-    // a disabled row does not force a wall of stack trace on every glance at
-    // the list.
-    if (plugin.disabledReason) {
-      const note = document.createElement('p')
-      note.className = 'plugin-disabled-note'
-      note.textContent = `Disabled — the harness would not start with it: ${plugin.disabledSummary ?? plugin.disabledReason}`
-      row.append(note)
-
-      const detail = document.createElement('details')
-      detail.className = 'plugin-disabled-detail'
-
-      const detailSummary = document.createElement('summary')
-      detailSummary.textContent = 'Full error'
-      detail.append(detailSummary)
-
-      const pre = document.createElement('pre')
-      pre.className = 'plugin-disabled-full'
-      pre.textContent = plugin.disabledReason
-      detail.append(pre)
-
-      row.append(detail)
-    }
-
+    // Built before the disabled note below so a needs-configuration row can
+    // link straight into its own editor rather than just naming the field
+    // it needs. Collapsed to a one-line disclosure by default so a row with
+    // nothing configured stays exactly as compact as before this field
+    // existed; a row that has config set opens by default and relabels its
+    // summary, so "something is configured here" is visible without
+    // expanding every row in the list. A needs-configuration row does NOT
+    // also auto-open this: several such rows opening at once on load would
+    // read as a wall of forms rather than a calm list, and the note's own
+    // "Open Config" control is one click away regardless of row count.
     const configWrap = document.createElement('details')
     configWrap.className = 'plugin-config'
     const hasConfig = (plugin.config ?? '').trim() !== ''
@@ -299,6 +283,68 @@ function renderPluginRows() {
     })
 
     configWrap.append(textarea, configError)
+
+    // A plugin the running harness dropped — either it never reached the
+    // overlay (not installed, not loadable), a boot isolated it after
+    // attributing a runtime failure to it, or cordis rejected its config —
+    // carries the harness's own reason here, on its own row, rather than
+    // only in the tray tooltip: this is where the user is already looking
+    // to fix it. `disabledKind` (see `error-summary.ts`'s
+    // `isConfigurationProblem`) splits this into two presentations: a
+    // needs-configuration row reads as a setup step and points at the
+    // Config editor above, a genuine failure keeps the loud, danger-toned
+    // report. Both show the short extracted summary by default (see
+    // `error-summary.ts`'s `summarizeFailure`), with the full,
+    // often-thousands-of-characters raw text one click away in an expander.
+    if (plugin.disabledKind === 'needs-configuration') {
+      const note = document.createElement('p')
+      note.className = 'plugin-needs-config-note'
+      note.textContent = `Needs configuration: ${plugin.disabledSummary ?? plugin.disabledReason} `
+      const action = document.createElement('button')
+      action.type = 'button'
+      action.className = 'plugin-needs-config-action'
+      action.textContent = 'Open Config below'
+      action.addEventListener('click', () => {
+        configWrap.open = true
+        textarea.focus()
+      })
+      note.append(action)
+      row.append(note)
+
+      const detail = document.createElement('details')
+      detail.className = 'plugin-disabled-detail'
+
+      const detailSummary = document.createElement('summary')
+      detailSummary.textContent = 'Full error'
+      detail.append(detailSummary)
+
+      const pre = document.createElement('pre')
+      pre.className = 'plugin-disabled-full'
+      pre.textContent = plugin.disabledReason
+      detail.append(pre)
+
+      row.append(detail)
+    } else if (plugin.disabledReason) {
+      const note = document.createElement('p')
+      note.className = 'plugin-disabled-note'
+      note.textContent = `Disabled — the harness would not start with it: ${plugin.disabledSummary ?? plugin.disabledReason}`
+      row.append(note)
+
+      const detail = document.createElement('details')
+      detail.className = 'plugin-disabled-detail'
+
+      const detailSummary = document.createElement('summary')
+      detailSummary.textContent = 'Full error'
+      detail.append(detailSummary)
+
+      const pre = document.createElement('pre')
+      pre.className = 'plugin-disabled-full'
+      pre.textContent = plugin.disabledReason
+      detail.append(pre)
+
+      row.append(detail)
+    }
+
     row.append(configWrap)
 
     list.append(row)

@@ -124,3 +124,35 @@ function fallbackSummary(trimmed: string): string {
 function bound(text: string): string {
   return text.length <= MAX_SUMMARY_LENGTH ? text : `${text.slice(0, MAX_SUMMARY_LENGTH - 1).trimEnd()}…`
 }
+
+/**
+ * The literal prefix cordis's own `ValidationError` message always opens
+ * with, whichever cause level it appears at (see vendor/cordis's `fiber.ts`
+ * `ValidationError` constructor: `` `invalid config:\n` + issues... ``).
+ * Matched case-insensitively since Node's `cause`-chain printing can wrap or
+ * requote surrounding text but never this literal message content.
+ */
+const VALIDATION_ERROR_MARKER = /\binvalid config:/i
+
+/**
+ * Whether a plugin's `disabledReason` is a configuration-shape problem —
+ * cordis rejecting the entry's stored `config` (absent or present) against
+ * its own schema — rather than a genuine failure such as an unresolvable
+ * module or a runtime throw during boot.
+ *
+ * Classified structurally, from the literal `invalid config:` prefix
+ * cordis's `ValidationError` always opens its message with, never from the
+ * plugin's package name and never from whether the stored config happens to
+ * be empty: a plugin whose config is present but shaped wrong (a typo'd
+ * field, a wrong type) raises the same error class as one with no config at
+ * all, and both are equally a setup step, not a crash. A `disabledReason`
+ * this check does not recognize is treated as a genuine failure — the
+ * default a caller should use for presentation — since claiming "this just
+ * needs configuring" for an unrelated crash would mislead the user worse
+ * than the loud presentation it would replace.
+ * @param reason - the raw `disabledReason` text (see `PluginInfo`).
+ * @returns whether `reason` reads as a configuration-shape problem.
+ */
+export function isConfigurationProblem(reason: string): boolean {
+  return VALIDATION_ERROR_MARKER.test(reason)
+}

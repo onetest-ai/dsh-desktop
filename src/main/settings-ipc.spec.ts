@@ -223,6 +223,32 @@ describe('read', () => {
       )
       expect(plugins.find((plugin) => plugin.package === HOOKS_PACKAGE)?.disabledSummary).toBeUndefined()
     })
+
+    it("classifies a config-validation reason as needs-configuration, a non-validation reason as failed, and leaves a healthy entry's kind undefined", () => {
+      const d = deps({
+        readConfig: () => ({
+          configured: true,
+          config: withPlugins([
+            { spec: `${DECK}@0.2.1`, version: '0.2.1' },
+            { spec: '@deepseek-ai/dsh-mcp-client@1.0.0', version: '1.0.0' },
+            { spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' },
+          ]),
+        }),
+        disabledPlugins: () => ({
+          [DECK]: '@deepseek-ai/dsh-deck is not resolvable from /home/x/.dsh/plugins/x: Cannot find module',
+          '@deepseek-ai/dsh-mcp-client':
+            'failed to apply loader entry deepseek-ai-dsh-mcp-client (/home/dev/.dsh/plugins/deepseek-ai-dsh-mcp-client/lib/index.js): invalid config: - expected { transport?: "stdio", serverName: string, command: string } but got {}',
+        }),
+      })
+
+      const { plugins } = createSettingsHandlers(d).read()
+
+      expect(plugins.find((plugin) => plugin.package === DECK)?.disabledKind).toBe('failed')
+      expect(plugins.find((plugin) => plugin.package === '@deepseek-ai/dsh-mcp-client')?.disabledKind).toBe(
+        'needs-configuration',
+      )
+      expect(plugins.find((plugin) => plugin.package === HOOKS_PACKAGE)?.disabledKind).toBeUndefined()
+    })
   })
 })
 

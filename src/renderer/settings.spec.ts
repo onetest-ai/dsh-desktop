@@ -750,6 +750,46 @@ describe('plugins', () => {
     expect(classes.some((className) => className === 'plugin-row')).toBe(true)
   })
 
+  it("presents a needs-configuration row as a calmer setup step, not the failed presentation, while a genuine failure and a healthy row are unaffected", async () => {
+    const onRead = vi.fn().mockResolvedValue({
+      configured: true,
+      form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+      plugins: [
+        { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
+        {
+          spec: `${DECK}@0.2.1`,
+          package: DECK,
+          pinned: true,
+          version: '0.2.1',
+          disabledReason: 'base must be a non-empty string starting with "/", received undefined (at base)',
+          disabledKind: 'failed',
+        },
+        {
+          spec: '@deepseek-ai/dsh-mcp-client@1.0.0',
+          package: '@deepseek-ai/dsh-mcp-client',
+          pinned: true,
+          version: '1.0.0',
+          disabledReason:
+            'failed to apply loader entry deepseek-ai-dsh-mcp-client (/home/dev/.dsh/plugins/deepseek-ai-dsh-mcp-client/lib/index.js): invalid config: - expected { serverName: string } but got {}',
+          disabledSummary: 'invalid config: - expected { serverName: string } but got {}',
+          disabledKind: 'needs-configuration',
+        },
+      ],
+    })
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), onRead)
+
+    const mcpText = renderer.renderedPluginRows().find((row) => row.includes('dsh-mcp-client'))
+    expect(mcpText).toContain('Needs configuration')
+    expect(mcpText).toContain('expected { serverName: string }')
+    expect(mcpText).not.toContain('Disabled')
+    expect(mcpText).not.toContain('would not start')
+
+    const classes = renderer.renderedPluginRowClasses()
+    expect(classes.some((className) => className.includes('plugin-row-needs-config'))).toBe(true)
+    expect(classes.some((className) => className.includes('plugin-row-disabled'))).toBe(true)
+    expect(classes.some((className) => className === 'plugin-row')).toBe(true)
+  })
+
   it("shows the extracted summary inline and keeps the harness's raw reason reachable behind an expander", async () => {
     const rawReason =
       'dsh-desktop: the harness exited with code 1 before starting. { [cause]: Error: failed to apply loader entry deepseek-ai-dsh-mcp-client (/home/dev/.dsh/plugins/deepseek-ai-dsh-mcp-client/lib/index.js): invalid config: - expected { serverName: string } but got {} at Entry._init (file:///…) }'
