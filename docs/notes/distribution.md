@@ -58,11 +58,24 @@ npm run release
 
 which is `electron-builder --mac dmg -c.mac.notarize=true`. Notarization is enabled only on that script, so an ordinary `npm run dist` on a machine with no credentials still succeeds instead of failing at the upload.
 
+`build/notarize-dmg.js` then signs, notarizes, and staples the DMG itself as `afterAllArtifactBuild`. This is a second, separate submission and not redundant: electron-builder notarizes and staples the `.app`, then builds the DMG **around** it, so the container it hands out is left unsigned and without a ticket. The container is the file a person downloads and the first thing Gatekeeper evaluates. Without its own ticket the app inside still passes, but only after an online round-trip to Apple, and an unsigned container can be refused outright. The hook verifies the staple and fails the build otherwise, so a release cannot ship a DMG that only validates while Apple is reachable.
+
+`--publish never` is on the script so electron-builder does not demand `GH_TOKEN` to auto-publish; releases are created deliberately, not as a side effect of building.
+
 Confirm the result:
 
 ```sh
-spctl -a -vvv -t exec "release/mac-arm64/DeepSeek Harness.app"   # expect: accepted, source=Notarized Developer ID
-xcrun stapler validate "release/DeepSeek Harness-0.1.0-arm64.dmg"
+spctl -a -vvv -t exec "release/mac-arm64/DeepSeek Harness.app"   # accepted, source=Notarized Developer ID
+spctl -a -t open --context context:primary-signature -vvv release/*.dmg
+xcrun stapler validate release/*.dmg
+```
+
+The check that actually reflects a recipient's experience applies quarantine first, since a locally built file never carries it:
+
+```sh
+cp release/*.dmg /tmp/t.dmg
+xattr -w com.apple.quarantine "0081;00000000;Safari;$(uuidgen)" /tmp/t.dmg
+spctl -a -t open --context context:primary-signature -vvv /tmp/t.dmg
 ```
 
 ## Entitlements worth revisiting when signing for real

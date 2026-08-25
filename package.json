@@ -12,7 +12,7 @@
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "test:smoke": "playwright test tests/smoke.spec.ts",
-    "release": "npm run build && electron-builder --mac dmg -c.mac.notarize=true"
+    "release": "npm run build && electron-builder --mac dmg -c.mac.notarize=true --publish never"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
@@ -59,7 +59,8 @@
         }
       ]
     },
-    "afterPack": "build/adhoc-sign.js"
+    "afterPack": "build/adhoc-sign.js",
+    "afterAllArtifactBuild": "build/notarize-dmg.js"
   },
   "dependencies": {
     "js-yaml": "^4.3.1"
