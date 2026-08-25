@@ -1,6 +1,6 @@
 import type { BinaryChecks } from './check-binaries'
 import type { ConfigResult, DesktopConfig } from './config'
-import { isConfigurationProblem, summarizeFailure } from './error-summary'
+import { isConfigurationProblem, summarizeConfigurationNeed, summarizeFailure } from './error-summary'
 import type { OpenConfigFileResult } from './open-config-file'
 import { parseSpec, type PluginEntry } from './plugin-entries'
 import {
@@ -613,6 +613,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       const plugins: PluginInfo[] = storedPlugins.map((entry) => {
         const { package: pkg, pinnedVersion } = parseSpec(entry.spec)
         const disabledReason = disabled[pkg]
+        const needsConfiguration = disabledReason !== undefined && isConfigurationProblem(disabledReason)
         return {
           spec: entry.spec,
           package: pkg,
@@ -620,8 +621,13 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
           version: entry.version,
           config: entry.config === undefined ? '' : JSON.stringify(entry.config, undefined, 2),
           disabledReason,
-          disabledSummary: disabledReason === undefined ? undefined : summarizeFailure(disabledReason),
-          disabledKind: disabledReason === undefined ? undefined : isConfigurationProblem(disabledReason) ? 'needs-configuration' : 'failed',
+          disabledSummary:
+            disabledReason === undefined
+              ? undefined
+              : needsConfiguration
+                ? summarizeConfigurationNeed(disabledReason)
+                : summarizeFailure(disabledReason),
+          disabledKind: disabledReason === undefined ? undefined : needsConfiguration ? 'needs-configuration' : 'failed',
           clientWarning: clientWarnings[pkg],
         }
       })

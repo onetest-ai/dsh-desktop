@@ -156,3 +156,31 @@ const VALIDATION_ERROR_MARKER = /\binvalid config:/i
 export function isConfigurationProblem(reason: string): boolean {
   return VALIDATION_ERROR_MARKER.test(reason)
 }
+
+/**
+ * The actionable half of a needs-configuration failure's summary: whatever
+ * follows cordis's own `invalid config:` marker — the expected shape and
+ * what was actually supplied — with the loader-entry preamble before it
+ * dropped (`failed to apply loader entry <id> (<name>): `). That preamble
+ * names the loader id and the package, already shown on the plugin's own
+ * Settings row; it gives the user nothing to act on, unlike the schema that
+ * follows, which is the only real guidance a needs-configuration error
+ * carries.
+ *
+ * Falls back to `summarizeFailure`'s own extraction — never to the raw,
+ * unbounded text — when the marker is not found in the summarized text, or
+ * when everything after it is blank: an unfamiliar validation-error shape
+ * (this function is not a parser for any one plugin's schema, only for
+ * cordis's own fixed `invalid config:` wrapper) still gets a useful summary
+ * rather than an empty one.
+ * @param reason - the raw `disabledReason` text; the caller has already
+ *   confirmed it is a configuration problem via `isConfigurationProblem`.
+ * @returns a summary leading with the expected shape.
+ */
+export function summarizeConfigurationNeed(reason: string): string {
+  const summarized = summarizeFailure(reason)
+  const match = VALIDATION_ERROR_MARKER.exec(summarized)
+  if (match === null) return summarized
+  const after = summarized.slice(match.index + match[0].length).trim()
+  return after === '' ? summarized : after
+}

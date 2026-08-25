@@ -91,7 +91,7 @@ describe('hooksConfig', () => {
 
 describe('patchOverlay', () => {
   it('mounts a plugin at the given name, single-quote-escaped', () => {
-    const overlay = patchOverlay([{ package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: "/tmp/o'brien/lib/index.js", name: "/tmp/o'brien/lib/index.js", configPath: "/tmp/o'brien/hooks.json" }], [])
+    const { overlay } = patchOverlay([{ package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: "/tmp/o'brien/lib/index.js", name: "/tmp/o'brien/lib/index.js", configPath: "/tmp/o'brien/hooks.json" }], [])
     expect(overlay).toContain("configPath: '/tmp/o''brien/hooks.json'")
     expect(overlay).toContain("name: '/tmp/o''brien/lib/index.js'")
     expect(overlay).not.toContain("name: '@deepseek-ai/dsh-hooks-claude-code'")
@@ -103,7 +103,7 @@ describe('patchOverlay', () => {
     // linked the entry into the profile's `node_modules`: the overlay uses
     // the bare name a user recognises, while `entryPath` is kept alongside
     // it (in `RuntimeFiles.ready`) purely for `attributeBootFailure`.
-    const overlay = patchOverlay(
+    const { overlay } = patchOverlay(
       [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '@onetest/dsh-deck' }],
       [],
     )
@@ -115,14 +115,14 @@ describe('patchOverlay', () => {
     // cordis's own config resolution rejects an insert with no `config` node
     // at all ("expected a config object"); an empty object satisfies it
     // without giving a generic entry anything to configure.
-    const overlay = patchOverlay([{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js' }], [])
+    const { overlay } = patchOverlay([{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js' }], [])
     expect(overlay).toContain("name: '/tmp/deck/lib/index.js'")
     expect(overlay).toContain('config: {}')
     expect(overlay).not.toContain('configPath')
   })
 
   it('mounts every ready entry, each under its own id', () => {
-    const overlay = patchOverlay(
+    const { overlay } = patchOverlay(
       [
         { package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: '/tmp/hooks/lib/index.js', name: '/tmp/hooks/lib/index.js', configPath: '/tmp/hooks.json' },
         { package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js' },
@@ -136,14 +136,14 @@ describe('patchOverlay', () => {
   })
 
   it('omits an unavailable entry and records the reason as a comment', () => {
-    const overlay = patchOverlay([], [{ package: '@onetest/dsh-deck', reason: "cannot find package 'x'" }])
+    const { overlay } = patchOverlay([], [{ package: '@onetest/dsh-deck', reason: "cannot find package 'x'" }])
     expect(overlay).not.toContain('insert')
     expect(overlay).toContain("@onetest/dsh-deck was omitted: cannot find package 'x'")
     expect(overlay).toContain('port: 0')
   })
 
   it('mounts a ready entry while separately omitting a broken one', () => {
-    const overlay = patchOverlay(
+    const { overlay } = patchOverlay(
       [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js' }],
       [{ package: '@deepseek-ai/dsh-hooks-claude-code', reason: 'not installed yet' }],
     )
@@ -152,7 +152,7 @@ describe('patchOverlay', () => {
   })
 
   it("emits an entry's own stored config as a flow-style YAML mapping", () => {
-    const overlay = patchOverlay(
+    const { overlay } = patchOverlay(
       [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js', config: { base: '/x', nested: { n: 1 } } }],
       [],
     )
@@ -161,12 +161,12 @@ describe('patchOverlay', () => {
   })
 
   it('keeps the empty-object default for an entry with no stored config', () => {
-    const overlay = patchOverlay([{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js', config: undefined }], [])
+    const { overlay } = patchOverlay([{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '/tmp/deck/lib/index.js', config: undefined }], [])
     expect(overlay).toContain('config: {}')
   })
 
   it("mounts a package's own declared patch rows, its own id and name, instead of a synthesized row", () => {
-    const overlay = patchOverlay(
+    const { overlay } = patchOverlay(
       [
         {
           package: '@onetest/dsh-deck',
@@ -183,7 +183,7 @@ describe('patchOverlay', () => {
   })
 
   it("replaces a declared row's own config with the user's stored config, never merging", () => {
-    const overlay = patchOverlay(
+    const { overlay } = patchOverlay(
       [
         {
           package: '@onetest/dsh-deck',
@@ -201,7 +201,7 @@ describe('patchOverlay', () => {
   })
 
   it('keeps every other declared field (e.g. an extra companion row) untouched', () => {
-    const overlay = patchOverlay(
+    const { overlay } = patchOverlay(
       [
         {
           package: '@onetest/dsh-deck',
@@ -220,7 +220,7 @@ describe('patchOverlay', () => {
   })
 
   it('falls back to a synthesized row when a declared row id collides with an already-used id', () => {
-    const overlay = patchOverlay(
+    const { overlay } = patchOverlay(
       [
         {
           package: '@onetest/dsh-webserver-lookalike',
@@ -240,7 +240,7 @@ describe('patchOverlay', () => {
   it('falls back to a synthesized row when a package with no configPath still carries an empty declared patch', () => {
     // Defensive: `loadDeclaredPatchRows` never returns an empty array (see
     // its own tests), but `patchOverlay` must not crash if a caller ever did.
-    const overlay = patchOverlay(
+    const { overlay } = patchOverlay(
       [{ package: '@onetest/dsh-deck', entryPath: '/tmp/deck/lib/index.js', name: '@onetest/dsh-deck', declaredPatch: [] }],
       [],
     )
@@ -248,7 +248,7 @@ describe('patchOverlay', () => {
   })
 
   it('ignores a declared patch when the privileged configPath override is set', () => {
-    const overlay = patchOverlay(
+    const { overlay } = patchOverlay(
       [
         {
           package: '@deepseek-ai/dsh-hooks-claude-code',
@@ -266,7 +266,7 @@ describe('patchOverlay', () => {
   })
 
   it('prefers the privileged configPath over a stored config when both are set', () => {
-    const overlay = patchOverlay(
+    const { overlay } = patchOverlay(
       [
         {
           package: '@deepseek-ai/dsh-hooks-claude-code',
@@ -447,11 +447,11 @@ describe('writeRuntimeFiles', () => {
     expect(readFileSync(files.hooksPath, 'utf8')).toContain('127.0.0.1:44002')
   })
 
-  it('reports every mounted entry, package paired with its resolved entry file, for `attributeBootFailure` to consult', () => {
+  it('reports every mounted row, package paired with its overlay id and name, for `attributeBootFailure` to consult', () => {
     const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
     const files = writeRuntimeFiles(directory, 44001, [ready('@onetest/dsh-deck', '/irrelevant/lib/index.js')], alwaysLoadable)
 
-    expect(files.ready).toEqual([{ package: '@onetest/dsh-deck', entryPath: '/irrelevant/lib/index.js' }])
+    expect(files.ready).toEqual([{ package: '@onetest/dsh-deck', id: 'onetest-dsh-deck', name: '/irrelevant/lib/index.js' }])
   })
 
   it("threads a ready entry's own declared patch rows through resolveDeclaredPatch into the overlay", () => {
@@ -479,30 +479,55 @@ describe('writeRuntimeFiles', () => {
 })
 
 describe('attributeBootFailure', () => {
-  const deck = { package: '@onetest/dsh-deck', entryPath: '/dsh-home/runtimes/x/@onetest/dsh-deck/lib/index.js' }
-  const bridge = { package: '@deepseek-ai/dsh-hooks-claude-code', entryPath: '/dsh-home/runtimes/x/@deepseek-ai/dsh-hooks-claude-code/lib/index.js' }
+  const deck = { package: '@onetest/dsh-deck', id: 'onetest-dsh-deck', name: '/dsh-home/runtimes/x/@onetest/dsh-deck/lib/index.js' }
+  const bridge = { package: '@deepseek-ai/dsh-hooks-claude-code', id: 'deepseek-ai-dsh-hooks-claude-code', name: '/dsh-home/runtimes/x/@deepseek-ai/dsh-hooks-claude-code/lib/index.js' }
 
-  it('attributes a failure to the one entry whose resolved path appears in the message', () => {
-    const message = `failed to apply loader entry onetest-dsh-deck (${deck.entryPath}): invalid config: - base must be a non-empty string starting with "/", received undefined (at base)`
+  it("attributes the user's real needs-configuration failure to the one plugin it names, the other left with no reason", () => {
+    // Verbatim wording from the reported regression: two configured
+    // plugins, both linked by bare package name (see
+    // `docs/notes/plugin-link-by-name.md`), only the mcp client named.
+    const mcpClient = { package: '@deepseek-ai/dsh-mcp-client', id: 'deepseek-ai-dsh-mcp-client', name: '@deepseek-ai/dsh-mcp-client' }
+    const healthyDeck = { package: '@onetest/dsh-deck', id: 'onetest-dsh-deck', name: '@onetest/dsh-deck' }
+    const message =
+      'failed to apply loader entry deepseek-ai-dsh-mcp-client (@deepseek-ai/dsh-mcp-client): invalid config: - expected { transport?: "stdio", serverName: string, command: string, args?: string[], env?: { [key: string]: string }, cwd?: string, toolCallTimeoutMs?: number, failOnStartupError?: boolean } | { transport?: "streamable-http", … } but got {}'
+    expect(attributeBootFailure(message, [mcpClient, healthyDeck])).toBe(mcpClient.package)
+  })
+
+  it('attributes a failure to the one entry whose resolved path (not a bare package name) appears in the message, for an entry linking fell back to', () => {
+    const message = `failed to apply loader entry onetest-dsh-deck (${deck.name}): invalid config: - base must be a non-empty string starting with "/", received undefined (at base)`
     expect(attributeBootFailure(message, [deck, bridge])).toBe(deck.package)
   })
 
-  it('is unattributable when the message names none of the ready entries', () => {
+  it("attributes to a package's own declared bundle-patch row by the id and name it actually declared, not a derived id", () => {
+    // `@onetest/dsh-deck`'s own `cordis.patch.yml` mounts it as `id: deck`
+    // (`docs/notes/declared-bundle-patch.md`) — neither the package name nor
+    // `insertId`'s derived `onetest-dsh-deck`. The row-to-package mapping
+    // this asserts comes from `patchOverlay`'s own generation, not a
+    // re-derivation from the message.
+    const declared = { package: '@onetest/dsh-deck', id: 'deck', name: '@onetest/dsh-deck' }
+    const message = 'failed to apply loader entry deck (@onetest/dsh-deck): invalid config: - base must be a non-empty string starting with "/", received undefined (at base)'
+    expect(attributeBootFailure(message, [declared, bridge])).toBe(declared.package)
+  })
+
+  it('is unattributable when the message names none of the ready rows', () => {
     expect(attributeBootFailure('the harness crashed on an unrelated assertion', [deck, bridge])).toBeUndefined()
   })
 
-  it('is unattributable when the message happens to mention more than one entry path', () => {
+  it('is unattributable when the message genuinely names more than one ready row', () => {
     // Deliberately ambiguous: naming which of two candidates actually broke
     // would risk dropping a healthy plugin while leaving the real cause
     // running, so neither is picked.
-    const message = `${deck.entryPath} and ${bridge.entryPath} both appear in this message`
+    const message = `both (${deck.name}) and (${bridge.name}) appear in this message`
     expect(attributeBootFailure(message, [deck, bridge])).toBeUndefined()
   })
 
-  it('never matches the sanitized loader-entry id alone, only the resolved path', () => {
-    // The id (`onetest-dsh-deck`) is not unique the way the path is — two
-    // distinct scoped package names can sanitize to the same id — so a
-    // message carrying only the id and not the path is unattributable here.
-    expect(attributeBootFailure('failed to apply loader entry onetest-dsh-deck: some other error', [deck])).toBeUndefined()
+  it('falls back to the id only when it singles out exactly one row, never on a collision between two distinct packages sharing one sanitized id', () => {
+    // `@a-b/c` and `@a/b-c` both sanitize to `a-b-c` — the collision a
+    // previous version of this function avoided entirely by matching paths
+    // instead; the id fallback here is used only once no row's own `name`
+    // matched, and only when exactly one row carries the id.
+    const a = { package: '@a-b/c', id: 'a-b-c', name: '@a-b/c' }
+    const b = { package: '@a/b-c', id: 'a-b-c', name: '@a/b-c' }
+    expect(attributeBootFailure('failed to apply loader entry a-b-c (unrecognized): some other error', [a, b])).toBeUndefined()
   })
 })

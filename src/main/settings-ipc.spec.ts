@@ -250,6 +250,26 @@ describe('read', () => {
       )
       expect(plugins.find((plugin) => plugin.package === HOOKS_PACKAGE)?.disabledKind).toBeUndefined()
     })
+
+    it('drops the loader-entry preamble from a needs-configuration summary, keeping the expected shape', () => {
+      const d = deps({
+        readConfig: () => ({
+          configured: true,
+          config: withPlugins([{ spec: '@deepseek-ai/dsh-mcp-client@1.0.0', version: '1.0.0' }]),
+        }),
+        disabledPlugins: () => ({
+          '@deepseek-ai/dsh-mcp-client':
+            'failed to apply loader entry deepseek-ai-dsh-mcp-client (@deepseek-ai/dsh-mcp-client): invalid config: - expected { transport?: "stdio", serverName: string, command: string } but got {}',
+        }),
+      })
+
+      const { plugins } = createSettingsHandlers(d).read()
+      const summary = plugins.find((plugin) => plugin.package === '@deepseek-ai/dsh-mcp-client')?.disabledSummary
+
+      expect(summary).not.toContain('failed to apply loader entry')
+      expect(summary).toContain('expected { transport?: "stdio"')
+      expect(summary).toContain('but got {}')
+    })
   })
 })
 

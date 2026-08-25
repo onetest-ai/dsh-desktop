@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { isConfigurationProblem, summarizeFailure } from './error-summary'
+import { isConfigurationProblem, summarizeConfigurationNeed, summarizeFailure } from './error-summary'
+
+/**
+ * The reported regression's exact wording — a plugin linked by bare package
+ * name (see `docs/notes/plugin-link-by-name.md`), whose overlay row therefore
+ * names it `(@deepseek-ai/dsh-mcp-client)` rather than a path, unlike
+ * `REAL_MCP_CLIENT_REASON` below (captured before that migration).
+ */
+const NEEDS_CONFIG_REASON =
+  'failed to apply loader entry deepseek-ai-dsh-mcp-client (@deepseek-ai/dsh-mcp-client): invalid config: - expected { transport?: "stdio", serverName: string, command: string, args?: string[], env?: { [key: string]: string }, cwd?: string, toolCallTimeoutMs?: number, failOnStartupError?: boolean } | { transport?: "streamable-http", … } but got {}'
 
 /**
  * The raw `disabledReason` text a real boot failure produced for
@@ -83,5 +92,41 @@ describe('isConfigurationProblem', () => {
     const reason = 'TypeError: cannot read properties of undefined (reading \'foo\') at Entry._init (file:///plugin/lib/index.js:12:3)'
 
     expect(isConfigurationProblem(reason)).toBe(false)
+  })
+})
+
+describe('summarizeConfigurationNeed', () => {
+  it("drops the loader-entry preamble from the user's real needs-configuration reason, keeping the expected shape", () => {
+    const summary = summarizeConfigurationNeed(NEEDS_CONFIG_REASON)
+
+    expect(summary).not.toContain('failed to apply loader entry')
+    expect(summary).not.toContain('deepseek-ai-dsh-mcp-client')
+    expect(summary).not.toContain('@deepseek-ai/dsh-mcp-client')
+    expect(summary).toContain('transport?: "stdio"')
+    expect(summary).toContain('serverName: string')
+    expect(summary).toContain('but got {}')
+  })
+
+  it('keeps the expected shape from the older, path-referenced real reason too', () => {
+    const summary = summarizeConfigurationNeed(REAL_MCP_CLIENT_REASON)
+
+    expect(summary).not.toContain('failed to apply loader entry')
+    expect(summary).not.toContain('/home/dev/.dsh/plugins')
+    expect(summary).toContain('transport?: "stdio"')
+  })
+
+  it('falls back to the full summary when no `invalid config:` marker survives extraction', () => {
+    const reason = 'ENOENT: no such file or directory, open \'/home/x/.dsh/plugins/x/manifest.json\''
+
+    expect(summarizeConfigurationNeed(reason)).toBe(summarizeFailure(reason))
+  })
+
+  it('falls back to the full summary rather than an empty string when nothing follows the marker', () => {
+    const reason = 'failed to apply loader entry x (@x/y): invalid config:'
+
+    const summary = summarizeConfigurationNeed(reason)
+
+    expect(summary.length).toBeGreaterThan(0)
+    expect(summary).toBe(summarizeFailure(reason))
   })
 })

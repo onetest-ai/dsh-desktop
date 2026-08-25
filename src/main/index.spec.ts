@@ -223,17 +223,32 @@ const preflightMock = vi.fn(() => ({ ok: true }))
 vi.mock('./preflight', () => ({ preflight: (...args: unknown[]) => preflightMock(...(args as [])) }))
 
 /**
+ * A fixture-only mirror of `runtime-files.ts`'s `insertId`: collapses every
+ * character outside `[a-zA-Z0-9]` to `-`. Kept local (not imported) so this
+ * file's mocks stay independent of the module under test's internals; only
+ * the sanitizing rule, not the function itself, needs to match.
+ */
+function sanitizedId(pkg: string): string {
+  return pkg.replaceAll(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+/**
  * Derives `ready`/`omitted` from the `statuses` `bootNow` actually passed in
  * for this attempt, so an isolation retry's exclusion (which drops entries
  * before `pluginStatus` is even called) is reflected the same way the real
  * `writeRuntimeFiles` would reflect it, instead of a canned return value that
- * can't tell one attempt's surviving entries from another's.
+ * can't tell one attempt's surviving entries from another's. `ready` rows
+ * default to `status.entryPath` as their overlay `name` — the same fallback
+ * `writeRuntimeFiles`'s own default `resolveName` uses — since this default
+ * mock implementation is never given a `resolveName` of its own.
  */
 const writeRuntimeFilesMock = vi.fn((_directory: string, _port: number, statuses: PluginStatus[] = []) => ({
   patchPath: '/tmp/p.yml',
   hooksPath: '/tmp/h.json',
   omitted: statuses.filter((s): s is Extract<PluginStatus, { kind: 'unavailable' }> => s.kind === 'unavailable').map((s) => ({ package: s.package, reason: s.reason })),
-  ready: statuses.filter((s): s is Extract<PluginStatus, { kind: 'ready' }> => s.kind === 'ready').map((s) => ({ package: s.package, entryPath: s.entryPath })),
+  ready: statuses
+    .filter((s): s is Extract<PluginStatus, { kind: 'ready' }> => s.kind === 'ready')
+    .map((s) => ({ package: s.package, id: sanitizedId(s.package), name: s.entryPath })),
 }))
 vi.mock('./runtime-files', async () => {
   const actual = await vi.importActual<typeof import('./runtime-files')>('./runtime-files')
@@ -398,7 +413,9 @@ beforeEach(() => {
     patchPath: '/tmp/p.yml',
     hooksPath: '/tmp/h.json',
     omitted: statuses.filter((s): s is Extract<PluginStatus, { kind: 'unavailable' }> => s.kind === 'unavailable').map((s) => ({ package: s.package, reason: s.reason })),
-    ready: statuses.filter((s): s is Extract<PluginStatus, { kind: 'ready' }> => s.kind === 'ready').map((s) => ({ package: s.package, entryPath: s.entryPath })),
+    ready: statuses
+      .filter((s): s is Extract<PluginStatus, { kind: 'ready' }> => s.kind === 'ready')
+      .map((s) => ({ package: s.package, id: sanitizedId(s.package), name: s.entryPath })),
   }))
   capturedSettingsDeps = undefined
   pluginStatusMock.mockImplementation(() => ({
@@ -474,7 +491,7 @@ describe('boot', () => {
         patchPath: '/tmp/p.yml',
         hooksPath: '/tmp/h.json',
         omitted: [],
-        ready: [{ package: readyStatus.package, entryPath: name }],
+        ready: [{ package: readyStatus.package, id: sanitizedId(readyStatus.package), name }],
       }
     })
 
@@ -500,7 +517,7 @@ describe('boot', () => {
         patchPath: '/tmp/p.yml',
         hooksPath: '/tmp/h.json',
         omitted: [],
-        ready: [{ package: readyStatus.package, entryPath: name }],
+        ready: [{ package: readyStatus.package, id: sanitizedId(readyStatus.package), name }],
       }
     })
 

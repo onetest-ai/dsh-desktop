@@ -24,7 +24,7 @@ import {
 import { ensurePluginLink, reconcilePluginLinks } from './plugin-link'
 import { ensurePluginPresets, reconcilePluginPresets } from './plugin-presets'
 import { preflight } from './preflight'
-import { attributeBootFailure, runtimeFilePaths, writeRuntimeFiles } from './runtime-files'
+import { attributeBootFailure, runtimeFilePaths, writeRuntimeFiles, type AttributionRow } from './runtime-files'
 import type { InstallDeps } from './runtime-install'
 import { dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
 import { createSettingsHandlers } from './settings-ipc'
@@ -583,7 +583,7 @@ type BootAttempt =
       stage: 'server'
       error: Error
       insertedCount: number
-      ready: { package: string; entryPath: string }[]
+      ready: AttributionRow[]
       clientWarnings: { package: string; reason: string }[]
     }
 
@@ -607,7 +607,7 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
   let patchPath: string
   let hooksNote: string | undefined
   let omitted: { package: string; reason: string }[] = []
-  let ready: { package: string; entryPath: string }[] = []
+  let ready: AttributionRow[] = []
   let clientWarnings: { package: string; reason: string }[] = []
   try {
     // Where each configured plugin entry would load from, or why it is
