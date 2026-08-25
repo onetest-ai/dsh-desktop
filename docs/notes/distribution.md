@@ -58,7 +58,13 @@ npm run release
 
 which is `electron-builder --mac dmg -c.mac.notarize=true`. Notarization is enabled only on that script, so an ordinary `npm run dist` on a machine with no credentials still succeeds instead of failing at the upload.
 
-`build/notarize-dmg.js` then signs, notarizes, and staples the DMG itself as `afterAllArtifactBuild`. This is a second, separate submission and not redundant: electron-builder notarizes and staples the `.app`, then builds the DMG **around** it, so the container it hands out is left unsigned and without a ticket. The container is the file a person downloads and the first thing Gatekeeper evaluates. Without its own ticket the app inside still passes, but only after an online round-trip to Apple, and an unsigned container can be refused outright. The hook verifies the staple and fails the build otherwise, so a release cannot ship a DMG that only validates while Apple is reachable.
+`build/notarize-dmg.js` then signs, notarizes, and staples the DMG itself as `afterAllArtifactBuild`. **This is optional polish, not a requirement** — measured, not assumed:
+
+An unsigned, unnotarized DMG containing a notarized and stapled app, carrying `com.apple.quarantine` and opened through LaunchServices (the Finder double-click path), mounts with no block, propagates quarantine to the volume, and the app inside assesses as `accepted, source=Notarized Developer ID`. Notarizing the app is what makes distribution work; the container rides along.
+
+The one thing that changes is `spctl -a -t open --context context:primary-signature` against the DMG, which reports `rejected, source=no usable signature` for an unsigned container and `accepted` for a notarized one. That assessment is a signature query, not the gate that decides whether a disk image may mount — reading it as such is the mistake that produced this hook.
+
+Keeping it costs one extra notary submission per release (a couple of minutes, on release builds only) and buys a container that assesses cleanly if anyone inspects it directly, matching Apple's guidance to notarize what you actually distribute. Removing it would cost users nothing. The hook validates its own staple and fails the build otherwise, so if it is kept, a release cannot ship a DMG that only validates while Apple is reachable.
 
 `--publish never` is on the script so electron-builder does not demand `GH_TOKEN` to auto-publish; releases are created deliberately, not as a side effect of building.
 
