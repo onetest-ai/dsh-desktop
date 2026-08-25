@@ -290,6 +290,8 @@ interface Renderer {
   setMcpTokenCalls: Array<[string, string]>
   /** Calls made to `settings.clearMcpToken`. */
   clearMcpTokenCalls: string[]
+  /** Holds `settings.setMcpToken` open until the given promise settles, as a real harness restart does. */
+  setMcpTokenBlocksUntil(gate: Promise<void>): void
   /** How many times `settings.read` has been called so far (the initial load, plus one per reload). */
   readCallCount(): number
 }
@@ -300,7 +302,7 @@ function declaredTabIds(): string[] {
 }
 
 /** The MCP half of a read result: the tab off, with nothing configured. */
-const NO_MCP = { secureStoreAvailable: true, tokens: {}, presets: [] }
+const NO_MCP = { tokens: {}, presets: [] }
 
 /** The MCP half of a read result's form. */
 const NO_MCP_FORM = { enabled: false, servers: [] }
@@ -379,6 +381,7 @@ async function load(
   const validatePluginCalls: Array<[string, string[]]> = []
   const checkBinariesCalls: Array<[string, string]> = []
   const setMcpTokenCalls: Array<[string, string]> = []
+  let setMcpTokenGate: Promise<void> | undefined
   const clearMcpTokenCalls: string[] = []
   const defaultCheckBinaries: CheckBinariesOutcome = async () => ({
     pnpm: { ok: true, version: '9.1.0' },
@@ -412,6 +415,7 @@ async function load(
     }),
     setMcpToken: vi.fn(async (id: string, token: string) => {
       setMcpTokenCalls.push([id, token])
+      if (setMcpTokenGate !== undefined) await setMcpTokenGate
       return token.trim() === '' ? { ok: false, message: 'Enter a token, or use Remove to clear the stored one.' } : { ok: true }
     }),
     clearMcpToken: vi.fn(async (id: string) => {
@@ -543,6 +547,9 @@ async function load(
     mcpPresetNote: () => elements.get('mcp-preset-note')?.textContent,
     setMcpTokenCalls,
     clearMcpTokenCalls,
+    setMcpTokenBlocksUntil: (gate) => {
+      setMcpTokenGate = gate
+    },
     renderedPluginRows: () => rows().map((row) => textOf(row)),
     renderedPluginRowClasses: () => rows().map((row) => row.className),
     acceptPluginUpdateCalls,
@@ -1584,13 +1591,13 @@ describe('MCP tab', () => {
    */
   function readWithMcp(
     mcpForm: { enabled: boolean; servers: unknown[] },
-    mcpInfo: Partial<{ secureStoreAvailable: boolean; tokens: Record<string, boolean> }> = {},
+    mcpInfo: Partial<{ tokens: Record<string, boolean> }> = {},
   ) {
     return async () => ({
       configured: true,
       form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcp: mcpForm },
       plugins: [],
-      mcp: { secureStoreAvailable: true, tokens: {}, presets: PRESETS, ...mcpInfo },
+      mcp: { tokens: {}, presets: PRESETS, ...mcpInfo },
     })
   }
 
@@ -1733,6 +1740,24 @@ describe('MCP tab', () => {
     expect(JSON.stringify(save.mock.calls)).not.toContain('tvly-abc')
   })
 
+  it('says what it is doing while the harness restarts, which takes many seconds', async () => {
+    let release = (): void => {}
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [TAVILY] }))
+    renderer.setMcpTokenBlocksUntil(new Promise<void>((resolve) => (release = resolve)))
+    const pending = renderer.saveMcpToken('tavily', 'tvly-abc')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(renderer.renderedMcpRows().join(' ')).toContain('restarting the agent')
+    release()
+    await pending
+  })
+
+  it('restores the previous status when the save is refused, rather than claiming forever', async () => {
+    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [TAVILY] }))
+    await renderer.saveMcpToken('tavily', '   ')
+    expect(renderer.renderedMcpRows().join(' ')).not.toContain('restarting the agent')
+  })
+
   it('clears a stored token through main', async () => {
     const renderer = await load(
       async () => ({ ok: true, warnings: [] }),
@@ -1740,15 +1765,5 @@ describe('MCP tab', () => {
     )
     await renderer.clearMcpToken('tavily')
     expect(renderer.clearMcpTokenCalls).toEqual(['tavily'])
-  })
-
-  it('offers no token controls on a machine with no secure store, and says why', async () => {
-    const renderer = await load(
-      async () => ({ ok: true, warnings: [] }),
-      readWithMcp({ enabled: true, servers: [TAVILY] }, { secureStoreAvailable: false }),
-    )
-    expect(renderer.renderedMcpRows().join(' ')).toContain('no secure credential store')
-    await renderer.saveMcpToken('tavily', 'tvly-abc')
-    expect(renderer.setMcpTokenCalls).toEqual([])
   })
 })

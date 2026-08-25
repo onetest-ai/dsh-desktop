@@ -58,7 +58,7 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     disabledPlugins: vi.fn(() => ({})),
     clientLinkWarnings: vi.fn(() => ({})),
     openConfigFile: vi.fn(async () => ({ ok: true }) as const),
-    mcpSecrets: { available: () => true, has: () => false, set: vi.fn(), clear: vi.fn(), reconcile: vi.fn() },
+    mcpSecrets: { has: () => false, set: vi.fn(), clear: vi.fn(), reconcile: vi.fn() },
     restartHarness: vi.fn(async () => {}),
     ...overrides,
   }
@@ -70,7 +70,7 @@ describe('read', () => {
       configured: true,
       form: expect.objectContaining({ kind: 'local', repo: REPO, notifyPort: '43117' }),
       plugins: [],
-      mcp: { secureStoreAvailable: true, tokens: {}, presets: expect.any(Array) },
+      mcp: { tokens: {}, presets: expect.any(Array) },
     })
   })
 
@@ -80,7 +80,7 @@ describe('read', () => {
       configured: false,
       form: expect.objectContaining({ repo: '', notifyPort: '43117' }),
       plugins: [],
-      mcp: { secureStoreAvailable: true, tokens: {}, presets: expect.any(Array) },
+      mcp: { tokens: {}, presets: expect.any(Array) },
     })
   })
 
@@ -1093,16 +1093,9 @@ describe('MCP', () => {
       const stored: DesktopConfig = { ...STORED, mcp: { enabled: true, servers: [TAVILY] } }
       const d = deps({
         readConfig: () => ({ configured: true, config: stored }),
-        mcpSecrets: { available: () => true, has: (id) => id === 'tavily', set: vi.fn(), clear: vi.fn(), reconcile: vi.fn() },
+        mcpSecrets: { has: (id) => id === 'tavily', set: vi.fn(), clear: vi.fn(), reconcile: vi.fn() },
       })
-      expect(createSettingsHandlers(d).read().mcp).toMatchObject({ secureStoreAvailable: true, tokens: { tavily: true } })
-    })
-
-    it('reports a machine with no secure store, so the token fields can say so', () => {
-      const d = deps({
-        mcpSecrets: { available: () => false, has: () => false, set: vi.fn(), clear: vi.fn(), reconcile: vi.fn() },
-      })
-      expect(createSettingsHandlers(d).read().mcp.secureStoreAvailable).toBe(false)
+      expect(createSettingsHandlers(d).read().mcp).toMatchObject({ tokens: { tavily: true } })
     })
   })
 
@@ -1128,20 +1121,22 @@ describe('MCP', () => {
       expect(d.restartHarness).not.toHaveBeenCalled()
     })
 
-    it('reports the store being unavailable instead of pretending it saved', async () => {
+    it('reports a failed write instead of pretending it saved', async () => {
       const d = deps({
         mcpSecrets: {
-          available: () => false,
           has: () => false,
           set: vi.fn(() => {
-            throw new Error('no secure credential store')
+            throw new Error("EACCES: permission denied, open '/home/.dsh/desktop-secrets.json'")
           }),
           clear: vi.fn(),
           reconcile: vi.fn(),
         },
       })
       const result = await createSettingsHandlers(d).setMcpToken('tavily', 'tvly-abc')
-      expect(result).toEqual({ ok: false, message: 'no secure credential store' })
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.message).toContain('EACCES')
+      // No restart: nothing changed, so respawning the harness would only
+      // interrupt the user for a write that never landed.
       expect(d.restartHarness).not.toHaveBeenCalled()
     })
 

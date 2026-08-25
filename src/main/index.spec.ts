@@ -127,13 +127,6 @@ vi.mock('electron', () => ({
   Notification: class {
     show(): void {}
   },
-  // Reversible stand-in for the real OS-backed store, so a boot that reads an
-  // MCP token exercises the same `secrets.ts` path production does.
-  safeStorage: {
-    isEncryptionAvailable: () => true,
-    encryptString: (plain: string) => Buffer.from(`enc:${plain}`, 'utf8'),
-    decryptString: (encrypted: Buffer) => encrypted.toString('utf8').slice(4),
-  },
 }))
 
 const createWindow = vi.fn(() => fake.window)
@@ -1325,7 +1318,7 @@ describe('MCP servers at boot', () => {
   it('carries each enabled server token to the harness child by environment, never in the overlay', async () => {
     writeFileSync(
       join(mcpHome, 'desktop-secrets.json'),
-      JSON.stringify({ tavily: Buffer.from('enc:tvly-abc', 'utf8').toString('base64') }),
+      JSON.stringify({ version: 1, tokens: { tavily: 'tvly-abc' } }),
     )
     withMcp({ enabled: true, clientVersion: '1.2.3', servers: [TAVILY] })
     await bootReady()

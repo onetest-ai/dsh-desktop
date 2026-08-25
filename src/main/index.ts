@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, Notification, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, Notification, shell } from 'electron'
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadDeclaredPatchRows } from './bundle-patch'
@@ -148,7 +148,7 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
  * @returns the variables to add to the child's environment.
  */
 function mcpEnv(config: DesktopConfig): Record<string, string> {
-  return serverEnv(config.mcp, (id) => getSecret(safeStorage, secretsPath(DSH_HOME), id))
+  return serverEnv(config.mcp, (id) => getSecret(secretsPath(DSH_HOME), id))
 }
 
 /**
@@ -279,9 +279,8 @@ const settingsHandlers = createSettingsHandlers({
   clientLinkWarnings: () => Object.fromEntries(clientLinkWarnings),
   openConfigFile: () => openConfigFile(CONFIG_PATH, existsSync, (path) => shell.openPath(path)),
   mcpSecrets: {
-    available: () => safeStorage.isEncryptionAvailable(),
     has: (id) => hasSecret(secretsPath(DSH_HOME), id),
-    set: (id, value) => setSecret(safeStorage, secretsPath(DSH_HOME), id, value),
+    set: (id, value) => setSecret(secretsPath(DSH_HOME), id, value),
     clear: (id) => deleteSecret(secretsPath(DSH_HOME), id),
     reconcile: (keep) => reconcileSecrets(secretsPath(DSH_HOME), keep),
   },

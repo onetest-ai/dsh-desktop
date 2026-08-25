@@ -2,55 +2,12 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /**
- * The OS-backed encryption this store writes through — Electron's
- * `safeStorage`, narrowed to the three methods used here so tests can supply
- * their own and so nothing else in the app depends on Electron's shape.
- *
- * `safeStorage` is already the per-platform abstraction: it encrypts through
- * the Keychain on macOS, DPAPI on Windows, and libsecret/kwallet on Linux,
- * choosing the backend itself. This app deliberately does not add a second
- * layer of platform selection over it.
- */
-export interface SecretCrypto {
-  /**
-   * Whether a real OS-backed key is available for this session.
-   * @returns false when the platform has no usable secure store.
-   */
-  isEncryptionAvailable(): boolean
-  /**
-   * Encrypt one secret with the OS-backed key.
-   * @param plainText - the secret.
-   * @returns the ciphertext.
-   */
-  encryptString(plainText: string): Buffer
-  /**
-   * Decrypt one previously encrypted secret.
-   * @param encrypted - ciphertext produced by `encryptString` on this machine.
-   * @returns the secret.
-   */
-  decryptString(encrypted: Buffer): string
-}
-
-/**
- * Raised when a secret cannot be stored because this machine has no OS-backed
- * secure store. Distinguished from an ordinary write failure because the
- * caller's response differs: there is nothing to retry, and the user has to
- * be told their desktop environment cannot hold the secret at all.
- */
-export class SecretStoreUnavailableError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'SecretStoreUnavailableError'
-  }
-}
-
-/**
- * The file secrets are stored in, beside `desktop.json`.
+ * The file MCP server tokens are stored in, beside `desktop.json`.
  *
  * A separate file rather than a field in `desktop.json`: that file is
  * hand-editable and its "Open config file…" button puts it in front of the
- * user, which is the wrong place for ciphertext, and rewriting the whole
- * config to change one token would couple the two lifetimes.
+ * user, and rewriting the whole config to change one token would couple the
+ * two lifetimes.
  * @param dshHome - the resolved `$DSH_HOME` directory.
  * @returns the absolute secrets-file path.
  */
@@ -58,22 +15,50 @@ export function secretsPath(dshHome: string): string {
   return join(dshHome, 'desktop-secrets.json')
 }
 
-/** The on-disk document: secret id to base64 ciphertext. */
-type SecretDocument = Record<string, string>
+/**
+ * The on-disk document.
+ *
+ * Tokens are stored in the clear, deliberately, matching what `.mcp.json`,
+ * `~/.aws/credentials`, `~/.npmrc`, and the `gh` CLI do. The alternative —
+ * Electron's `safeStorage`, backed by the OS keychain — was tried and
+ * removed: a Keychain item's ACL trusts specific signed binaries, so every
+ * re-signed build, every bundle-id change, and every separate copy of the app
+ * raises its own password prompt. A first-run experience that asks an
+ * ordinary user for their login password several times is worse than the
+ * threat it defends against, for a developer tool whose agent already runs
+ * shell commands as that user.
+ *
+ * What the clear text does NOT defend against: any process running as this
+ * user can read these tokens, and they are captured by Time Machine and any
+ * file-syncing backup. File permissions (`0600`) keep out other accounts on
+ * the machine, and nothing more.
+ *
+ * `version` exists because the format this replaced stored base64 ciphertext
+ * under the same `{id: string}` shape. Without a marker the two are
+ * indistinguishable, and a leftover encrypted value would be read as a token
+ * and sent to a server as a bearer credential. A document without the marker
+ * is discarded rather than guessed at.
+ */
+interface SecretDocument {
+  version: 1
+  tokens: Record<string, string>
+}
+
+/** The only format this version understands; see `SecretDocument.version`. */
+const CURRENT_VERSION = 1
 
 /**
- * Read the stored document.
+ * Read the stored tokens.
  *
  * A missing, unreadable, or malformed file reads as empty rather than
- * throwing: a secrets file this app cannot parse must never keep the app
- * from starting, and every consumer already handles a secret being absent.
- * The cost of the lenient read is that a corrupted file is replaced on the
- * next write instead of being reported — acceptable for a store whose whole
- * contents the user can re-enter.
+ * throwing: a secrets file this app cannot parse must never keep it from
+ * starting, and every consumer already handles a token being absent. A
+ * document from the superseded encrypted format is discarded the same way,
+ * so its ciphertext is never mistaken for a token.
  * @param file - the secrets-file path.
- * @returns the stored id-to-ciphertext map, or an empty one.
+ * @returns the stored id-to-token map, or an empty one.
  */
-function readDocument(file: string): SecretDocument {
+function readTokens(file: string): Record<string, string> {
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(file, 'utf8'))
@@ -81,109 +66,91 @@ function readDocument(file: string): SecretDocument {
     return {}
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-  const document: SecretDocument = {}
-  for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
-    if (typeof value === 'string') document[id] = value
+  const document = parsed as Partial<SecretDocument>
+  if (document.version !== CURRENT_VERSION) return {}
+  if (document.tokens === null || typeof document.tokens !== 'object' || Array.isArray(document.tokens)) return {}
+  const tokens: Record<string, string> = {}
+  for (const [id, value] of Object.entries(document.tokens)) {
+    if (typeof value === 'string') tokens[id] = value
   }
-  return document
+  return tokens
 }
 
 /**
- * Write the document owner-only.
+ * Write the tokens owner-only.
  *
- * The mode is set explicitly after the write as well as requested on it,
- * because an already-existing file keeps its own mode through `writeFileSync`
- * — a file that was somehow created world-readable would otherwise stay that
- * way for every subsequent write.
+ * The mode is set explicitly after the write as well as requested on it: an
+ * already-existing file keeps its own mode through `writeFileSync`, so a file
+ * that was somehow created world-readable would otherwise stay that way. With
+ * the contents in the clear, this permission is the only protection the file
+ * has.
  * @param file - the secrets-file path.
- * @param document - the id-to-ciphertext map to persist.
+ * @param tokens - the id-to-token map to persist.
  */
-function writeDocument(file: string, document: SecretDocument): void {
+function writeTokens(file: string, tokens: Record<string, string>): void {
+  const document: SecretDocument = { version: CURRENT_VERSION, tokens }
   mkdirSync(dirname(file), { recursive: true })
   writeFileSync(file, `${JSON.stringify(document, undefined, 2)}\n`, { mode: 0o600 })
   chmodSync(file, 0o600)
 }
 
 /**
- * Store one secret, replacing any previous value for the same id.
- * @param crypto - the OS-backed encryption to write through.
+ * Store one token, replacing any previous value for the same id.
  * @param file - the secrets-file path.
- * @param id - the secret's id.
- * @param value - the secret.
- * @throws SecretStoreUnavailableError when this machine has no secure store —
- *   the secret is not written anywhere, in cleartext or otherwise.
+ * @param id - the server id.
+ * @param value - the token.
  */
-export function setSecret(crypto: SecretCrypto, file: string, id: string, value: string): void {
-  if (!crypto.isEncryptionAvailable()) {
-    throw new SecretStoreUnavailableError(
-      'this desktop environment has no secure credential store, so the token cannot be saved',
-    )
-  }
-  const document = readDocument(file)
-  document[id] = crypto.encryptString(value).toString('base64')
-  writeDocument(file, document)
+export function setSecret(file: string, id: string, value: string): void {
+  const tokens = readTokens(file)
+  tokens[id] = value
+  writeTokens(file, tokens)
 }
 
 /**
- * Read one secret back.
- *
- * A secret that cannot be decrypted — written under a different OS key, or
- * corrupted — reads as absent rather than throwing, so one unreadable entry
- * cannot keep the others from being used.
- * @param crypto - the OS-backed encryption to read through.
+ * Read one token back.
  * @param file - the secrets-file path.
- * @param id - the secret's id.
- * @returns the secret, or undefined when it is absent or undecryptable.
+ * @param id - the server id.
+ * @returns the token, or undefined when none is stored.
  */
-export function getSecret(crypto: SecretCrypto, file: string, id: string): string | undefined {
-  const stored = readDocument(file)[id]
-  if (stored === undefined) return undefined
-  if (!crypto.isEncryptionAvailable()) return undefined
-  try {
-    return crypto.decryptString(Buffer.from(stored, 'base64'))
-  } catch {
-    return undefined
-  }
+export function getSecret(file: string, id: string): string | undefined {
+  return readTokens(file)[id]
 }
 
 /**
- * Whether a secret is stored for an id, without decrypting it.
- *
- * This is what the settings window asks: it shows whether a token is on file
- * and never displays the token itself, so it must not need the OS key.
+ * Whether a token is stored for an id.
  * @param file - the secrets-file path.
- * @param id - the secret's id.
- * @returns whether ciphertext is stored under that id.
+ * @param id - the server id.
+ * @returns whether a token is stored under that id.
  */
 export function hasSecret(file: string, id: string): boolean {
-  return readDocument(file)[id] !== undefined
+  return readTokens(file)[id] !== undefined
 }
 
 /**
- * Remove one secret. Removing an absent id is a no-op.
+ * Remove one token. Removing an absent id is a no-op.
  * @param file - the secrets-file path.
- * @param id - the secret's id.
+ * @param id - the server id.
  */
 export function deleteSecret(file: string, id: string): void {
-  const document = readDocument(file)
-  if (document[id] === undefined) return
-  delete document[id]
-  writeDocument(file, document)
+  const tokens = readTokens(file)
+  if (tokens[id] === undefined) return
+  delete tokens[id]
+  writeTokens(file, tokens)
 }
 
 /**
- * Drop every stored secret whose id is no longer wanted.
+ * Drop every stored token whose id is no longer wanted.
  *
  * Called after a save so a removed server's token does not outlive the server
- * it belonged to; a token left behind would silently come back if an id were
- * ever reused.
+ * it belonged to; one left behind would silently come back if an id were ever
+ * reused.
  * @param file - the secrets-file path.
  * @param keep - the ids that should survive.
  */
 export function reconcileSecrets(file: string, keep: ReadonlySet<string>): void {
-  const document = readDocument(file)
-  const stale = Object.keys(document).filter((id) => !keep.has(id))
+  const tokens = readTokens(file)
+  const stale = Object.keys(tokens).filter((id) => !keep.has(id))
   if (stale.length === 0) return
-  for (const id of stale) delete document[id]
-  writeDocument(file, document)
+  for (const id of stale) delete tokens[id]
+  writeTokens(file, tokens)
 }

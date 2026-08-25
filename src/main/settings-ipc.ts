@@ -104,15 +104,9 @@ export interface SettingsDeps {
   /**
    * The store holding each MCP server's token, outside `desktop.json` and
    * outside the settings form (see `secrets.ts`). Injected as a whole rather
-   * than as loose functions so tests can substitute a store that never
-   * touches the OS keychain.
+   * than as loose functions so tests can substitute one that writes nowhere.
    */
   mcpSecrets: {
-    /**
-     * Whether this machine has an OS-backed secure store at all.
-     * @returns false when no token can be saved here.
-     */
-    available(): boolean
     /**
      * Whether a token is on file, without decrypting it.
      * @param id - the server id.
@@ -123,7 +117,6 @@ export interface SettingsDeps {
      * Store one server's token.
      * @param id - the server id.
      * @param value - the token.
-     * @throws when there is no secure store to write to.
      */
     set(id: string, value: string): void
     /**
@@ -149,12 +142,6 @@ export interface SettingsDeps {
 
 /** What `read` reports about the MCP tab's own state, alongside the editable form. */
 export interface McpInfo {
-  /**
-   * Whether tokens can be stored on this machine. False on a desktop
-   * environment with no keyring, where the token fields are unusable and say
-   * so rather than silently accepting a value that is never saved.
-   */
-  secureStoreAvailable: boolean
   /**
    * Which configured servers have a token on file, by id. The token itself
    * is never sent to the renderer — only whether one exists — so a stored
@@ -827,7 +814,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
         configured: stored.configured,
         form: formFor(stored),
         plugins,
-        mcp: { secureStoreAvailable: deps.mcpSecrets.available(), tokens, presets: MCP_PRESETS },
+        mcp: { tokens, presets: MCP_PRESETS },
       }
     },
     pickFolder: () => deps.pickFolder(),

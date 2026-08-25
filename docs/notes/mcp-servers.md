@@ -37,13 +37,17 @@ The expression needs no `undefined` guard: `serverEnv` defines a variable for ev
 
 ## Where the token lives
 
-`secrets.ts`, over Electron's `safeStorage` — which is already the per-platform abstraction: Keychain on macOS, DPAPI on Windows, libsecret/kwallet on Linux, selected by Electron itself. No second layer of platform selection exists here, and none should be added; writing one would re-implement Chromium's OS crypto integration worse.
+`secrets.ts`, in **cleartext**, in `$DSH_HOME/desktop-secrets.json` with mode `0600` — the same thing `.mcp.json`, `~/.aws/credentials`, `~/.npmrc`, and the `gh` CLI do.
 
-Ciphertext goes in `$DSH_HOME/desktop-secrets.json`, mode `0600`, deliberately not in `desktop.json`: that file is hand-editable and the Settings window has a button that opens it.
+This replaced Electron's `safeStorage`, which was tried and removed. A Keychain item's ACL trusts specific signed binaries, so every re-signed build, every bundle-id change, and every separate copy of the app raises its own login-password prompt. Ordinary users met a scary dialog several times before the app worked. For a developer tool whose agent already runs shell commands as that user, that is a bad trade.
 
-On a Linux desktop with no keyring, `isEncryptionAvailable()` is false and the backend degrades to `basic_text`, which is not encryption. `setSecret` refuses rather than writing a plaintext secret into a file named as though it were protected; the tab disables its token fields and says so. Windows and macOS never reach this. The escape hatch for that case is setting `DSH_MCP_TOKEN_<NAME>` in the environment the app is launched from, since that is where the token ends up anyway.
+What `0600` buys: other accounts on the machine cannot read the file. What it does not: any process running as this user can, and the tokens are captured by Time Machine and any file-syncing backup. That is the accepted tradeoff, not an oversight.
 
-Tokens are write-only from the renderer's side. `read` reports *whether* each server has one, never the value (`McpInfo.tokens`), so a stored credential cannot be recovered through the settings window.
+The document is versioned. The superseded format stored base64 ciphertext under the same `{id: string}` shape, so the two are indistinguishable by inspection — an unversioned document is discarded rather than guessed at, because a leftover ciphertext read as a token would be sent to a server as a bearer credential.
+
+`read` reports *whether* each server has a token, never the value (`McpInfo.tokens`). With storage in the clear this is no longer a confidentiality boundary — the user can open the file — only a reason not to render a credential into the DOM on every load.
+
+Saving a token does not resolve until the harness has respawned with it, measured at roughly 17 seconds. The row says so while it waits; without that it sits on stale text behind a disabled button and reads as nothing happening.
 
 ## The client is not a plugin the user manages
 

@@ -130,9 +130,9 @@ The switch and each server's own switch are both required: a server listed under
 
 Presets ship for **Tavily** and **GitHub** — add one, paste the token it asks for, and save. **Linear** and **Atlassian** are listed but not selectable: both accept only a browser sign-in (OAuth), which this app cannot do yet, so a pasted token would be a dead end. Any other Streamable HTTP server can be added by URL. HTTPS is required — the token travels to that URL as a bearer credential.
 
-Tokens are **not** stored in `desktop.json`. They go to the OS credential store through Electron's `safeStorage` — Keychain on macOS, DPAPI on Windows, libsecret/kwallet on Linux — with the ciphertext in `~/.dsh/desktop-secrets.json` (owner-only). The generated harness overlay names the token by environment variable rather than carrying its value, so no credential is ever written to that file. The settings window can save and clear a token but never read one back.
+Tokens live in `~/.dsh/desktop-secrets.json`, owner-readable only (`0600`), **in cleartext** — the same approach as `.mcp.json`, `~/.aws/credentials`, and the `gh` CLI. The OS keychain was tried and dropped: it re-prompts for your login password on every re-signed build and every copy of the app, which is a hostile first run for no meaningful gain in a tool whose agent already runs shell commands as you. Any process running as your user can read that file, and it is captured by backups.
 
-On a Linux desktop with no keyring available, saving a token is refused with an explanation rather than silently written in the clear; set `DSH_MCP_TOKEN_<SERVER_NAME>` in the app's own environment instead.
+Tokens are kept out of `desktop.json` so the "Open config file…" button never puts one on screen, and the generated harness overlay names each token by environment variable rather than carrying its value.
 
 Saving a token restarts the harness, since the value only reaches it through the child's environment at spawn. The MCP client package is managed by this tab, not the Plugins tab — it cannot be added there, and an entry left over from a hand edit is dropped on the next save. Details and the OAuth follow-up are in [`docs/notes/mcp-servers.md`](docs/notes/mcp-servers.md).
 

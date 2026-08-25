@@ -78,11 +78,6 @@ let mcpServers = []
 // cannot display a stored credential even accidentally.
 let mcpTokens = {}
 
-// Whether this machine has an OS-backed secure store. False disables every
-// token field with an explanation, rather than accepting a value that could
-// only be dropped.
-let mcpSecureStore = true
-
 // The shipped preset catalog, from `read()` rather than duplicated here.
 let mcpPresets = []
 
@@ -316,7 +311,9 @@ function renderMcpRows() {
  *
  * The field starts empty even when a token is on file, and the row says so
  * separately — main never sends the value back, so there is nothing to
- * prefill it with and nothing this window could leak.
+ * prefill it with. Tokens are stored in the clear (see `secrets.ts`), so this
+ * is no longer a confidentiality boundary, only a reason not to render a
+ * credential into the DOM on every load.
  * @param {{ id: string, preset?: string }} server - the row's server.
  * @returns {HTMLElement} the token controls.
  */
@@ -326,14 +323,10 @@ function buildTokenField(server) {
 
   const status = document.createElement('p')
   status.className = 'hint'
-  status.textContent = mcpSecureStore
-    ? mcpTokens[server.id]
-      ? 'A token is saved for this server.'
-      : 'No token saved yet — this server will be refused until one is.'
-    : 'This computer has no secure credential store, so a token cannot be saved here.'
+  status.textContent = mcpTokens[server.id]
+    ? 'A token is saved for this server.'
+    : 'No token saved yet — this server will be refused until one is.'
   wrap.append(status)
-
-  if (!mcpSecureStore) return wrap
 
   const controls = document.createElement('div')
   controls.className = 'row'
@@ -356,10 +349,17 @@ function buildTokenField(server) {
   save.addEventListener('click', async () => {
     error.textContent = ''
     save.disabled = true
+    // The token itself is written immediately, but `setMcpToken` does not
+    // resolve until the harness has respawned with it — measured at around
+    // 17 seconds. Without this the row sits on its previous text behind a
+    // disabled button for that whole time, which reads as nothing happening.
+    const previousStatus = status.textContent
+    status.textContent = 'Saving, and restarting the agent so it takes effect…'
     try {
       const result = await window.settings.setMcpToken(server.id, input.value)
       if (!result.ok) {
         error.textContent = result.message
+        status.textContent = previousStatus
         return
       }
       mcpTokens[server.id] = true
@@ -368,6 +368,7 @@ function buildTokenField(server) {
       input.placeholder = 'Replace the saved token'
     } catch (failure) {
       error.textContent = messageOf(failure)
+      status.textContent = previousStatus
     } finally {
       save.disabled = false
       renderMcpRows()
@@ -1011,7 +1012,6 @@ async function load() {
   el('mcp-enabled').checked = form.mcp.enabled
   mcpServers = form.mcp.servers.map((server) => ({ ...server }))
   mcpTokens = { ...result.mcp.tokens }
-  mcpSecureStore = result.mcp.secureStoreAvailable
   mcpPresets = result.mcp.presets
   renderPresetPicker()
   renderMcpRows()

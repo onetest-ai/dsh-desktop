@@ -2,29 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  deleteSecret,
-  getSecret,
-  hasSecret,
-  reconcileSecrets,
-  secretsPath,
-  SecretStoreUnavailableError,
-  setSecret,
-  type SecretCrypto,
-} from './secrets'
-
-/** A stand-in for Electron's `safeStorage`: reversible, and never real crypto. */
-function fakeCrypto(available = true): SecretCrypto {
-  return {
-    isEncryptionAvailable: () => available,
-    encryptString: (plain) => Buffer.from(`enc:${plain}`, 'utf8'),
-    decryptString: (encrypted) => {
-      const text = encrypted.toString('utf8')
-      if (!text.startsWith('enc:')) throw new Error('not encrypted by this key')
-      return text.slice(4)
-    },
-  }
-}
+import { deleteSecret, getSecret, hasSecret, reconcileSecrets, secretsPath, setSecret } from './secrets'
 
 /** A fresh temp secrets file path that does not exist yet. */
 function freshFile(): string {
@@ -38,130 +16,132 @@ describe('secretsPath', () => {
 })
 
 describe('setSecret / getSecret', () => {
-  it('round-trips a secret through the store', () => {
-    const crypto = fakeCrypto()
+  it('round-trips a token', () => {
     const file = freshFile()
-    setSecret(crypto, file, 'tavily', 'tvly-abc')
-    expect(getSecret(crypto, file, 'tavily')).toBe('tvly-abc')
+    setSecret(file, 'tavily', 'tvly-abc')
+    expect(getSecret(file, 'tavily')).toBe('tvly-abc')
   })
 
-  it('never writes the secret itself to disk', () => {
+  it('stores the token in the clear, which is the documented tradeoff', () => {
     const file = freshFile()
-    setSecret(fakeCrypto(), file, 'tavily', 'tvly-abc')
-    expect(readFileSync(file, 'utf8')).not.toContain('tvly-abc')
+    setSecret(file, 'tavily', 'tvly-abc')
+    expect(readFileSync(file, 'utf8')).toContain('tvly-abc')
   })
 
-  it('writes the file owner-only', () => {
+  it('writes the file owner-only, the only protection cleartext has', () => {
     const file = freshFile()
-    setSecret(fakeCrypto(), file, 'tavily', 'tvly-abc')
+    setSecret(file, 'tavily', 'tvly-abc')
     expect(statSync(file).mode & 0o777).toBe(0o600)
   })
 
-  it('restores owner-only mode on a file that was created readable', () => {
+  it('restores owner-only mode on a file that already existed readable', () => {
     const file = freshFile()
     writeFileSync(file, '{}\n', { mode: 0o644 })
-    setSecret(fakeCrypto(), file, 'tavily', 'tvly-abc')
+    setSecret(file, 'tavily', 'tvly-abc')
     expect(statSync(file).mode & 0o777).toBe(0o600)
+  })
+
+  it('stamps the format version, so a later format can tell itself apart', () => {
+    const file = freshFile()
+    setSecret(file, 'tavily', 'tvly-abc')
+    expect(JSON.parse(readFileSync(file, 'utf8')).version).toBe(1)
   })
 
   it('replaces a previous value for the same id', () => {
-    const crypto = fakeCrypto()
     const file = freshFile()
-    setSecret(crypto, file, 'tavily', 'first')
-    setSecret(crypto, file, 'tavily', 'second')
-    expect(getSecret(crypto, file, 'tavily')).toBe('second')
+    setSecret(file, 'tavily', 'first')
+    setSecret(file, 'tavily', 'second')
+    expect(getSecret(file, 'tavily')).toBe('second')
   })
 
   it('keeps other ids untouched when one is written', () => {
-    const crypto = fakeCrypto()
     const file = freshFile()
-    setSecret(crypto, file, 'tavily', 'one')
-    setSecret(crypto, file, 'github', 'two')
-    expect(getSecret(crypto, file, 'tavily')).toBe('one')
-  })
-
-  it('refuses to store anything when the platform has no secure store', () => {
-    const file = freshFile()
-    expect(() => setSecret(fakeCrypto(false), file, 'tavily', 'tvly-abc')).toThrow(SecretStoreUnavailableError)
-  })
-
-  it('leaves no file behind when it refuses', () => {
-    const file = freshFile()
-    try {
-      setSecret(fakeCrypto(false), file, 'tavily', 'tvly-abc')
-    } catch {
-      // asserted by the test above; here only the absence of a write matters
-    }
-    expect(() => readFileSync(file, 'utf8')).toThrow()
+    setSecret(file, 'tavily', 'one')
+    setSecret(file, 'github', 'two')
+    expect(getSecret(file, 'tavily')).toBe('one')
   })
 
   it('reads an absent id as undefined', () => {
-    expect(getSecret(fakeCrypto(), freshFile(), 'tavily')).toBeUndefined()
-  })
-
-  it('reads a secret written under a different key as undefined rather than throwing', () => {
-    const file = freshFile()
-    writeFileSync(file, JSON.stringify({ tavily: Buffer.from('garbage').toString('base64') }))
-    expect(getSecret(fakeCrypto(), file, 'tavily')).toBeUndefined()
+    expect(getSecret(freshFile(), 'tavily')).toBeUndefined()
   })
 
   it('reads a malformed document as empty rather than throwing', () => {
     const file = freshFile()
     writeFileSync(file, 'not json at all')
-    expect(getSecret(fakeCrypto(), file, 'tavily')).toBeUndefined()
+    expect(getSecret(file, 'tavily')).toBeUndefined()
+  })
+
+  it('discards a document from the superseded encrypted format', () => {
+    // The old format stored base64 ciphertext under the same `{id: string}`
+    // shape. Read as a token it would be sent to a server as a bearer
+    // credential, so an unversioned document is refused rather than guessed at.
+    const file = freshFile()
+    writeFileSync(file, JSON.stringify({ tavily: Buffer.from('enc:tvly-abc').toString('base64') }))
+    expect(getSecret(file, 'tavily')).toBeUndefined()
+    expect(hasSecret(file, 'tavily')).toBe(false)
+  })
+
+  it('discards a document claiming a version it does not understand', () => {
+    const file = freshFile()
+    writeFileSync(file, JSON.stringify({ version: 99, tokens: { tavily: 'tvly-abc' } }))
+    expect(getSecret(file, 'tavily')).toBeUndefined()
+  })
+
+  it('recovers from a discarded document: the next write produces a readable one', () => {
+    const file = freshFile()
+    writeFileSync(file, JSON.stringify({ tavily: 'legacy-ciphertext' }))
+    setSecret(file, 'tavily', 'tvly-new')
+    expect(getSecret(file, 'tavily')).toBe('tvly-new')
   })
 })
 
 describe('hasSecret', () => {
-  it('reports a stored secret without needing the OS key', () => {
+  it('reports a stored token', () => {
     const file = freshFile()
-    setSecret(fakeCrypto(), file, 'tavily', 'tvly-abc')
+    setSecret(file, 'tavily', 'tvly-abc')
     expect(hasSecret(file, 'tavily')).toBe(true)
   })
 
-  it('reports an absent secret', () => {
+  it('reports an absent token', () => {
     expect(hasSecret(freshFile(), 'tavily')).toBe(false)
   })
 })
 
 describe('deleteSecret', () => {
-  it('removes the named secret', () => {
+  it('removes the named token', () => {
     const file = freshFile()
-    setSecret(fakeCrypto(), file, 'tavily', 'tvly-abc')
+    setSecret(file, 'tavily', 'tvly-abc')
     deleteSecret(file, 'tavily')
     expect(hasSecret(file, 'tavily')).toBe(false)
   })
 
-  it('leaves the other secrets in place', () => {
-    const crypto = fakeCrypto()
+  it('leaves the other tokens in place', () => {
     const file = freshFile()
-    setSecret(crypto, file, 'tavily', 'one')
-    setSecret(crypto, file, 'github', 'two')
+    setSecret(file, 'tavily', 'one')
+    setSecret(file, 'github', 'two')
     deleteSecret(file, 'tavily')
-    expect(getSecret(crypto, file, 'github')).toBe('two')
+    expect(getSecret(file, 'github')).toBe('two')
   })
 
   it('is a no-op for an absent id', () => {
-    const file = freshFile()
-    expect(() => deleteSecret(file, 'tavily')).not.toThrow()
+    expect(() => deleteSecret(freshFile(), 'tavily')).not.toThrow()
   })
 })
 
 describe('reconcileSecrets', () => {
-  it('drops a secret whose server is gone', () => {
+  it('drops a token whose server is gone', () => {
     const file = freshFile()
-    setSecret(fakeCrypto(), file, 'tavily', 'one')
+    setSecret(file, 'tavily', 'one')
     reconcileSecrets(file, new Set())
     expect(hasSecret(file, 'tavily')).toBe(false)
   })
 
-  it('keeps the secrets still wanted', () => {
-    const crypto = fakeCrypto()
+  it('keeps the tokens still wanted', () => {
     const file = freshFile()
-    setSecret(crypto, file, 'tavily', 'one')
-    setSecret(crypto, file, 'github', 'two')
+    setSecret(file, 'tavily', 'one')
+    setSecret(file, 'github', 'two')
     reconcileSecrets(file, new Set(['github']))
-    expect(getSecret(crypto, file, 'github')).toBe('two')
+    expect(getSecret(file, 'github')).toBe('two')
   })
 
   it('does not create a file when there is nothing to drop', () => {
