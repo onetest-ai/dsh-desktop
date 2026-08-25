@@ -20,7 +20,7 @@ const NEEDS_CONFIG_REASON =
  * `settings.js`, not part of the stored reason) is not included here.
  */
 const REAL_MCP_CLIENT_REASON = `dsh-desktop: the harness exited with code 1
-before starting. Users/arozumenko/.dsh/runtimes/QGRlZXBzZWVrLWFpL2RzaA/.../cordis-plugin-loader/lib/index.js:299:9)
+before starting. ~/.dsh/runtimes/QGRlZXBzZWVrLWFpL2RzaA/.../cordis-plugin-loader/lib/index.js:299:9)
 at Entry._init (file:///...) at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
 { [cause]: Error: failed to apply loader entry deepseek-ai-dsh-mcp-client (/home/dev/.dsh/plugins/deepseek-ai-dsh-mcp-client/lib/index.js):
 invalid config: - expected { transport?: "stdio", serverName: string, command: string, args?: string[],

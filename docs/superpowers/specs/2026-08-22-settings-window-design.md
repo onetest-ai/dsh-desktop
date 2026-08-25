@@ -8,7 +8,7 @@ Supersedes: the first-run seeding behavior described in [the original design](..
 
 Remove the last machine-specific hardcode from `dsh-desktop`, and give the app a Settings window — opened from the menu bar, and automatically on first run — so its configuration is chosen by the user rather than baked into the source.
 
-Today `src/main/index.ts` hardcodes `CANDIDATE_REPO = '/Users/arozumenko/Development/deepseek-harness'` as the first-run default. On any other machine that path does not exist, so first run silently seeds a config pointing at nothing, falls through to npx mode, and fails to start. The app is not usable by anyone but its author.
+Today `src/main/index.ts` hardcodes `CANDIDATE_REPO = '~/Development/deepseek-harness'` as the first-run default. On any other machine that path does not exist, so first run silently seeds a config pointing at nothing, falls through to npx mode, and fails to start. The app is not usable by anyone but its author.
 
 ## Non-goals
 

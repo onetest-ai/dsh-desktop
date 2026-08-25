@@ -11,7 +11,8 @@
     "start": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "test:smoke": "playwright test tests/smoke.spec.ts"
+    "test:smoke": "playwright test tests/smoke.spec.ts",
+    "release": "npm run build && electron-builder --mac dmg -c.mac.notarize=true"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
@@ -23,7 +24,7 @@
     "vitest": "^2.1.0"
   },
   "build": {
-    "appId": "dev.arozumenko.dsh-desktop",
+    "appId": "com.onetest.dsh-desktop",
     "productName": "DeepSeek Harness",
     "directories": {
       "output": "release",
@@ -43,12 +44,12 @@
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.icns",
       "target": [
-        "dir"
+        "dir",
+        "dmg"
       ],
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "identity": null,
       "protocols": [
         {
           "name": "dsh",
@@ -57,9 +58,32 @@
           ]
         }
       ]
-    }
+    },
+    "afterPack": "build/adhoc-sign.js"
   },
   "dependencies": {
     "js-yaml": "^4.3.1"
+  },
+  "license": "MIT",
+  "author": "OneTest AI",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/onetest-ai/dsh-desktop.git"
+  },
+  "homepage": "https://github.com/onetest-ai/dsh-desktop#readme",
+  "bugs": {
+    "url": "https://github.com/onetest-ai/dsh-desktop/issues"
+  },
+  "keywords": [
+    "electron",
+    "deepseek",
+    "deepseek-harness",
+    "desktop",
+    "macos",
+    "mcp",
+    "agent"
+  ],
+  "engines": {
+    "node": ">=22"
   }
 }

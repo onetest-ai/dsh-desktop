@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Zero-touch on the harness checkout at `/Users/arozumenko/Development/deepseek-harness`.** Nothing may create, modify, or delete any file there. `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain` must print nothing.
+- **Zero-touch on the harness checkout at `~/Development/deepseek-harness`.** Nothing may create, modify, or delete any file there. `git -C ~/Development/deepseek-harness status --porcelain` must print nothing.
 - **No machine-specific value may be hardcoded.** Ordinary defaults that config overrides are fine and stay: `notifyPort` 43117, hotkey `CommandOrControl+Shift+D`, npx package `@deepseek-ai/dsh`, version `latest`, `READY_TIMEOUT_MS` 60000, `KILL_GRACE_MS` 3000. A filesystem path that differs per machine is not.
 - **The main window keeps `contextIsolation: true`, `nodeIntegration: false`, and NO preload.** Only the settings window gets a preload. This is a security boundary, not a preference: the main window loads the harness Web UI.
 - The renderer never touches `fs`, never constructs a path it did not receive from main, and cannot write anything.
@@ -1454,7 +1454,7 @@ git commit -m "test: assert the packaged app ships its preload and renderer"
 - [ ] `grep -rn "/Users/" src/ tests/` returns nothing
 - [ ] `npm run build && npx vitest run` — all pass
 - [ ] `npm run test:smoke` — passes against a fresh `npm run pack`
-- [ ] `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain` — empty
+- [ ] `git -C ~/Development/deepseek-harness status --porcelain` — empty
 - [ ] First run with no `desktop.json` opens Settings and boots nothing
 - [ ] Closing first-run Settings without saving quits the app
 - [ ] Saving a changed port respawns the harness and rebinds the listener

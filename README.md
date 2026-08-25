@@ -4,6 +4,8 @@ A macOS desktop shell for the [DeepSeek Harness](https://github.com/deepseek-ai/
 
 It is a **shell, not a fork**: it never modifies the harness. Point it at a checkout and `git pull` there stays clean.
 
+> **Unofficial.** This is a community project by [OneTest AI](https://github.com/onetest-ai). It is not affiliated with, endorsed by, or supported by DeepSeek. "DeepSeek" is used here only to name the harness this application runs.
+
 ## Requirements
 
 - macOS (Apple Silicon; the packaging target is `mac-arm64`)
@@ -31,9 +33,13 @@ npm run pack
 
 This writes `release/mac-arm64/DeepSeek Harness.app`. Drag it to `/Applications` and launch it like any other app.
 
-Use `npm run dist` instead if you want a distributable installer rather than a plain `.app` directory.
+Use `npm run dist` for a distributable `.dmg` rather than a plain `.app` directory, or `npm run release` to sign and notarize it (see [`docs/notes/distribution.md`](docs/notes/distribution.md)).
 
-The build is **unsigned** (`identity: null`). On first launch macOS may refuse to open it; right-click the app and choose *Open* to get the one-time override. It is not notarized and is not intended for distribution to other machines as-is.
+The build is **ad-hoc signed and not notarized** unless a Developer ID identity is available (see [`docs/notes/distribution.md`](docs/notes/distribution.md)). A copy you build yourself opens normally — a local build never receives macOS's quarantine flag, so Gatekeeper never runs on it.
+
+A copy someone *downloads* is stopped: "Apple could not verify…". They can proceed through **System Settings → Privacy & Security → Open Anyway**, or with `xattr -dr com.apple.quarantine "/Applications/DeepSeek Harness.app"`. Control-clicking the app and choosing *Open* no longer works — Apple removed that bypass in macOS 15.
+
+To remove that step entirely, sign and notarize with a Developer ID: `npm run release`, with the certificate installed and notary credentials in the environment.
 
 ## First run
 
@@ -52,26 +58,33 @@ Opening Settings on a configured managed source also checks, in the background, 
 
 ## Settings
 
-Reopen Settings any time from **File → Settings…** (⌘,), the application menu, or the tray. It is organized into four tabs — **Harness**, **Plugins**, **Notifications & Shortcuts**, and **Advanced** — reachable by click or arrow/Home/End keys. Changes take effect on save — no relaunch:
+Reopen Settings any time from **File → Settings…** (⌘,), the application menu, or the tray. It is organized into five tabs — **Harness**, **Plugins**, **MCP**, **Notifications & Shortcuts**, and **Advanced** — reachable by click or arrow/Home/End keys. Changes take effect on save — no relaunch:
 
 | Setting | Effect on save |
 |---|---|
 | Harness source, `pnpm`/`npm` path | The harness child is restarted |
 | Notification port | The harness is restarted and the listener rebinds |
 | Show/hide shortcut | Re-registered in place |
+| MCP servers | The harness child is restarted with the new server set |
 
 The notification port restart is deliberate: the port is written into the harness hook config when the child boots, so a change only reaches it through a respawn.
 
-Settings are stored at `~/.dsh/desktop.json`, beside the harness's own state. The app writes that file, `~/.dsh/runtimes` (every managed install), a symlink per linked plugin under `~/.dsh/profiles/web/node_modules`, and a copied directory per declared agent preset under `~/.dsh/.agent-presets` — see Plugins below for why both are load-bearing, not incidental; nothing else in `~/.dsh` is touched. You can edit `desktop.json` directly if you prefer:
+Settings are stored at `~/.dsh/desktop.json`, beside the harness's own state. The app writes that file, `~/.dsh/desktop-secrets.json` (MCP tokens, encrypted — see MCP below), `~/.dsh/runtimes` (every managed install), a symlink per linked plugin under `~/.dsh/profiles/web/node_modules`, and a copied directory per declared agent preset under `~/.dsh/.agent-presets` — see Plugins below for why both are load-bearing, not incidental; nothing else in `~/.dsh` is touched. You can edit `desktop.json` directly if you prefer:
 
 ```json
 {
   "harness": { "kind": "local", "repo": "/path/to/deepseek-harness" },
   "notifyPort": 43117,
   "hotkey": "CommandOrControl+Shift+D",
-  "plugins": [{ "spec": "@deepseek-ai/dsh-hooks-claude-code", "version": "0.1.1" }]
+  "plugins": [{ "spec": "@deepseek-ai/dsh-hooks-claude-code", "version": "0.1.1" }],
+  "mcp": {
+    "enabled": true,
+    "servers": [{ "id": "tavily", "preset": "tavily", "url": "https://mcp.tavily.com/mcp/", "enabled": true }]
+  }
 }
 ```
+
+Tokens are deliberately absent from that file; see MCP below.
 
 For a managed source, `harness` takes this form instead:
 
@@ -109,10 +122,24 @@ A plugin can also ship its own agent preset — a persona and file-tool composit
 
 A plugin that fails to install, or that cannot actually be loaded once installed (a missing dependency, most commonly), is left out of that boot's overlay with the reason shown in the tray status; it never stops the harness from starting. A plugin that requires its own configuration is a separate case the app cannot protect against yet — see Known limitations. Removing a row removes that plugin from the next boot; it does not uninstall its files from `$DSH_HOME`.
 
+## MCP
+
+The **MCP** tab connects the agent to remote [Model Context Protocol](https://modelcontextprotocol.io/) servers. Each enabled server becomes its own `@deepseek-ai/dsh-mcp-client` instance in the harness, and its tools reach the model under that server's own name. The master switch is off by default: with it off, nothing is installed, no server is contacted, and no tool schemas enter the model's context.
+
+The switch and each server's own switch are both required: a server listed under a switched-off feature is not connected, and the tab says so rather than looking configured and doing nothing. Adding your first server turns the feature on for you.
+
+Presets ship for **Tavily** and **GitHub** — add one, paste the token it asks for, and save. **Linear** and **Atlassian** are listed but not selectable: both accept only a browser sign-in (OAuth), which this app cannot do yet, so a pasted token would be a dead end. Any other Streamable HTTP server can be added by URL. HTTPS is required — the token travels to that URL as a bearer credential.
+
+Tokens are **not** stored in `desktop.json`. They go to the OS credential store through Electron's `safeStorage` — Keychain on macOS, DPAPI on Windows, libsecret/kwallet on Linux — with the ciphertext in `~/.dsh/desktop-secrets.json` (owner-only). The generated harness overlay names the token by environment variable rather than carrying its value, so no credential is ever written to that file. The settings window can save and clear a token but never read one back.
+
+On a Linux desktop with no keyring available, saving a token is refused with an explanation rather than silently written in the clear; set `DSH_MCP_TOKEN_<SERVER_NAME>` in the app's own environment instead.
+
+Saving a token restarts the harness, since the value only reaches it through the child's environment at spawn. The MCP client package is managed by this tab, not the Plugins tab — it cannot be added there, and an entry left over from a hand edit is dropped on the next save. Details and the OAuth follow-up are in [`docs/notes/mcp-servers.md`](docs/notes/mcp-servers.md).
+
 ## Development
 
 ```bash
-npm test           # 445 unit tests
+npm test           # 593 unit tests
 npm run test:smoke # Playwright, against a packaged build (run `npm run pack` first)
 npm run build      # compile only
 ```
@@ -124,6 +151,30 @@ Design notes and the decisions taken while building this live in [`docs/`](docs/
 ## Known limitations
 
 - **A plugin that requires its own configuration can crash the whole boot, not just itself.** The app's own loadability check only confirms the entry file and its declared dependencies resolve — it cannot know a plugin also requires config this version has no way to supply (the way `@onetest/dsh-deck` requires a `base` route-mount path with no default). Such a plugin installs and passes that check, but cordis's own config resolution then rejects it at boot, and that rejection currently takes the whole harness process down rather than just omitting the one plugin. There is no per-plugin configuration yet, so a plugin with a required config field of its own cannot be listed safely.
+- **MCP servers needing a browser sign-in cannot be added.** Linear, Atlassian, and any other OAuth-only server are listed but disabled. The MCP specification defines authorization generically and the SDK already implements it, so this is one generic flow rather than per-vendor work — but a desktop redirect URI has to be settled first. See [`docs/notes/mcp-servers.md`](docs/notes/mcp-servers.md).
 - **`dsh://` links only focus the app.** The harness Web UI has no per-session URLs, so there is no address to deep-link to.
-- **Unsigned and macOS-only.** No Windows or Linux packaging target is configured.
+- **Not notarized by default, and macOS-only.** Builds are ad-hoc signed, so a downloaded copy needs one trip through System Settings before it opens; `npm run release` removes that with a Developer ID. No Windows or Linux packaging target is configured.
 - The tray icon, menus, and shortcut have not been verified visually by an automated test — only their behavior in code.
+
+## Contributing
+
+Issues and pull requests are welcome at [onetest-ai/dsh-desktop](https://github.com/onetest-ai/dsh-desktop).
+
+Before opening a PR, run the checks the project holds itself to:
+
+```bash
+npm test           # unit tests; no Electron required
+npm run build      # typecheck and compile
+npm run pack && npm run test:smoke   # the packaged app, end to end
+```
+
+Two conventions carry most of the weight here, both visible throughout the codebase:
+
+- **Every non-obvious contract is documented where it is declared** — JSDoc on exports, with the reasoning that is not recoverable from the code itself. Comments state facts and consequences, not narration.
+- **Tests describe behavior, and are proven non-vacuous.** This project has caught more than one test that passed unconditionally; when a test guards something important, break the code deliberately and confirm the test fails.
+
+Rulings made during development, including the ones that turned out to be wrong, are kept in [`docs/decisions.md`](docs/decisions.md). Design notes per feature live in [`docs/notes/`](docs/notes/).
+
+## License
+
+[MIT](LICENSE) © OneTest AI

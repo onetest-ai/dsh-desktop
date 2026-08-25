@@ -114,7 +114,7 @@ inspection (gitignored `dist/`, never committed).
 - `npm run pack && npm run test:smoke` — packaged and the smoke test passed
   genuinely, with `~/.dsh` absent throughout.
 - `grep -rn "/Users/" src/ tests/` — empty.
-- `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain` —
+- `git -C ~/Development/deepseek-harness status --porcelain` —
   empty throughout.
 
 ## Review follow-up: renderer state reconciliation
@@ -210,7 +210,7 @@ suite green again.
 - `npm run pack && npm run test:smoke` — packaged and the smoke test passed
   genuinely, with `~/.dsh` absent throughout.
 - `grep -rn "/Users/" src/ tests/` — empty.
-- `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain` —
+- `git -C ~/Development/deepseek-harness status --porcelain` —
   empty throughout.
 
 ## Review follow-up 2: the reload was still not actually safe
@@ -289,5 +289,5 @@ disabled), the Remove test on `expected [...] to have a length of 2 but got
 - `npm run pack && npm run test:smoke` — packaged and the smoke test passed
   genuinely, with `~/.dsh` absent throughout.
 - `grep -rn "/Users/" src/ tests/` — empty.
-- `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain` —
+- `git -C ~/Development/deepseek-harness status --porcelain` —
   empty throughout.

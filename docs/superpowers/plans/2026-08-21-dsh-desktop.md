@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- **Zero-touch on the harness checkout.** Nothing in this project may create, modify, or delete any file under `/Users/arozumenko/Development/deepseek-harness`. `git status` there must stay clean at all times. If a task appears to require a harness edit, stop and raise it.
-- Harness repo path comes from `config.json` key `harnessRepo`; the value for this machine is `/Users/arozumenko/Development/deepseek-harness`.
+- **Zero-touch on the harness checkout.** Nothing in this project may create, modify, or delete any file under `~/Development/deepseek-harness`. `git status` there must stay clean at all times. If a task appears to require a harness edit, stop and raise it.
+- Harness repo path comes from `config.json` key `harnessRepo`; the value for this machine is `~/Development/deepseek-harness`.
 - The harness webserver port is always `0` (OS-assigned), set in `desktop.patch.yml`. Never hardcode 3080.
 - The ready line printed by the harness is exactly `dsh web: http://127.0.0.1:<port>` and may be followed by a ` (LAN: ...)` suffix. Match the loopback URL only.
 - The notification listener uses a **fixed** port, `notifyPort` in `config.json`, default `43117`.
@@ -116,7 +116,7 @@ release/
 
 ```json
 {
-  "harnessRepo": "/Users/arozumenko/Development/deepseek-harness",
+  "harnessRepo": "~/Development/deepseek-harness",
   "notifyPort": 43117,
   "hotkey": "CommandOrControl+Shift+D"
 }
@@ -1000,8 +1000,8 @@ if (!app.requestSingleInstanceLock()) {
 An unmatched patch `id` only logs a warning and is skipped (`vendor/include/src/index.ts`), so a broken overlay is silent — the server just keeps the default port 3080. Confirm the overlay lands before trusting the app:
 
 ```bash
-cd /Users/arozumenko/Development/deepseek-harness
-pnpm dsh --profile web --patch /Users/arozumenko/Development/dsh-desktop/desktop.patch.yml --dump-config | grep -A3 "id: webserver"
+cd ~/Development/deepseek-harness
+pnpm dsh --profile web --patch ~/Development/dsh-desktop/desktop.patch.yml --dump-config | grep -A3 "id: webserver"
 ```
 
 Expected: the dumped `webserver` row shows `port: 0`. If it shows `3080`, or the command warns `patch: entry webserver not found`, the overlay is wrong — fix it before continuing.
@@ -1013,7 +1013,7 @@ Expected: a window opens showing the harness Web UI, and the URL is a random hig
 
 - [ ] **Step 7: Verify the zero-touch constraint holds**
 
-Run: `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain`
+Run: `git -C ~/Development/deepseek-harness status --porcelain`
 Expected: empty output. Any output is a bug in this task — stop and fix it.
 
 - [ ] **Step 8: Verify no orphans survive a quit**
@@ -1426,7 +1426,7 @@ Replace `desktop.patch.yml` with:
     - id: hooks-claude-code
       name: '@deepseek-ai/dsh-hooks-claude-code'
       config:
-        configPath: /Users/arozumenko/Development/dsh-desktop/hooks.json
+        configPath: ~/Development/dsh-desktop/hooks.json
 ```
 
 The bridge is not in the web profile, so it is **inserted** rather than patched; an `insert` row is an ordinary entry and carries its own `config`. `configPath` is process-level and resolved against the launch cwd at load, so it is given as an absolute path.
@@ -1436,7 +1436,7 @@ The bridge is not in the web profile, so it is **inserted** rather than patched;
 This writes to `~/.dsh`, never to the checkout:
 
 ```bash
-cd /Users/arozumenko/Development/deepseek-harness
+cd ~/Development/deepseek-harness
 pnpm dsh plugin --profile web add @deepseek-ai/dsh-hooks-claude-code
 git status --porcelain   # MUST be empty
 ```
@@ -1538,7 +1538,7 @@ Build a self-contained icon SVG instead: extract the path data, drop the media q
 mkdir -p build assets
 python3 - <<'ICON'
 import re
-SRC = '/Users/arozumenko/Development/deepseek-harness/apps/web/public/favicon.svg'
+SRC = '~/Development/deepseek-harness/apps/web/public/favicon.svg'
 src = open(SRC).read()
 match = re.search(r'<path[^>]*\sd="([^"]+)"', src)
 if match is None:
@@ -1598,7 +1598,7 @@ Add to `package.json`:
 
 ```json
   "build": {
-    "appId": "dev.arozumenko.dsh-desktop",
+    "appId": "com.onetest.dsh-desktop",
     "productName": "DeepSeek Harness",
     "directories": { "output": "release", "buildResources": "build" },
     "files": ["dist/**/*", "assets/**/*", "config.json", "desktop.patch.yml", "hooks.json"],
@@ -1683,7 +1683,7 @@ Expected: PASS.
 ```bash
 cp -R "release/mac-arm64/DeepSeek Harness.app" /Applications/
 open "dsh://anything"
-git -C /Users/arozumenko/Development/deepseek-harness status --porcelain
+git -C ~/Development/deepseek-harness status --porcelain
 ```
 
 Expected: the app launches or comes to the front; the `git status` output is empty.
@@ -1721,7 +1721,7 @@ This task exists because a packaged `.app` in `/Applications` must not depend on
 **Design decisions, already made — implement these, do not re-litigate:**
 - Config lives at `$DSH_HOME/desktop.json`, where `DSH_HOME` falls back to `~/.dsh`. This mirrors the harness's own convention (`packages/util/home-paths/src/index.ts`: `DSH_HOME_ENV = 'DSH_HOME'`, `DSH_HOME_DIR_NAME = '.dsh'`).
 - No compatibility shim for the old `<app>/config.json`. This app has one user and the harness's own pre-release stance is foundation over shims.
-- On first run, if the config file is absent, write a default one and use it. Default to `local` pointing at `/Users/arozumenko/Development/deepseek-harness` when that path exists, otherwise `npx`.
+- On first run, if the config file is absent, write a default one and use it. Default to `local` pointing at `~/Development/deepseek-harness` when that path exists, otherwise `npx`.
 - For `npx`, `cwd` is the configured `workspace` (default: the user's home directory), because there is no checkout to run inside.
 - Launcher flag order is load-bearing in BOTH modes: the launcher's own flags precede the profile. `dsh web --patch F` fails with `unknown option '--patch'`.
 
@@ -2034,7 +2034,7 @@ Generalise the existing `resolvePnpm` into `resolveBinary(configured, name, env)
 
 - [ ] **Step 9: Update `index.ts`**
 
-`CONFIG_PATH` becomes `configPath(process.env)`; `loadConfig` takes the candidate repo (`/Users/arozumenko/Development/deepseek-harness`); `preflight` takes `config.harness`. Do not disturb `pendingStop`, `quitting`, `before-quit`, `restartOnce`, the `closed` handler, or the `onTurnEnd` guard.
+`CONFIG_PATH` becomes `configPath(process.env)`; `loadConfig` takes the candidate repo (`~/Development/deepseek-harness`); `preflight` takes `config.harness`. Do not disturb `pendingStop`, `quitting`, `before-quit`, `restartOnce`, the `closed` handler, or the `onTurnEnd` guard.
 
 - [ ] **Step 10: Delete the old config file**
 
@@ -2051,7 +2051,7 @@ Expected: build clean; all tests pass. Report the count.
 
 - [ ] **Step 12: Verify both modes actually launch**
 
-Local mode: ensure `~/.dsh/desktop.json` has `{"harness":{"kind":"local","repo":"/Users/arozumenko/Development/deepseek-harness"}}`, start the app backgrounded, confirm it loads a `127.0.0.1` URL that is not 3080, then quit and confirm no orphan.
+Local mode: ensure `~/.dsh/desktop.json` has `{"harness":{"kind":"local","repo":"~/Development/deepseek-harness"}}`, start the app backgrounded, confirm it loads a `127.0.0.1` URL that is not 3080, then quit and confirm no orphan.
 
 npx mode: set `harness` to `{"kind":"npx","package":"@deepseek-ai/dsh","version":"latest","workspace":"<your home>"}`, start the app, and report what happens. A network fetch of the published package may be slow or may fail if the package is unpublished or the network is unavailable — if it fails, capture the exact error and report it rather than treating it as success. Restore the local config afterwards.
 
@@ -2070,6 +2070,6 @@ Run before calling this done:
 - [ ] Both harness sources launch: local checkout AND npx
 - [ ] `~/.dsh/desktop.json` is the only place configuration lives
 - [ ] `npm run test:smoke` — packaged smoke passes
-- [ ] `git -C /Users/arozumenko/Development/deepseek-harness status --porcelain` — empty
+- [ ] `git -C ~/Development/deepseek-harness status --porcelain` — empty
 - [ ] Quit the app, then `pgrep -fl "dsh web"` — empty
 - [ ] Agent finishes a turn with the app unfocused — one notification, no extra agent step

@@ -5,7 +5,7 @@ Status: approved, not yet implemented
 
 ## Purpose
 
-Run the DeepSeek Harness Web UI as a real macOS desktop application — installable, with tray, notifications, a global hotkey, and a `dsh://` handler — without adding a single file to the harness checkout at `/Users/arozumenko/Development/deepseek-harness`.
+Run the DeepSeek Harness Web UI as a real macOS desktop application — installable, with tray, notifications, a global hotkey, and a `dsh://` handler — without adding a single file to the harness checkout at `~/Development/deepseek-harness`.
 
 ## Non-goals
 
