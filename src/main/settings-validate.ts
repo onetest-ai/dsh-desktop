@@ -2,6 +2,7 @@ import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { DEFAULT_HOTKEY, DEFAULT_NOTIFY_PORT, type ConfigResult, type DesktopConfig } from './config'
 import type { HarnessSource } from './harness-source'
+import { mcpErrors, MCP_CLIENT_PACKAGE, type McpConfig, type McpServer } from './mcp-servers'
 import { defaultPlugins, parseSpec, validSpecShape, type PluginEntry } from './plugin-entries'
 
 /** The settings form's raw values. Every field is a string because HTML forms yield strings. */
@@ -27,6 +28,18 @@ export interface SettingsForm {
    * the previously stored entries.
    */
   plugins: { spec: string; config: string }[]
+  /**
+   * The MCP tab's state: the master switch, and one row per configured
+   * server. Like `plugins`, and unlike every other member, this is built by
+   * the renderer from its own row controls rather than being a raw HTML
+   * field value.
+   *
+   * A server's token is deliberately absent: tokens never travel through the
+   * form, because the form is what `writeConfig` persists into
+   * `desktop.json`. They go through their own channel into the OS keychain
+   * instead (see `secrets.ts`).
+   */
+  mcp: { enabled: boolean; servers: McpServer[] }
 }
 
 /** Per-field messages for a rejected form; absent keys validated cleanly. */
@@ -164,6 +177,12 @@ export function validatePluginSpec(spec: string, existingPackages: string[]): Pl
     }
   }
   const { package: pkg, pinnedVersion } = parseSpec(trimmed)
+  if (pkg === MCP_CLIENT_PACKAGE) {
+    return {
+      ok: false,
+      message: 'This app manages that package itself — add MCP servers on the MCP tab instead.',
+    }
+  }
   if (existingPackages.includes(pkg)) {
     return { ok: false, message: `${pkg} is already in the list.` }
   }
@@ -234,8 +253,20 @@ export function validateSettings(form: SettingsForm): ValidationResult {
   const hotkey = form.hotkey.trim()
   if (hotkey === '') errors.hotkey = 'A shortcut is required.'
 
-  const parsedPlugins = parsePluginsField(form.plugins)
+  // The MCP client is this app's own, configured on the MCP tab: one package
+  // backing however many servers, with a config only that tab can produce. A
+  // bare entry for it in the plugin list has no config, which cordis rejects
+  // at load — so it is dropped here rather than being carried into the boot
+  // that would fail on it. `validatePluginSpec` refuses to add it in the
+  // first place; this is what clears one that a hand-edited `desktop.json`,
+  // or a save from before the MCP tab existed, already stored.
+  const parsedPlugins = parsePluginsField(
+    form.plugins.filter((row) => parseSpec(row.spec.trim()).package !== MCP_CLIENT_PACKAGE),
+  )
   if (!parsedPlugins.ok) errors.plugins = parsedPlugins.message
+
+  const mcpProblems = mcpErrors(mcpFrom(form))
+  if (mcpProblems.length > 0) errors.mcp = mcpProblems.join('; ')
 
   if (harness === undefined || Object.keys(errors).length > 0) {
     return { ok: false, errors }
@@ -243,6 +274,7 @@ export function validateSettings(form: SettingsForm): ValidationResult {
 
   const pnpmPath = form.pnpmPath.trim()
   const npmPath = form.npmPath.trim()
+  const mcp = mcpFrom(form)
   return {
     ok: true,
     config: {
@@ -254,9 +286,37 @@ export function validateSettings(form: SettingsForm): ValidationResult {
       // parse against the previously stored entries to carry forward an
       // already-resolved version for a spec that has not changed.
       plugins: parsedPlugins.ok ? parsedPlugins.entries : [],
+      // `clientVersion` is resolved and installed by `settings-ipc.ts`'s
+      // `performSave`, exactly like a plugin entry's own `version`, and is
+      // carried forward there from the previously stored section.
+      //
+      // Omitted entirely when MCP is off with nothing configured, so a user
+      // who never opens the tab keeps a `desktop.json` with no trace of it —
+      // the field is optional precisely so its absence can mean untouched.
+      // A section with servers survives being switched off, since turning
+      // the feature back on must not have lost them.
+      ...(mcp.enabled || mcp.servers.length > 0 ? { mcp } : {}),
       ...(pnpmPath === '' ? {} : { pnpmPath }),
       ...(npmPath === '' ? {} : { npmPath }),
     },
+  }
+}
+
+/**
+ * The `mcp` section one submitted form describes, before its client version
+ * is resolved.
+ * @param form - the submitted values.
+ * @returns the section, with servers taken in the order the form listed them.
+ */
+function mcpFrom(form: SettingsForm): McpConfig {
+  return {
+    enabled: form.mcp.enabled,
+    servers: form.mcp.servers.map((server) => ({
+      id: server.id.trim(),
+      ...(server.preset === undefined || server.preset === '' ? {} : { preset: server.preset }),
+      url: server.url.trim(),
+      enabled: server.enabled,
+    })),
   }
 }
 
@@ -280,10 +340,13 @@ export function formFor(result: ConfigResult): SettingsForm {
     // the first plugin, so the first save installs it rather than special-
     // casing it outside this generic list.
     plugins: defaultPlugins().map((entry) => ({ spec: entry.spec, config: '' })),
+    // Off with nothing configured: MCP is opt-in, and a fresh install must
+    // not reach any third-party server on its own.
+    mcp: { enabled: false, servers: [] },
   }
   if (!result.configured) return base
 
-  const { harness, notifyPort, hotkey, pnpmPath, npmPath, plugins } = result.config
+  const { harness, notifyPort, hotkey, pnpmPath, npmPath, plugins, mcp } = result.config
   return {
     ...base,
     kind: harness.kind,
@@ -298,5 +361,6 @@ export function formFor(result: ConfigResult): SettingsForm {
       spec: entry.spec,
       config: entry.config === undefined ? '' : JSON.stringify(entry.config, undefined, 2),
     })),
+    ...(mcp === undefined ? {} : { mcp: { enabled: mcp.enabled, servers: mcp.servers } }),
   }
 }

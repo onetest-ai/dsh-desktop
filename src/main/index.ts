@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, Notification, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, Notification, safeStorage, shell } from 'electron'
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadDeclaredPatchRows } from './bundle-patch'
@@ -8,6 +8,13 @@ import { ConfigurationError } from './configuration-error'
 import { configPath, PROFILE, resolveDshHome, type HarnessSource } from './harness-source'
 import { createInstallRunner } from './install-process'
 import { createManagedInstaller, createUpdateChecker } from './managed-install'
+import {
+  activeServers,
+  MCP_CLIENT_PACKAGE,
+  serverEnv,
+  serverRows,
+  type McpConfig,
+} from './mcp-servers'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { openConfigFile } from './open-config-file'
 import {
@@ -25,6 +32,7 @@ import { ensurePluginLink, reconcilePluginLinks } from './plugin-link'
 import { ensurePluginPresets, reconcilePluginPresets } from './plugin-presets'
 import { preflight } from './preflight'
 import { attributeBootFailure, runtimeFilePaths, writeRuntimeFiles, type AttributionRow } from './runtime-files'
+import { deleteSecret, getSecret, hasSecret, reconcileSecrets, secretsPath, setSecret } from './secrets'
 import type { InstallDeps } from './runtime-install'
 import { dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
 import { createSettingsHandlers } from './settings-ipc'
@@ -119,8 +127,46 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
     // Every entry's resolved entry file is baked into the generated overlay
     // at boot, so a newly resolved or reordered list only reaches the
     // harness child through a respawn.
-    pluginsChanged(previous.plugins ?? [], next.plugins ?? [])
+    pluginsChanged(previous.plugins ?? [], next.plugins ?? []) ||
+    // Every enabled server contributes its own overlay row and its own
+    // environment variable, both fixed at spawn, so any change to the
+    // section — the master switch, a server's URL, or which servers are on
+    // — only reaches the harness through a respawn. Compared by value
+    // because the section is rebuilt fresh on every save.
+    mcpChanged(previous.mcp, next.mcp)
   )
+}
+
+/**
+ * Every enabled MCP server's token, as environment variables for the harness
+ * child.
+ *
+ * Read at spawn time rather than cached: a token can be replaced from the
+ * settings window between two boots, and the restart that follows must pick
+ * up the new value.
+ * @param config - the desktop settings this boot is starting from.
+ * @returns the variables to add to the child's environment.
+ */
+function mcpEnv(config: DesktopConfig): Record<string, string> {
+  return serverEnv(config.mcp, (id) => getSecret(safeStorage, secretsPath(DSH_HOME), id))
+}
+
+/**
+ * Whether two `mcp` sections differ in anything baked into a boot.
+ *
+ * A stored token is deliberately not part of this: it lives outside the
+ * config (see `secrets.ts`), and the settings handler restarts explicitly
+ * when one changes.
+ * @param previous - the section applied to the running harness.
+ * @param next - the section just saved.
+ * @returns whether the harness has to be respawned.
+ */
+function mcpChanged(previous: McpConfig | undefined, next: McpConfig | undefined): boolean {
+  const before = activeServers(previous)
+  const after = activeServers(next)
+  if (previous?.clientVersion !== next?.clientVersion) return true
+  if (before.length !== after.length) return true
+  return before.some((server, index) => server.id !== after[index].id || server.url !== after[index].url)
 }
 
 /**
@@ -232,6 +278,14 @@ const settingsHandlers = createSettingsHandlers({
   disabledPlugins: () => Object.fromEntries(disabledPlugins),
   clientLinkWarnings: () => Object.fromEntries(clientLinkWarnings),
   openConfigFile: () => openConfigFile(CONFIG_PATH, existsSync, (path) => shell.openPath(path)),
+  mcpSecrets: {
+    available: () => safeStorage.isEncryptionAvailable(),
+    has: (id) => hasSecret(secretsPath(DSH_HOME), id),
+    set: (id, value) => setSecret(safeStorage, secretsPath(DSH_HOME), id, value),
+    clear: (id) => deleteSecret(secretsPath(DSH_HOME), id),
+    reconcile: (keep) => reconcileSecrets(secretsPath(DSH_HOME), keep),
+  },
+  restartHarness: () => restart(),
 })
 
 /**
@@ -616,9 +670,29 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
     // privileged with `configPath` pointing at the hooks file this same
     // boot is about to write; every other entry gets none.
     const { hooksPath } = runtimeFilePaths(runtimeDirectory())
-    const statuses = (config.plugins ?? [])
-      .filter((entry) => !excludePackages.has(parseSpec(entry.spec).package))
-      .map((entry) => pluginStatus(installDeps, DSH_HOME, entry, parseSpec(entry.spec).package === HOOKS_PACKAGE ? hooksPath : undefined))
+    // The MCP client is filtered out of the user's own plugin list, not just
+    // absent from it: a bare entry for it carries no config, which cordis
+    // rejects at load, and this app owns that package's configuration on the
+    // MCP tab. A save drops such an entry permanently (see
+    // `settings-validate.ts`); this keeps one that is still on disk from
+    // failing the boot in the meantime.
+    const configured = (config.plugins ?? []).filter(
+      (entry) =>
+        !excludePackages.has(parseSpec(entry.spec).package) && parseSpec(entry.spec).package !== MCP_CLIENT_PACKAGE,
+    )
+    // The MCP client is not a plugin entry the user manages: it is one
+    // package backing however many servers the MCP tab configures, so it is
+    // installed and resolved exactly like an entry but never appears in
+    // that list. It is skipped entirely when no server is enabled — the
+    // whole point of the master switch is that the harness pays nothing.
+    const mcpServers = activeServers(config.mcp)
+    const mcpEntries: PluginEntry[] =
+      mcpServers.length === 0 || excludePackages.has(MCP_CLIENT_PACKAGE)
+        ? []
+        : [{ spec: MCP_CLIENT_PACKAGE, ...(config.mcp?.clientVersion === undefined ? {} : { version: config.mcp.clientVersion }) }]
+    const statuses = [...configured, ...mcpEntries].map((entry) =>
+      pluginStatus(installDeps, DSH_HOME, entry, parseSpec(entry.spec).package === HOOKS_PACKAGE ? hooksPath : undefined),
+    )
     // Linked (bare package name) whenever `ensurePluginLink` succeeds — the
     // only way `@deepseek-ai/dsh-client-modules` ever discovers a plugin's
     // browser bundle, see `plugin-link.ts`. Falls back to the resolved
@@ -655,6 +729,11 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
     // declaration) so this resolver only ever surfaces what the package
     // itself declared.
     const resolveDeclaredPatch = (status: Extract<PluginStatus, { kind: 'ready' }>) => {
+      // The MCP client's rows are this app's own, one per enabled server,
+      // and take precedence over anything that package may declare for
+      // itself: a single declared row could only mount one server, and its
+      // id would collide the moment a second was configured.
+      if (status.package === MCP_CLIENT_PACKAGE && mcpServers.length > 0) return serverRows(config.mcp)
       const declaredPath = bundlePatchDeclaration(status.packageDir)
       return declaredPath !== undefined ? loadDeclaredPatchRows(status.packageDir, declaredPath) : undefined
     }
@@ -678,7 +757,7 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
 
   try {
     const handle = await startServer({
-      spec: dshWebCommand(config, patchPath, DSH_HOME),
+      spec: dshWebCommand(config, patchPath, DSH_HOME, mcpEnv(config)),
       timeoutMs: READY_TIMEOUT_MS,
       onSpawned: (stop) => {
         child = { generation: mine, stop }

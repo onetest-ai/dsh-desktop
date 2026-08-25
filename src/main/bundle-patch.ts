@@ -29,6 +29,23 @@ class DeferredJsExpression {
   constructor(readonly source: string) {}
 }
 
+/**
+ * Build a value that re-serializes as a `!!js` scalar rather than as a
+ * string, for a row this app generates itself rather than reads from a
+ * package.
+ *
+ * The harness's cordis loader evaluates `!!js` under a plugin entry's
+ * `config`, which is the only way a generated overlay can name a value it
+ * must not contain — a credential the harness child receives through its
+ * environment instead (see `mcp-servers.ts`). This app still never evaluates
+ * the expression; it only writes it out.
+ * @param source - the expression text, e.g. `` `Bearer ${process.env.X}` ``.
+ * @returns a value `dumpDeclaredPatchRow` emits as `!!js <source>`.
+ */
+export function jsExpression(source: string): object {
+  return new DeferredJsExpression(source)
+}
+
 const JS_EXPRESSION_TYPE = new yaml.Type('tag:yaml.org,2002:js', {
   kind: 'scalar',
   resolve: () => true,

@@ -30,6 +30,7 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
     pnpmPath: '',
     npmPath: '',
     plugins: pluginRows(HOOKS_PACKAGE),
+    mcp: { enabled: false, servers: [] },
     ...overrides,
   }
 }
@@ -354,5 +355,31 @@ describe('formFor', () => {
     expect(filled.version).toBe('1.2.3')
     expect(filled.workspace).toBe('/tmp/ws')
     expect(filled.plugins).toEqual([])
+  })
+})
+
+describe('the MCP client is not a plugin the user manages', () => {
+  const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
+
+  it('refuses to add it from the Plugins tab, pointing at the MCP tab instead', () => {
+    const result = validatePluginSpec(MCP_CLIENT, [])
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toContain('MCP tab')
+  })
+
+  it('refuses a pinned spec for it too', () => {
+    expect(validatePluginSpec(`${MCP_CLIENT}@1.0.0`, []).ok).toBe(false)
+  })
+
+  it('drops a stored entry for it on save, so it stops failing every boot', () => {
+    const result = validateSettings(form({ plugins: pluginRows(`${MCP_CLIENT}@1.0.0`) }))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.config.plugins).toEqual([])
+  })
+
+  it('keeps every other plugin while dropping it', () => {
+    const result = validateSettings(form({ plugins: pluginRows(`${MCP_CLIENT}@1.0.0\n${HOOKS_PACKAGE}`) }))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.config.plugins?.map((entry) => entry.spec)).toEqual([HOOKS_PACKAGE])
   })
 })

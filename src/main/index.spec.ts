@@ -127,6 +127,13 @@ vi.mock('electron', () => ({
   Notification: class {
     show(): void {}
   },
+  // Reversible stand-in for the real OS-backed store, so a boot that reads an
+  // MCP token exercises the same `secrets.ts` path production does.
+  safeStorage: {
+    isEncryptionAvailable: () => true,
+    encryptString: (plain: string) => Buffer.from(`enc:${plain}`, 'utf8'),
+    decryptString: (encrypted: Buffer) => encrypted.toString('utf8').slice(4),
+  },
 }))
 
 const createWindow = vi.fn(() => fake.window)
@@ -1249,5 +1256,122 @@ describe('applySettings', () => {
     startServer.mockClear()
     await applySettingsReady(undefined, STORED)
     expect(startServer).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MCP servers at boot', () => {
+  const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
+  const TAVILY = { id: 'tavily', preset: 'tavily', url: 'https://mcp.tavily.com/mcp/', enabled: true }
+
+  // Every case here reads the secret store, which lives under `$DSH_HOME`.
+  // Without a home of its own the suite would read the developer's real
+  // `~/.dsh` and see whatever tokens they have actually saved — which is how
+  // the empty-token case first failed, decrypting a real credential with the
+  // fake key.
+  let mcpHome: string
+  let originalDshHome: string | undefined
+
+  beforeEach(() => {
+    originalDshHome = process.env.DSH_HOME
+    mcpHome = mkdtempSync(join(tmpdir(), 'dsh-mcp-boot-'))
+    process.env.DSH_HOME = mcpHome
+  })
+
+  afterEach(() => {
+    if (originalDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = originalDshHome
+  })
+
+  /** A stored config with the MCP section set. */
+  function withMcp(mcp: DesktopConfig['mcp']): void {
+    configResult = { configured: true, config: { ...STORED, mcp } }
+  }
+
+  /** The `resolveDeclaredPatch` callback `bootNow` handed `writeRuntimeFiles`. */
+  function declaredPatchResolver(): (status: unknown) => unknown {
+    return writeRuntimeFilesMock.mock.calls.at(-1)![5] as (status: unknown) => unknown
+  }
+
+  it('resolves the MCP client alongside the configured plugins when a server is enabled', async () => {
+    withMcp({ enabled: true, clientVersion: '1.2.3', servers: [TAVILY] })
+    await bootReady()
+    expect(pluginStatusMock).toHaveBeenCalledWith(expect.anything(), expect.any(String), { spec: MCP_CLIENT, version: '1.2.3' }, undefined)
+  })
+
+  it('does not resolve it at all when the master switch is off', async () => {
+    withMcp({ enabled: false, clientVersion: '1.2.3', servers: [TAVILY] })
+    await bootReady()
+    expect(pluginStatusMock.mock.calls.some((call) => (call[2] as { spec: string }).spec === MCP_CLIENT)).toBe(false)
+  })
+
+  it('does not resolve it when every server is switched off', async () => {
+    withMcp({ enabled: true, clientVersion: '1.2.3', servers: [{ ...TAVILY, enabled: false }] })
+    await bootReady()
+    expect(pluginStatusMock.mock.calls.some((call) => (call[2] as { spec: string }).spec === MCP_CLIENT)).toBe(false)
+  })
+
+  it('gives the MCP client one overlay row per enabled server, each under its own id', async () => {
+    withMcp({
+      enabled: true,
+      clientVersion: '1.2.3',
+      servers: [TAVILY, { id: 'github', preset: 'github', url: 'https://api.githubcopilot.com/mcp/', enabled: true }],
+    })
+    await bootReady()
+    const rows = declaredPatchResolver()({ package: MCP_CLIENT, packageDir: '/tmp/mcp' }) as { id: string; name: string }[]
+    expect(rows.map((row) => row.id)).toEqual(['mcp-tavily', 'mcp-github'])
+    expect(new Set(rows.map((row) => row.name))).toEqual(new Set([MCP_CLIENT]))
+  })
+
+  it('carries each enabled server token to the harness child by environment, never in the overlay', async () => {
+    writeFileSync(
+      join(mcpHome, 'desktop-secrets.json'),
+      JSON.stringify({ tavily: Buffer.from('enc:tvly-abc', 'utf8').toString('base64') }),
+    )
+    withMcp({ enabled: true, clientVersion: '1.2.3', servers: [TAVILY] })
+    await bootReady()
+    const env = dshWebCommandMock.mock.calls.at(-1)![3] as Record<string, string>
+    expect(env).toEqual({ DSH_MCP_TOKEN_TAVILY: 'tvly-abc' })
+  })
+
+  it('passes an empty value for a server with no stored token, rather than the text "undefined"', async () => {
+    withMcp({ enabled: true, clientVersion: '1.2.3', servers: [TAVILY] })
+    await bootReady()
+    const env = dshWebCommandMock.mock.calls.at(-1)![3] as Record<string, string>
+    expect(env.DSH_MCP_TOKEN_TAVILY).toBe('')
+  })
+
+  it('adds no MCP environment at all when nothing is enabled', async () => {
+    withMcp({ enabled: false, servers: [TAVILY] })
+    await bootReady()
+    expect(dshWebCommandMock.mock.calls.at(-1)![3]).toEqual({})
+  })
+})
+
+describe('a stored MCP client plugin entry', () => {
+  const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
+
+  it('never reaches the overlay from the plugin list, so it cannot fail the boot with an empty config', async () => {
+    configResult = {
+      configured: true,
+      config: { ...STORED, plugins: [{ spec: MCP_CLIENT, version: '1.0.0' }] },
+    }
+    await bootReady()
+    expect(pluginStatusMock.mock.calls.some((call) => (call[2] as { spec: string }).spec === MCP_CLIENT)).toBe(false)
+  })
+
+  it('leaves the other configured plugins alone', async () => {
+    configResult = {
+      configured: true,
+      config: {
+        ...STORED,
+        plugins: [
+          { spec: MCP_CLIENT, version: '1.0.0' },
+          { spec: '@deepseek-ai/dsh-hooks-claude-code', version: '0.1.1-rc.2' },
+        ],
+      },
+    }
+    await bootReady()
+    const specs = pluginStatusMock.mock.calls.map((call) => (call[2] as { spec: string }).spec)
+    expect(specs).toEqual(['@deepseek-ai/dsh-hooks-claude-code'])
   })
 })

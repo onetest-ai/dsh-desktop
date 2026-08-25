@@ -184,8 +184,46 @@ input[type='text']::placeholder {
   opacity: 0.7;
 }
 
+/* The native control renders its own chrome — a light-mode-only well with a
+   system arrow — which ignores every variable above and reads as a foreign
+   element in dark mode. Reset it and rebuild it on `input[type='text']`'s
+   own metrics so the picker and the fields beside it are visibly the same
+   control. The arrow is an inline SVG data URI rather than a pseudo-element:
+   `select` cannot carry `::after`, and a wrapper element just to hold one
+   would put a div between the row's flex children and their sizing. */
+select {
+  width: 100%;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 0 34px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background-color: var(--input-fill);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%23888D93' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 8px;
+  color: var(--label);
+  font: inherit;
+  appearance: none;
+  cursor: default;
+  text-overflow: ellipsis;
+}
+
+select:hover {
+  border-color: var(--border-strong);
+}
+
+/* A disabled option is a live part of this picker's meaning — it is how a
+   preset that cannot be added yet stays visible — so it is dimmed rather
+   than left to the platform's own default, which varies. */
+select option:disabled {
+  color: var(--label-secondary);
+}
+
 input[type='text']:focus-visible,
 input[type='radio']:focus-visible,
+select:focus-visible,
 button:focus-visible,
 summary:focus-visible {
   outline: 2px solid var(--accent);
@@ -785,4 +823,80 @@ button:disabled {
   color: var(--label-secondary);
   font: 12px/18px -apple-system, BlinkMacSystemFont, sans-serif;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
+}
+
+/* The picker takes the row's free space the way a text input does; without
+   this it would size to its widest option and shove Add off the row. */
+.row select {
+  flex: 1;
+  min-width: 0;
+}
+
+/* MCP tab. Server rows deliberately reuse `.plugin-row` and its children:
+   the two lists are the same kind of thing to the user — rows they add,
+   switch on, and remove — and styling them apart would suggest a difference
+   that is not there. Only the controls the plugin list has no equivalent of
+   are defined here. */
+.mcp-master {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 13px/18px -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--label);
+}
+
+.mcp-row-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 12px/16px -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--label-secondary);
+}
+
+/* Indented under the row it belongs to, and separated by a rule, so a row
+   with a token reads as one thing with a credential rather than two
+   stacked controls. */
+.mcp-token {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.mcp-token .hint {
+  margin: 0 0 6px;
+}
+
+.mcp-custom {
+  margin-top: 10px;
+}
+
+.mcp-custom summary {
+  cursor: default;
+  font: 12px/16px -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--label-secondary);
+}
+
+.mcp-custom label {
+  display: block;
+  margin-top: 8px;
+}
+
+.mcp-custom input {
+  width: 100%;
+}
+
+.mcp-custom button {
+  margin-top: 8px;
+}
+
+/* The one state where this tab can look fully configured and do nothing:
+   servers listed, token saved, master switch off. Toned like a setup step
+   rather than a failure — nothing is broken, a step is missing. */
+.mcp-off-warning {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--setup);
+  border-radius: 8px;
+  color: var(--setup);
+  font: 12px/18px -apple-system, BlinkMacSystemFont, sans-serif;
 }

@@ -2,6 +2,8 @@ import type { BinaryChecks } from './check-binaries'
 import type { ConfigResult, DesktopConfig } from './config'
 import { isConfigurationProblem, summarizeConfigurationNeed, summarizeFailure } from './error-summary'
 import type { OpenConfigFileResult } from './open-config-file'
+import { MCP_PRESETS, type McpPreset } from './mcp-presets'
+import { activeServers, MCP_CLIENT_PACKAGE, type McpConfig } from './mcp-servers'
 import { parseSpec, type PluginEntry } from './plugin-entries'
 import {
   formFor,
@@ -99,6 +101,73 @@ export interface SettingsDeps {
    * job alone; this never becomes a third way into that surface.
    */
   openConfigFile(): Promise<OpenConfigFileResult>
+  /**
+   * The store holding each MCP server's token, outside `desktop.json` and
+   * outside the settings form (see `secrets.ts`). Injected as a whole rather
+   * than as loose functions so tests can substitute a store that never
+   * touches the OS keychain.
+   */
+  mcpSecrets: {
+    /**
+     * Whether this machine has an OS-backed secure store at all.
+     * @returns false when no token can be saved here.
+     */
+    available(): boolean
+    /**
+     * Whether a token is on file, without decrypting it.
+     * @param id - the server id.
+     * @returns whether a token is stored.
+     */
+    has(id: string): boolean
+    /**
+     * Store one server's token.
+     * @param id - the server id.
+     * @param value - the token.
+     * @throws when there is no secure store to write to.
+     */
+    set(id: string, value: string): void
+    /**
+     * Forget one server's token.
+     * @param id - the server id.
+     */
+    clear(id: string): void
+    /**
+     * Drop every stored token whose server no longer exists.
+     * @param keep - the server ids that survive.
+     */
+    reconcile(keep: ReadonlySet<string>): void
+  }
+  /**
+   * Respawn the harness child, for a change that alters what the child was
+   * launched with but leaves `desktop.json` untouched — replacing a stored
+   * token, whose value reaches the harness only through the child's
+   * environment (see `index.ts`'s `mcpEnv`). `apply` cannot serve here: it
+   * compares two configs, and these two are equal.
+   */
+  restartHarness(): Promise<void>
+}
+
+/** What `read` reports about the MCP tab's own state, alongside the editable form. */
+export interface McpInfo {
+  /**
+   * Whether tokens can be stored on this machine. False on a desktop
+   * environment with no keyring, where the token fields are unusable and say
+   * so rather than silently accepting a value that is never saved.
+   */
+  secureStoreAvailable: boolean
+  /**
+   * Which configured servers have a token on file, by id. The token itself
+   * is never sent to the renderer — only whether one exists — so a stored
+   * credential cannot be read back out through the settings window.
+   */
+  tokens: Record<string, boolean>
+  /**
+   * The shipped catalog, sent to the renderer rather than duplicated there:
+   * the settings window needs each entry's label, URL, docs link, and
+   * whether it can be added at all, and a second copy of that table would be
+   * one more thing to keep in step with `mcp-presets.ts`.
+   */
+  presets: readonly McpPreset[]
 }
 
 /** What `read` reports about one configured plugin entry, alongside the editable form. */
@@ -184,7 +253,7 @@ export interface SettingsHandlers {
   read(
     onUpdateAvailable?: (latest: string) => void,
     onPluginUpdateAvailable?: (pkg: string, latest: string) => void,
-  ): { configured: boolean; form: SettingsForm; plugins: PluginInfo[] }
+  ): { configured: boolean; form: SettingsForm; plugins: PluginInfo[]; mcp: McpInfo }
   pickFolder(): Promise<string | undefined>
   /**
    * Saves one form: validates it and writes it to disk unconditionally
@@ -261,6 +330,23 @@ export interface SettingsHandlers {
    *   yet" for a config that has never been written.
    */
   openConfigFile(): Promise<OpenConfigFileResult>
+  /**
+   * Store one MCP server's token and respawn the harness so it takes effect.
+   *
+   * Separate from `save` because a token is not part of the form and never
+   * reaches `desktop.json`: it goes straight to the OS keychain, and the
+   * running harness only picks it up through a restart.
+   * @param id - the server id the token belongs to.
+   * @param token - the token as typed; blank is rejected rather than stored.
+   * @returns whether it was stored, and why not when it was not.
+   */
+  setMcpToken(id: string, token: string): Promise<{ ok: boolean; message?: string }>
+  /**
+   * Forget one MCP server's token and respawn the harness without it.
+   * @param id - the server id.
+   * @returns whether it was cleared, and why not when it was not.
+   */
+  clearMcpToken(id: string): Promise<{ ok: boolean; message?: string }>
 }
 
 /**
@@ -423,7 +509,24 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       config.npmPath,
       onProgress ?? (() => {}),
     )
-    const resolvedConfig = { ...config, plugins: resolved }
+    // The MCP client rides the same install path as a plugin entry — one
+    // package, however many servers it backs — by being handed to
+    // `installPlugins` as a one-entry list. It is installed only when a
+    // server is actually enabled, so a user who never turns MCP on never
+    // pays for the download, and its prior version is carried in as that
+    // entry's `previous` so an unchanged section is a cache hit rather than
+    // a reinstall on every save.
+    const mcpWarnings: string[] = []
+    let mcp = config.mcp
+    if (mcp !== undefined && activeServers(mcp).length > 0) {
+      const prior: PluginEntry[] =
+        mcp.clientVersion === undefined ? [] : [{ spec: MCP_CLIENT_PACKAGE, version: mcp.clientVersion }]
+      const installed = await installPlugins([{ spec: MCP_CLIENT_PACKAGE }], prior, config.npmPath, onProgress ?? (() => {}))
+      mcpWarnings.push(...installed.warnings)
+      const version = installed.resolved[0]?.version
+      mcp = { ...mcp, ...(version === undefined ? {} : { clientVersion: version }) }
+    }
+    const resolvedConfig = { ...config, plugins: resolved, ...(mcp === undefined ? {} : { mcp }) }
 
     // An install can run for minutes; a quit landing during it must not still
     // land a write and an apply behind the quit's back once it finishes.
@@ -432,7 +535,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     deps.writeConfig(resolvedConfig)
     const applyWarnings = await deps.apply(appliedConfig, resolvedConfig)
     appliedConfig = resolvedConfig
-    return { warnings: [...pluginWarnings, ...applyWarnings] }
+    return { warnings: [...pluginWarnings, ...mcpWarnings, ...applyWarnings] }
   }
 
   /**
@@ -512,13 +615,67 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     })
     config = { ...config, plugins: provisionalPlugins }
 
+    // The MCP client's resolved version is carried forward for the same
+    // reason a plugin entry's is: the queued job below resolves it, and a
+    // save that only toggled a server must not drop the version already
+    // installed and make the next boot report it as missing.
+    if (config.mcp !== undefined) {
+      const priorVersion = previous?.mcp?.clientVersion
+      config = {
+        ...config,
+        mcp: { ...config.mcp, ...(priorVersion === undefined ? {} : { clientVersion: priorVersion }) },
+      }
+    }
+
     deps.writeConfig(config)
+
+    // A token outliving the server it belonged to would come back silently
+    // if the id were ever reused, so stored tokens are reconciled against
+    // what was just saved — after the write, so a failed save never discards
+    // a credential for a server that is still configured.
+    deps.mcpSecrets.reconcile(new Set((config.mcp?.servers ?? []).map((server) => server.id)))
 
     const { warnings } = await scheduleJob(
       () => installAndApply(priorPlugins, config, onProgress),
       () => ({ warnings: [] }),
     )
     return { ok: true, warnings }
+  }
+
+  /**
+   * Store one server's token, then respawn the harness so the child is
+   * launched with it.
+   *
+   * The restart is deliberate and unconditional on success: the token
+   * reaches the harness only through the environment its child was spawned
+   * with, so without one the user would save a token and see nothing change.
+   * @param id - the server id.
+   * @param token - the token as typed.
+   * @returns whether it was stored, and why not when it was not.
+   */
+  async function performSetMcpToken(id: string, token: string): Promise<{ ok: boolean; message?: string }> {
+    if (deps.isQuitting()) return { ok: false, message: 'The app is shutting down.' }
+    const trimmed = token.trim()
+    if (trimmed === '') return { ok: false, message: 'Enter a token, or use Remove to clear the stored one.' }
+    try {
+      deps.mcpSecrets.set(id, trimmed)
+    } catch (error) {
+      return { ok: false, message: (error as Error).message }
+    }
+    await deps.restartHarness()
+    return { ok: true }
+  }
+
+  /**
+   * Forget one server's token and respawn the harness without it.
+   * @param id - the server id.
+   * @returns whether it was cleared, and why not when it was not.
+   */
+  async function performClearMcpToken(id: string): Promise<{ ok: boolean; message?: string }> {
+    if (deps.isQuitting()) return { ok: false, message: 'The app is shutting down.' }
+    deps.mcpSecrets.clear(id)
+    await deps.restartHarness()
+    return { ok: true }
   }
 
   /**
@@ -607,7 +764,15 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
         }
       }
 
-      const storedPlugins = stored.configured ? (stored.config.plugins ?? []) : []
+      // Filtered rather than shown as a broken row: this app manages that
+      // package on the MCP tab, so a stored entry for it is residue from a
+      // hand edit or a save predating that tab. The next save drops it from
+      // disk for good (see `settings-validate.ts`); until then it must not
+      // appear here offering a Config editor for something the user is not
+      // the one configuring.
+      const storedPlugins = (stored.configured ? (stored.config.plugins ?? []) : []).filter(
+        (entry) => parseSpec(entry.spec).package !== MCP_CLIENT_PACKAGE,
+      )
       const disabled = deps.disabledPlugins()
       const clientWarnings = deps.clientLinkWarnings()
       const plugins: PluginInfo[] = storedPlugins.map((entry) => {
@@ -654,7 +819,16 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
         }
       }
 
-      return { configured: stored.configured, form: formFor(stored), plugins }
+      const storedMcp = stored.configured ? stored.config.mcp : undefined
+      const tokens: Record<string, boolean> = {}
+      for (const server of storedMcp?.servers ?? []) tokens[server.id] = deps.mcpSecrets.has(server.id)
+
+      return {
+        configured: stored.configured,
+        form: formFor(stored),
+        plugins,
+        mcp: { secureStoreAvailable: deps.mcpSecrets.available(), tokens, presets: MCP_PRESETS },
+      }
     },
     pickFolder: () => deps.pickFolder(),
     save: (form, onProgress) => performSave(form, onProgress),
@@ -672,5 +846,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     validatePluginConfig: (text) => parsePluginConfig(text),
     checkBinaries: (pnpmPath, npmPath) => deps.checkBinaries(pnpmPath, npmPath),
     openConfigFile: () => deps.openConfigFile(),
+    setMcpToken: (id, token) => performSetMcpToken(id, token),
+    clearMcpToken: (id) => performClearMcpToken(id),
   }
 }

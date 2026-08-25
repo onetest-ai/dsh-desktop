@@ -74,6 +74,8 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
       handlers.checkBinaries(pnpmPath, npmPath),
     )
     ipcMain.handle('settings:open-config-file', () => handlers.openConfigFile())
+    ipcMain.handle('settings:set-mcp-token', (_event, id: string, token: string) => handlers.setMcpToken(id, token))
+    ipcMain.handle('settings:clear-mcp-token', (_event, id: string) => handlers.clearMcpToken(id))
     channelsRegistered = true
   }
 

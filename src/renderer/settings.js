@@ -9,7 +9,7 @@ const kindOf = () => document.querySelector('input[name="kind"]:checked').value
 // Save, and never appears in a save result — so an Add error never drives a
 // tab switch; `plugins` names the accumulated-list error Save can still
 // return (see `error-plugins` in the Plugins panel).
-const TABS = ['harness', 'plugins', 'notifications', 'advanced']
+const TABS = ['harness', 'plugins', 'mcp', 'notifications', 'advanced']
 const FIELD_TAB = {
   repo: 'harness',
   package: 'harness',
@@ -20,6 +20,7 @@ const FIELD_TAB = {
   pnpmPath: 'advanced',
   npmPath: 'advanced',
   plugins: 'plugins',
+  mcp: 'mcp',
 }
 
 let activeTab = 'harness'
@@ -64,6 +65,26 @@ function markTabError(id, hasError) {
 // entry at least once. Populated from `read()` on load and appended to by
 // `addPlugin`; never edited as free text, only added to or removed from.
 let pluginRows = []
+
+// The MCP servers currently shown, in display order, each `{ id, preset,
+// url, enabled }`. Populated from `read()` on load, appended to by the two
+// Add controls, and submitted whole by `collect` — the same
+// local-list-of-rows pattern as `pluginRows`, and refused for the same
+// reason while a save is in flight.
+let mcpServers = []
+
+// Which servers have a token on file, by id. Never the tokens themselves:
+// main only ever reports their presence (see `McpInfo`), so this window
+// cannot display a stored credential even accidentally.
+let mcpTokens = {}
+
+// Whether this machine has an OS-backed secure store. False disables every
+// token field with an explanation, rather than accepting a value that could
+// only be dropped.
+let mcpSecureStore = true
+
+// The shipped preset catalog, from `read()` rather than duplicated here.
+let mcpPresets = []
 
 // Updates offered but not yet accepted, keyed by package name so any number
 // of floating plugins can each carry their own pending update at once — a
@@ -142,6 +163,7 @@ function collect() {
   const form = { kind: kindOf() }
   for (const name of FIELDS) form[name] = el(name).value
   form.plugins = pluginRows.map((plugin) => ({ spec: plugin.spec, config: plugin.config ?? '' }))
+  form.mcp = { enabled: el('mcp-enabled').checked, servers: mcpServers.map((server) => ({ ...server })) }
   return form
 }
 
@@ -172,6 +194,304 @@ async function validatePluginConfigRow(textarea, errorNode, summaryNode) {
     return
   }
   summaryNode.textContent = textarea.value.trim() === '' ? 'Config' : 'Config (set)'
+}
+
+/**
+ * Fill the preset picker from the shipped catalog, listing every preset but
+ * enabling only those already configured servers have not claimed and that
+ * this app can actually authenticate.
+ *
+ * An OAuth-only preset stays visible and disabled rather than being hidden:
+ * a user looking for Linear should find out that it is known and not yet
+ * supported, not be left wondering whether they typed the name wrong.
+ */
+function renderPresetPicker() {
+  const picker = el('mcp-preset')
+  picker.textContent = ''
+  const taken = new Set(mcpServers.map((server) => server.id))
+  for (const preset of mcpPresets) {
+    const option = document.createElement('option')
+    option.value = preset.id
+    const unavailable = preset.auth !== 'token'
+    option.textContent = unavailable
+      ? `${preset.label} — needs sign-in, not supported yet`
+      : taken.has(preset.id)
+        ? `${preset.label} — already added`
+        : preset.label
+    option.disabled = unavailable || taken.has(preset.id)
+    picker.append(option)
+  }
+  // Derived from the catalog rather than read back off the <select> (via
+  // `selectedOptions`), so the note and the Add button agree with the same
+  // source the options were built from.
+  const selected = mcpPresets.find((preset) => preset.id === picker.value)
+  el('mcp-preset-note').textContent =
+    selected === undefined || selected.auth === 'token'
+      ? 'Presets that need a browser sign-in are listed but cannot be added yet.'
+      : `${selected.label} only accepts a browser sign-in, which this app cannot do yet.`
+  el('add-mcp-preset').disabled =
+    saveInFlight || selected === undefined || selected.auth !== 'token' || taken.has(selected.id)
+}
+
+/**
+ * Render one row per configured MCP server: its name and URL, whether it is
+ * on, and its token — stored or not, but never shown.
+ *
+ * Reuses the plugin list's own row classes so the two lists read as one kind
+ * of thing, which they are: both are rows the user adds, toggles, and removes.
+ */
+function renderMcpRows() {
+  const list = el('mcp-rows')
+  list.textContent = ''
+  if (mcpServers.length === 0) {
+    const empty = document.createElement('p')
+    empty.className = 'hint'
+    empty.textContent = 'No servers yet. Add one above.'
+    list.append(empty)
+    return
+  }
+
+  for (const server of mcpServers) {
+    const row = document.createElement('li')
+    row.className = 'plugin-row'
+
+    const top = document.createElement('div')
+    top.className = 'plugin-row-top'
+
+    const main = document.createElement('div')
+    main.className = 'plugin-row-main'
+
+    const name = document.createElement('span')
+    name.className = 'plugin-name'
+    name.textContent = server.id
+    main.append(name)
+
+    const meta = document.createElement('span')
+    meta.className = 'plugin-meta'
+    meta.textContent = server.url
+    main.append(meta)
+
+    top.append(main)
+
+    const actions = document.createElement('div')
+    actions.className = 'plugin-row-actions'
+
+    const toggle = document.createElement('label')
+    toggle.className = 'mcp-row-toggle'
+    const toggleBox = document.createElement('input')
+    toggleBox.className = 'mcp-row-enabled'
+    toggleBox.type = 'checkbox'
+    toggleBox.checked = server.enabled
+    toggleBox.disabled = saveInFlight
+    toggleBox.setAttribute('aria-label', `Use ${server.id}`)
+    toggleBox.addEventListener('change', () => {
+      server.enabled = toggleBox.checked
+    })
+    toggle.append(toggleBox)
+    const toggleText = document.createElement('span')
+    toggleText.textContent = 'On'
+    toggle.append(toggleText)
+    actions.append(toggle)
+
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'mcp-remove'
+    remove.setAttribute('aria-label', `Remove ${server.id}`)
+    remove.textContent = 'Remove'
+    remove.disabled = saveInFlight
+    remove.addEventListener('click', () => removeMcpServer(server.id))
+    actions.append(remove)
+
+    top.append(actions)
+    row.append(top)
+
+    row.append(buildTokenField(server))
+    list.append(row)
+  }
+}
+
+/**
+ * One server's token controls: a password field, a Save that stores it, and
+ * a Remove that forgets it.
+ *
+ * The field starts empty even when a token is on file, and the row says so
+ * separately — main never sends the value back, so there is nothing to
+ * prefill it with and nothing this window could leak.
+ * @param {{ id: string, preset?: string }} server - the row's server.
+ * @returns {HTMLElement} the token controls.
+ */
+function buildTokenField(server) {
+  const wrap = document.createElement('div')
+  wrap.className = 'mcp-token'
+
+  const status = document.createElement('p')
+  status.className = 'hint'
+  status.textContent = mcpSecureStore
+    ? mcpTokens[server.id]
+      ? 'A token is saved for this server.'
+      : 'No token saved yet — this server will be refused until one is.'
+    : 'This computer has no secure credential store, so a token cannot be saved here.'
+  wrap.append(status)
+
+  if (!mcpSecureStore) return wrap
+
+  const controls = document.createElement('div')
+  controls.className = 'row'
+
+  const input = document.createElement('input')
+  input.className = 'mcp-token-input'
+  input.type = 'password'
+  input.placeholder = mcpTokens[server.id] ? 'Replace the saved token' : 'Paste the token'
+  input.setAttribute('aria-label', `Token for ${server.id}`)
+  input.spellcheck = false
+  controls.append(input)
+
+  const error = document.createElement('p')
+  error.className = 'error'
+
+  const save = document.createElement('button')
+  save.className = 'mcp-token-save'
+  save.type = 'button'
+  save.textContent = 'Save token'
+  save.addEventListener('click', async () => {
+    error.textContent = ''
+    save.disabled = true
+    try {
+      const result = await window.settings.setMcpToken(server.id, input.value)
+      if (!result.ok) {
+        error.textContent = result.message
+        return
+      }
+      mcpTokens[server.id] = true
+      input.value = ''
+      status.textContent = 'A token is saved for this server.'
+      input.placeholder = 'Replace the saved token'
+    } catch (failure) {
+      error.textContent = messageOf(failure)
+    } finally {
+      save.disabled = false
+      renderMcpRows()
+    }
+  })
+  controls.append(save)
+
+  if (mcpTokens[server.id]) {
+    const clear = document.createElement('button')
+    clear.className = 'mcp-token-clear'
+    clear.type = 'button'
+    clear.textContent = 'Remove token'
+    clear.addEventListener('click', async () => {
+      error.textContent = ''
+      clear.disabled = true
+      try {
+        const result = await window.settings.clearMcpToken(server.id)
+        if (!result.ok) {
+          error.textContent = result.message
+          return
+        }
+        delete mcpTokens[server.id]
+      } catch (failure) {
+        error.textContent = messageOf(failure)
+      } finally {
+        clear.disabled = false
+        renderMcpRows()
+      }
+    })
+    controls.append(clear)
+  }
+
+  wrap.append(controls)
+  wrap.append(error)
+  return wrap
+}
+
+/**
+ * Turn the master switch on when the first server is added.
+ *
+ * Adding a server is an unambiguous statement of intent, and leaving the
+ * feature off after one would produce exactly the dead end this exists to
+ * prevent: a configured server, a saved token, and nothing connected. Only
+ * the first add flips it, so a user who deliberately switches the feature off
+ * with servers already listed is not overridden by their next add.
+ */
+function enableMcpForFirstServer() {
+  if (mcpServers.length === 1) el('mcp-enabled').checked = true
+  renderMcpOffWarning()
+}
+
+/**
+ * Warn when servers are configured but the master switch is off — the state
+ * in which everything on this tab looks set up and nothing is connected.
+ */
+function renderMcpOffWarning() {
+  const warning = el('mcp-off-warning')
+  warning.hidden = el('mcp-enabled').checked || mcpServers.length === 0
+}
+
+/**
+ * Add the picker's selected preset as a new server.
+ *
+ * The preset's URL is copied onto the row rather than referenced, so a
+ * server keeps working as configured even if the shipped catalog later
+ * changes that vendor's endpoint.
+ */
+function addPresetServer() {
+  const picker = el('mcp-preset')
+  const preset = mcpPresets.find((candidate) => candidate.id === picker.value)
+  if (preset === undefined || preset.auth !== 'token') return
+  if (mcpServers.some((server) => server.id === preset.id)) return
+  mcpServers.push({ id: preset.id, preset: preset.id, url: preset.url, enabled: true })
+  enableMcpForFirstServer()
+  el('error-mcp').textContent = ''
+  markTabError('mcp', false)
+  renderPresetPicker()
+  renderMcpRows()
+}
+
+/**
+ * Add a hand-entered server.
+ *
+ * Validated here only well enough to keep an obviously broken row out of the
+ * list; `save` re-checks both fields in main over the same rules, which is
+ * what a hand-edited `desktop.json` also passes through.
+ */
+function addCustomServer() {
+  const error = el('error-mcp-custom')
+  const id = el('mcp-custom-id').value.trim()
+  const url = el('mcp-custom-url').value.trim()
+  error.textContent = ''
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) {
+    error.textContent = 'Use letters, digits, - and _ for the name, up to 32 characters.'
+    return
+  }
+  if (mcpServers.some((server) => server.id === id)) {
+    error.textContent = `A server named ${id} is already in the list.`
+    return
+  }
+  if (!url.startsWith('https://')) {
+    error.textContent = 'The URL must start with https://.'
+    return
+  }
+  mcpServers.push({ id, url, enabled: true })
+  enableMcpForFirstServer()
+  el('mcp-custom-id').value = ''
+  el('mcp-custom-url').value = ''
+  renderPresetPicker()
+  renderMcpRows()
+}
+
+/**
+ * Drop one server from the list. Its stored token is forgotten by main on
+ * the next save (see `performSave`'s reconcile), not here: until the save
+ * lands, the removal is only local and could still be abandoned by closing
+ * the window.
+ * @param {string} id - the server to remove.
+ */
+function removeMcpServer(id) {
+  mcpServers = mcpServers.filter((server) => server.id !== id)
+  renderPresetPicker()
+  renderMcpRows()
+  renderMcpOffWarning()
 }
 
 /**
@@ -498,6 +818,8 @@ async function performSave() {
   saveInFlight = true
   refreshAddDisabled()
   renderPluginRows()
+  renderMcpRows()
+  renderPresetPicker()
   try {
     const result = await window.settings.save(collect())
     if (result.ok) {
@@ -568,6 +890,8 @@ async function performSave() {
     saveInFlight = false
     refreshAddDisabled()
     renderPluginRows()
+    renderMcpRows()
+    renderPresetPicker()
   }
 }
 
@@ -683,6 +1007,15 @@ async function load() {
     if (plugin === undefined || plugin.version === pluginUpdates.get(pkg)) pluginUpdates.delete(pkg)
   }
   renderPluginRows()
+
+  el('mcp-enabled').checked = form.mcp.enabled
+  mcpServers = form.mcp.servers.map((server) => ({ ...server }))
+  mcpTokens = { ...result.mcp.tokens }
+  mcpSecureStore = result.mcp.secureStoreAvailable
+  mcpPresets = result.mcp.presets
+  renderPresetPicker()
+  renderMcpRows()
+  renderMcpOffWarning()
 }
 
 for (const radio of document.querySelectorAll('input[name="kind"]')) {
@@ -735,6 +1068,14 @@ el('check-binaries').addEventListener('click', () => {
 el('open-config-file').addEventListener('click', () => {
   void openConfigFile()
 })
+
+el('add-mcp-preset').addEventListener('click', addPresetServer)
+el('add-mcp-custom').addEventListener('click', addCustomServer)
+// Re-rendered on change so the note under the picker follows the selection:
+// picking an OAuth-only preset has to explain itself before Add is pressed,
+// not after.
+el('mcp-preset').addEventListener('change', renderPresetPicker)
+el('mcp-enabled').addEventListener('change', renderMcpOffWarning)
 
 // Receive-only: the main process pushes progress lines while a managed
 // install runs, and a later update-available result once the background

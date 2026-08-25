@@ -107,16 +107,30 @@ export function envWithLauncherDir(command: string, env: NodeJS.ProcessEnv): Nod
  * @param config - the desktop settings.
  * @param patchFile - absolute path to this project's cordis patch overlay.
  * @param dshHome - the resolved `$DSH_HOME` directory.
+ * @param extraEnv - additional variables for the child only; the MCP server
+ *   tokens the generated overlay refers to by name rather than by value (see
+ *   `mcp-servers.ts`'s `serverEnv`). Passing them here is what keeps them off
+ *   disk: the overlay file is written every boot and would otherwise have to
+ *   carry the credential itself.
  * @returns the command, arguments, and working directory.
  */
-export function dshWebCommand(config: DesktopConfig, patchFile: string, dshHome: string): SpawnSpec {
+export function dshWebCommand(
+  config: DesktopConfig,
+  patchFile: string,
+  dshHome: string,
+  extraEnv: Record<string, string> = {},
+): SpawnSpec {
   const spec = spawnFor(config.harness, { pnpm: () => resolveBinary(config.pnpmPath, 'pnpm', process.env) }, patchFile, dshHome)
   const launcherDir =
     config.harness.kind === 'managed' ? resolveBinary(config.npmPath, 'npm', process.env) : spec.command
   // Only the process about to be spawned gets the extended PATH; the app's
   // own process.env is never touched.
-  const env = envWithLauncherDir(launcherDir, process.env)
-  return env === undefined ? spec : { ...spec, env }
+  const withPath = envWithLauncherDir(launcherDir, process.env)
+  if (Object.keys(extraEnv).length === 0) return withPath === undefined ? spec : { ...spec, env: withPath }
+  // `withPath` is undefined for a bare command name, where `startServer`
+  // would fall back to `process.env`; the fallback has to be materialized
+  // here instead, or the extra variables would have nothing to merge onto.
+  return { ...spec, env: { ...(withPath ?? process.env), ...extraEnv } }
 }
 
 /**

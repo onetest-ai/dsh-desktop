@@ -15,6 +15,9 @@
     <button type="button" role="tab" id="tab-plugins" aria-controls="panel-plugins" aria-selected="false" tabindex="-1" class="tab">
       Plugins<span class="tab-error-dot" id="tab-plugins-error-dot" aria-hidden="true" hidden></span>
     </button>
+    <button type="button" role="tab" id="tab-mcp" aria-controls="panel-mcp" aria-selected="false" tabindex="-1" class="tab">
+      MCP<span class="tab-error-dot" id="tab-mcp-error-dot" aria-hidden="true" hidden></span>
+    </button>
     <button type="button" role="tab" id="tab-notifications" aria-controls="panel-notifications" aria-selected="false" tabindex="-1" class="tab">
       Notifications &amp; Shortcuts<span class="tab-error-dot" id="tab-notifications-error-dot" aria-hidden="true" hidden></span>
     </button>
@@ -81,6 +84,38 @@
       <p class="error" id="error-plugin-spec"></p>
       <ul id="plugin-rows" class="plugin-rows"></ul>
       <p class="error" id="error-plugins"></p>
+    </section>
+  </section>
+
+  <section id="panel-mcp" role="tabpanel" aria-labelledby="tab-mcp" tabindex="0" class="panel" hidden>
+    <section class="group group-flat">
+      <label class="mcp-master"><input type="checkbox" id="mcp-enabled"> Connect to MCP servers</label>
+      <p class="hint">Each enabled server's tools become available to the agent under its own name. With this off, no server is contacted and nothing is added to the agent's context.</p>
+    </section>
+
+    <p class="group-label" id="mcp-add-label">Add a server</p>
+    <section class="group group-flat" aria-labelledby="mcp-add-label">
+      <div class="row">
+        <select id="mcp-preset" aria-label="Server to add"></select>
+        <button id="add-mcp-preset" type="button">Add</button>
+      </div>
+      <p class="hint" id="mcp-preset-note"></p>
+      <details class="mcp-custom">
+        <summary>Add a server by URL</summary>
+        <label for="mcp-custom-id">Name</label>
+        <input id="mcp-custom-id" type="text" placeholder="my-server" spellcheck="false">
+        <label for="mcp-custom-url">URL</label>
+        <input id="mcp-custom-url" type="text" placeholder="https://example.com/mcp" spellcheck="false">
+        <button id="add-mcp-custom" type="button">Add</button>
+        <p class="error" id="error-mcp-custom"></p>
+      </details>
+    </section>
+
+    <p class="group-label" id="mcp-servers-label">Servers</p>
+    <section class="group group-flat" aria-labelledby="mcp-servers-label">
+      <p class="mcp-off-warning" id="mcp-off-warning" role="status" hidden>MCP is switched off, so none of these servers are connected. Tick <strong>Connect to MCP servers</strong> above and save.</p>
+      <ul id="mcp-rows" class="plugin-rows"></ul>
+      <p class="error" id="error-mcp"></p>
     </section>
   </section>
 
