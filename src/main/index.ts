@@ -10,6 +10,7 @@ import { createInstallRunner } from './install-process'
 import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { mcpConfigPath, readMcpConfig, writeMcpConfig, type McpServerEntry } from './mcp-config'
 import { migrateMcpConfig } from './mcp-migrate'
+import { loadPresets, shippedPresetsPath, userPresetsPath } from './mcp-presets'
 import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-servers'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { openConfigFile } from './open-config-file'
@@ -317,6 +318,7 @@ const settingsHandlers = createSettingsHandlers({
   readMcpServers: () => readMcpConfig(mcpConfigPath(DSH_HOME)),
   writeMcpServers: (servers) => writeMcpConfig(mcpConfigPath(DSH_HOME), servers),
   openMcpConfigFile: () => openConfigFile(mcpConfigPath(DSH_HOME), existsSync, (path) => shell.openPath(path)),
+  readMcpPresets: () => loadPresets(shippedPresetsPath(), userPresetsPath(DSH_HOME)),
   restartHarness: () => restart(),
 })
 

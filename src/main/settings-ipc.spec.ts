@@ -61,6 +61,9 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     readMcpServers: vi.fn(() => [] as never[]),
     writeMcpServers: vi.fn(),
     openMcpConfigFile: vi.fn(async () => ({ ok: true }) as const),
+    readMcpPresets: vi.fn(() => [
+      { id: 'tavily', label: 'Tavily', transport: 'http' as const, url: 'https://mcp.tavily.com/mcp/' },
+    ]),
     restartHarness: vi.fn(async () => {}),
     ...overrides,
   }

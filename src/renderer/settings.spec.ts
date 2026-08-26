@@ -270,28 +270,28 @@ interface Renderer {
   clickAddRaw(): void
   /** The text of each rendered MCP server row. */
   renderedMcpRows(): string[]
-  /** Picks `id` in the preset picker and clicks Add. */
-  addMcpPreset(id: string): void
-  /** Fills the by-URL fields and clicks its Add. */
-  addCustomMcp(id: string, url: string): void
-  /** Clicks Remove on the MCP row for `id`. */
-  removeMcpServer(id: string): void
-  /** Flips the On switch on the MCP row for `id`. */
-  toggleMcpServer(id: string, on: boolean): void
-  /** Types a token into the row for `id` and clicks Save token. */
-  saveMcpToken(id: string, token: string): Promise<void>
-  /** Clicks Remove token on the row for `id`. */
-  clearMcpToken(id: string): Promise<void>
+  /** Picks `id` in the preset picker and clicks Add, awaiting the write. */
+  addMcpPreset(id: string): Promise<void>
+  /** Fills the by-hand fields and clicks its Add, awaiting the write. */
+  addCustomMcp(fields: { name?: string; command?: string; args?: string; url?: string }): Promise<void>
+  /** Pastes a block and clicks Add from JSON, awaiting the write. */
+  pasteMcp(text: string): Promise<void>
+  /** Clicks Remove on the MCP row for `name`, awaiting the write. */
+  removeMcpServer(name: string): Promise<void>
+  /** Flips the On switch on the MCP row for `name`, awaiting the write. */
+  toggleMcpServer(name: string, on: boolean): Promise<void>
   /** Whether the preset picker's Add button is disabled. */
   mcpAddDisabled(): boolean | undefined
   /** The note shown under the preset picker. */
   mcpPresetNote(): string | undefined
-  /** Calls made to `settings.setMcpToken`, as `[id, token]` pairs. */
-  setMcpTokenCalls: Array<[string, string]>
-  /** Calls made to `settings.clearMcpToken`. */
-  clearMcpTokenCalls: string[]
-  /** Holds `settings.setMcpToken` open until the given promise settles, as a real harness restart does. */
-  setMcpTokenBlocksUntil(gate: Promise<void>): void
+  /** Server lists passed to `settings.saveMcpServers`. */
+  saveMcpServersCalls: Record<string, unknown>[][]
+  /** Text passed to `settings.pasteMcpBlock`. */
+  pasteMcpBlockCalls: string[]
+  /** Makes the next `saveMcpServers` fail with this outcome. */
+  saveMcpServersFails(outcome: { ok: boolean; message?: string }): void
+  /** Holds `saveMcpServers` open until the promise settles, as a real harness restart does. */
+  saveMcpServersBlocksUntil(gate: Promise<void>): void
   /** How many times `settings.read` has been called so far (the initial load, plus one per reload). */
   readCallCount(): number
 }
@@ -302,16 +302,16 @@ function declaredTabIds(): string[] {
 }
 
 /** The MCP half of a read result: the tab off, with nothing configured. */
-const NO_MCP = { tokens: {}, presets: [] }
+const NO_MCP = { presets: [] as unknown[] }
 
-/** The MCP half of a read result's form. */
-const NO_MCP_FORM = { enabled: false, servers: [] }
+/** The MCP half of a read result's form: the master switch only. */
+const NO_MCP_FORM = false
 
 /** Default read result: a configured local source with an empty plugin list. */
 function defaultRead(): Promise<unknown> {
   return Promise.resolve({
     configured: true,
-    form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcp: NO_MCP_FORM },
+    form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcpEnabled: NO_MCP_FORM },
     plugins: [],
     mcp: NO_MCP,
   })
@@ -336,6 +336,10 @@ async function load(
   onValidatePlugin?: ValidatePluginOutcome,
   onCheckBinaries?: CheckBinariesOutcome,
   onOpenConfigFile?: OpenConfigFileOutcome,
+  // Appended, never inserted: this list is positional like every parameter
+  // before it, and putting it earlier silently shifts each existing call
+  // site's arguments into the wrong slots.
+  initialMcpServers?: Record<string, unknown>[],
 ): Promise<Renderer> {
   const hiddenIds = declaredHiddenIds()
   const ariaSelected = declaredAriaSelected()
@@ -380,9 +384,12 @@ async function load(
   const acceptPluginUpdateCalls: Array<[string, string]> = []
   const validatePluginCalls: Array<[string, string[]]> = []
   const checkBinariesCalls: Array<[string, string]> = []
-  const setMcpTokenCalls: Array<[string, string]> = []
-  let setMcpTokenGate: Promise<void> | undefined
-  const clearMcpTokenCalls: string[] = []
+  const saveMcpServersCalls: Record<string, unknown>[][] = []
+  const pasteMcpBlockCalls: string[] = []
+  let mcpServerStore: Record<string, unknown>[] = initialMcpServers ?? []
+  let saveMcpServersOutcome: { ok: boolean; message?: string } | undefined
+  let saveMcpServersGate: Promise<void> | undefined
+  let pasteMcpBlockOutcome: { ok: boolean; message?: string } | undefined
   const defaultCheckBinaries: CheckBinariesOutcome = async () => ({
     pnpm: { ok: true, version: '9.1.0' },
     npm: { ok: true, version: '10.2.0' },
@@ -413,15 +420,31 @@ async function load(
       validatePluginCalls.push([spec, existingPackages])
       return (onValidatePlugin ?? defaultValidatePlugin)(spec, existingPackages)
     }),
-    setMcpToken: vi.fn(async (id: string, token: string) => {
-      setMcpTokenCalls.push([id, token])
-      if (setMcpTokenGate !== undefined) await setMcpTokenGate
-      return token.trim() === '' ? { ok: false, message: 'Enter a token, or use Remove to clear the stored one.' } : { ok: true }
-    }),
-    clearMcpToken: vi.fn(async (id: string) => {
-      clearMcpTokenCalls.push(id)
+    readMcpServers: vi.fn(async () => mcpServerStore),
+    saveMcpServers: vi.fn(async (servers: Record<string, unknown>[]) => {
+      saveMcpServersCalls.push(servers)
+      if (saveMcpServersGate !== undefined) await saveMcpServersGate
+      if (saveMcpServersOutcome !== undefined) return saveMcpServersOutcome
+      mcpServerStore = servers
       return { ok: true }
     }),
+    pasteMcpBlock: vi.fn(async (text: string) => {
+      pasteMcpBlockCalls.push(text)
+      if (pasteMcpBlockOutcome !== undefined) return pasteMcpBlockOutcome
+      const added = (JSON.parse(text) as { mcpServers: Record<string, { command?: string; url?: string }> }).mcpServers
+      mcpServerStore = [
+        ...mcpServerStore,
+        ...Object.entries(added).map(([name, entry]) => ({
+          name,
+          disabled: false,
+          transport: entry.command === undefined ? 'http' : 'stdio',
+          ...entry,
+          args: [],
+        })),
+      ]
+      return { ok: true, servers: mcpServerStore }
+    }),
+    openMcpConfigFile: vi.fn(async () => ({ ok: true }) as const),
     checkBinaries: vi.fn(async (pnpmPath: string, npmPath: string) => {
       checkBinariesCalls.push([pnpmPath, npmPath])
       return (onCheckBinaries ?? defaultCheckBinaries)(pnpmPath, npmPath)
@@ -443,9 +466,10 @@ async function load(
     document,
   }
   runInNewContext(SOURCE, context)
-  // Let the initial `load()` settle before a test touches the form.
-  await Promise.resolve()
-  await Promise.resolve()
+  // Let the initial `load()` settle before a test touches the form. It awaits
+  // more than one bridge call now (the read, then the MCP server list), so a
+  // fixed pair of microtask turns is no longer enough.
+  for (let i = 0; i < 12; i++) await Promise.resolve()
 
   /** The `<li>` rows rendered into `#plugin-rows`, one per configured plugin. */
   const rows = (): FakeElement[] => elements.get('plugin-rows')?.children ?? []
@@ -457,6 +481,16 @@ async function load(
    */
   const rowFor = (pkg: string): FakeElement | undefined => rows().find((row) => textOf(row).includes(pkg))
 
+  /**
+   * Let a `() => void asyncFn()` click handler run to completion.
+   *
+   * Those handlers return before their promise settles, so a test that
+   * asserted straight after the click would see the state before the write.
+   */
+  const settleAsyncHandlers = async (): Promise<void> => {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
+
   /** The `<li>` rows rendered into `#mcp-rows`, one per configured server. */
   const mcpRows = (): FakeElement[] => (elements.get('mcp-rows')?.children ?? []).filter((row) => row.className === 'plugin-row')
 
@@ -465,7 +499,7 @@ async function load(
    * @param id - the server id to look for.
    * @returns the row, or undefined if none names it.
    */
-  const mcpRowFor = (id: string): FakeElement | undefined => mcpRows().find((row) => textOf(row).includes(id))
+  const mcpRowFor = (name: string): FakeElement | undefined => mcpRows().find((row) => textOf(row).includes(name))
 
   /**
    * The first descendant of `root` bearing `className`, or undefined.
@@ -506,49 +540,55 @@ async function load(
       await findByClass(row, 'plugin-update-use')?.listeners.get('click')?.()
     },
     renderedMcpRows: () => mcpRows().map((row) => textOf(row)),
-    addMcpPreset: (id) => {
+    addMcpPreset: async (id) => {
       const picker = elements.get('mcp-preset')
       if (picker !== undefined) picker.value = id
       elements.get('mcp-preset')?.listeners.get('change')?.()
       elements.get('add-mcp-preset')?.listeners.get('click')?.()
+      await settleAsyncHandlers()
     },
-    addCustomMcp: (id, url) => {
-      const idField = elements.get('mcp-custom-id')
-      const urlField = elements.get('mcp-custom-url')
-      if (idField !== undefined) idField.value = id
-      if (urlField !== undefined) urlField.value = url
+    addCustomMcp: async (fields) => {
+      for (const [id, value] of [
+        ['mcp-custom-name', fields.name ?? ''],
+        ['mcp-custom-command', fields.command ?? ''],
+        ['mcp-custom-args', fields.args ?? ''],
+        ['mcp-custom-url', fields.url ?? ''],
+      ] as const) {
+        const field = elements.get(id)
+        if (field !== undefined) field.value = value
+      }
       elements.get('add-mcp-custom')?.listeners.get('click')?.()
+      await settleAsyncHandlers()
     },
-    removeMcpServer: (id) => {
-      const row = mcpRowFor(id)
+    pasteMcp: async (text) => {
+      const textarea = elements.get('mcp-paste')
+      if (textarea !== undefined) textarea.value = text
+      elements.get('paste-mcp-block')?.listeners.get('click')?.()
+      await settleAsyncHandlers()
+    },
+    removeMcpServer: async (name) => {
+      const row = mcpRowFor(name)
       if (row !== undefined) findByClass(row, 'mcp-remove')?.listeners.get('click')?.()
+      await settleAsyncHandlers()
     },
-    toggleMcpServer: (id, on) => {
-      const row = mcpRowFor(id)
-      if (row === undefined) return
-      const box = findByClass(row, 'mcp-row-enabled')
-      if (box === undefined) return
-      box.checked = on
-      box.listeners.get('change')?.()
-    },
-    saveMcpToken: async (id, token) => {
-      const row = mcpRowFor(id)
-      if (row === undefined) return
-      const input = findByClass(row, 'mcp-token-input')
-      if (input !== undefined) input.value = token
-      await findByClass(row, 'mcp-token-save')?.listeners.get('click')?.()
-    },
-    clearMcpToken: async (id) => {
-      const row = mcpRowFor(id)
-      if (row === undefined) return
-      await findByClass(row, 'mcp-token-clear')?.listeners.get('click')?.()
+    toggleMcpServer: async (name, on) => {
+      const row = mcpRowFor(name)
+      const box = row === undefined ? undefined : findByClass(row, 'mcp-row-enabled')
+      if (box !== undefined) {
+        box.checked = on
+        box.listeners.get('change')?.()
+      }
+      await settleAsyncHandlers()
     },
     mcpAddDisabled: () => elements.get('add-mcp-preset')?.disabled,
     mcpPresetNote: () => elements.get('mcp-preset-note')?.textContent,
-    setMcpTokenCalls,
-    clearMcpTokenCalls,
-    setMcpTokenBlocksUntil: (gate) => {
-      setMcpTokenGate = gate
+    saveMcpServersCalls,
+    pasteMcpBlockCalls,
+    saveMcpServersFails: (outcome) => {
+      saveMcpServersOutcome = outcome
+    },
+    saveMcpServersBlocksUntil: (gate) => {
+      saveMcpServersGate = gate
     },
     renderedPluginRows: () => rows().map((row) => textOf(row)),
     renderedPluginRowClasses: () => rows().map((row) => row.className),
@@ -803,13 +843,13 @@ describe('plugins', () => {
       .fn()
       .mockResolvedValueOnce({
         configured: true,
-        form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcp: NO_MCP_FORM },
+        form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcpEnabled: NO_MCP_FORM },
         plugins: [],
         mcp: NO_MCP,
       })
       .mockResolvedValue({
         configured: true,
-        form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcp: NO_MCP_FORM },
+        form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcpEnabled: NO_MCP_FORM },
         plugins: [{ spec: DECK, package: DECK, pinned: false, version: '0.2.0' }],
         mcp: NO_MCP,
       })
@@ -1578,193 +1618,194 @@ describe('opening the config file', () => {
 
 describe('MCP tab', () => {
   const PRESETS = [
-    { id: 'tavily', label: 'Tavily (web search)', url: 'https://mcp.tavily.com/mcp/', docs: '', auth: 'token', tokenLabel: 'API key' },
-    { id: 'github', label: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', docs: '', auth: 'token', tokenLabel: 'PAT' },
-    { id: 'linear', label: 'Linear', url: 'https://mcp.linear.app/mcp', docs: '', auth: 'oauth' },
+    { id: 'tavily', label: 'Tavily', transport: 'http', url: 'https://mcp.tavily.com/mcp/', auth: 'token' },
+    { id: 'playwright', label: 'Playwright', transport: 'stdio', command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
+    { id: 'linear', label: 'Linear', transport: 'http', url: 'https://mcp.linear.app/mcp', auth: 'oauth', unavailable: 'needs a browser sign-in, not supported yet' },
   ]
 
+  const TAVILY = { name: 'tavily', disabled: false, transport: 'http', url: 'https://mcp.tavily.com/mcp/', args: [], env: {}, headers: {}, rest: {} }
+
   /**
-   * A read result carrying an MCP section.
-   * @param mcpForm - the form half: the master switch and configured servers.
-   * @param mcpInfo - the info half: store availability and which tokens exist.
-   * @returns a `settings.read` stub.
+   * Load the renderer with a master-switch state and a server list.
+   * @param mcpEnabled - the stored master switch.
+   * @param servers - what `readMcpServers` should return.
+   * @returns the loaded renderer.
    */
-  function readWithMcp(
-    mcpForm: { enabled: boolean; servers: unknown[] },
-    mcpInfo: Partial<{ tokens: Record<string, boolean> }> = {},
-  ) {
+  function loadMcp(mcpEnabled: boolean, servers: Record<string, unknown>[]) {
+    return load(async () => ({ ok: true, warnings: [] }), readWithMcp(mcpEnabled), undefined, undefined, undefined, undefined, servers)
+  }
+
+  /** A read result whose MCP half carries the catalog and a master-switch state. */
+  function readWithMcp(mcpEnabled: boolean) {
     return async () => ({
       configured: true,
-      form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcp: mcpForm },
+      form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcpEnabled },
       plugins: [],
-      mcp: { tokens: {}, presets: PRESETS, ...mcpInfo },
+      mcp: { presets: PRESETS },
     })
   }
 
-  const TAVILY = { id: 'tavily', preset: 'tavily', url: 'https://mcp.tavily.com/mcp/', enabled: true }
-
-  it('shows the configured servers', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [TAVILY] }))
+  it('shows the servers mcp.json holds', async () => {
+    const renderer = await loadMcp(true, [TAVILY])
     expect(renderer.renderedMcpRows().join(' ')).toContain('tavily')
   })
 
+  it('summarizes a stdio server by what it runs', async () => {
+    const playwright = { name: 'playwright', disabled: false, transport: 'stdio', command: 'npx', args: ['-y', '@playwright/mcp@latest'], env: {}, headers: {}, rest: {} }
+    const renderer = await loadMcp(true, [playwright])
+    expect(renderer.renderedMcpRows().join(' ')).toContain('npx -y @playwright/mcp@latest')
+  })
+
   it('says so when there are no servers, rather than showing an empty box', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: false, servers: [] }))
+    const renderer = await loadMcp(false, [])
     expect(renderer.elements.get('mcp-rows')?.children.map((child) => child.textContent).join(' ')).toContain('No servers yet')
   })
 
-  it('adds a preset server', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [] }))
-    renderer.addMcpPreset('tavily')
-    expect(renderer.renderedMcpRows().join(' ')).toContain('mcp.tavily.com')
+  it('adds a preset server, writing it through main', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.addMcpPreset('playwright')
+    expect(renderer.saveMcpServersCalls.at(-1)?.map((s) => s.name)).toEqual(['playwright'])
   })
 
-  it('refuses to add a preset that only accepts a browser sign-in', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [] }))
-    renderer.addMcpPreset('linear')
-    expect(renderer.renderedMcpRows()).toHaveLength(0)
+  it('copies the preset command onto the entry rather than referencing the catalog', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.addMcpPreset('playwright')
+    expect(renderer.saveMcpServersCalls.at(-1)?.[0]).toMatchObject({ command: 'npx', args: ['-y', '@playwright/mcp@latest'] })
+  })
+
+  it('refuses a preset that only accepts a browser sign-in', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.addMcpPreset('linear')
+    expect(renderer.saveMcpServersCalls).toEqual([])
   })
 
   it('disables Add and explains why for a sign-in-only preset, before it is pressed', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [] }))
-    renderer.addMcpPreset('linear')
+    const renderer = await loadMcp(true, [])
+    await renderer.addMcpPreset('linear')
     expect(renderer.mcpAddDisabled()).toBe(true)
     expect(renderer.mcpPresetNote()).toContain('browser sign-in')
   })
 
   it('will not add the same preset twice', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [TAVILY] }))
-    renderer.addMcpPreset('tavily')
-    expect(renderer.renderedMcpRows()).toHaveLength(1)
+    const renderer = await loadMcp(true, [TAVILY])
+    await renderer.addMcpPreset('tavily')
+    expect(renderer.saveMcpServersCalls).toEqual([])
   })
 
-  it('adds a server by URL', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [] }))
-    renderer.addCustomMcp('mine', 'https://example.com/mcp')
-    expect(renderer.renderedMcpRows().join(' ')).toContain('example.com')
+  it('adds a stdio server by hand', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.addCustomMcp({ name: 'mine', command: 'node', args: 'dist/server.js' })
+    expect(renderer.saveMcpServersCalls.at(-1)?.[0]).toMatchObject({ name: 'mine', transport: 'stdio', command: 'node', args: ['dist/server.js'] })
   })
 
-  it('rejects a by-URL server whose address is not https, which would leak the token', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [] }))
-    renderer.addCustomMcp('mine', 'http://example.com/mcp')
-    expect(renderer.renderedMcpRows()).toHaveLength(0)
-    expect(renderer.elements.get('error-mcp-custom')?.textContent).toContain('https')
+  it('adds a remote server by hand', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.addCustomMcp({ name: 'mine', url: 'https://example.com/mcp' })
+    expect(renderer.saveMcpServersCalls.at(-1)?.[0]).toMatchObject({ name: 'mine', transport: 'http', url: 'https://example.com/mcp' })
   })
 
-  it('rejects a by-URL server whose name could not be a tool namespace', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [] }))
-    renderer.addCustomMcp('has space', 'https://example.com/mcp')
-    expect(renderer.renderedMcpRows()).toHaveLength(0)
+  it('rejects a by-hand server with neither a command nor a URL', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.addCustomMcp({ name: 'mine' })
+    expect(renderer.saveMcpServersCalls).toEqual([])
+    expect(renderer.elements.get('error-mcp-custom')?.textContent).toContain('command')
+  })
+
+  it('rejects a by-hand remote server that is not https, which would leak a token', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.addCustomMcp({ name: 'mine', url: 'http://example.com/mcp' })
+    expect(renderer.saveMcpServersCalls).toEqual([])
+  })
+
+  it('rejects a by-hand name that could not be a tool namespace', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.addCustomMcp({ name: 'has space', command: 'node' })
+    expect(renderer.saveMcpServersCalls).toEqual([])
+  })
+
+  it('sends a pasted block to main rather than parsing it here', async () => {
+    const renderer = await loadMcp(true, [])
+    const block = JSON.stringify({ mcpServers: { memory: { command: 'npx' } } })
+    await renderer.pasteMcp(block)
+    expect(renderer.pasteMcpBlockCalls).toEqual([block])
+  })
+
+  it('shows the servers a paste added', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.pasteMcp(JSON.stringify({ mcpServers: { memory: { command: 'npx' } } }))
+    expect(renderer.renderedMcpRows().join(' ')).toContain('memory')
+  })
+
+  it('refuses an empty paste without troubling main', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.pasteMcp('   ')
+    expect(renderer.pasteMcpBlockCalls).toEqual([])
   })
 
   it('removes a server', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [TAVILY] }))
-    renderer.removeMcpServer('tavily')
-    expect(renderer.renderedMcpRows()).toHaveLength(0)
+    const renderer = await loadMcp(true, [TAVILY])
+    await renderer.removeMcpServer('tavily')
+    expect(renderer.saveMcpServersCalls.at(-1)).toEqual([])
   })
 
-  it('submits the master switch and the servers with the form', async () => {
-    const save = vi.fn(async () => ({ ok: true, warnings: [] }))
-    const renderer = await load(save, readWithMcp({ enabled: true, servers: [TAVILY] }))
-    await renderer.save()
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ mcp: { enabled: true, servers: [TAVILY] } }))
+  it('switches a server off without removing it', async () => {
+    const renderer = await loadMcp(true, [TAVILY])
+    await renderer.toggleMcpServer('tavily', false)
+    expect(renderer.saveMcpServersCalls.at(-1)?.[0]).toMatchObject({ name: 'tavily', disabled: true })
   })
 
-  it("submits a server's switched-off state", async () => {
-    const save = vi.fn(async () => ({ ok: true, warnings: [] }))
-    const renderer = await load(save, readWithMcp({ enabled: true, servers: [TAVILY] }))
-    renderer.toggleMcpServer('tavily', false)
-    await renderer.save()
-    expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ mcp: { enabled: true, servers: [{ ...TAVILY, enabled: false }] } }),
-    )
-  })
-
-  it('turns the feature on when the first server is added, so it cannot be configured yet inert', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: false, servers: [] }))
-    renderer.addMcpPreset('tavily')
-    expect(renderer.elements.get('mcp-enabled')?.checked).toBe(true)
-  })
-
-  it('turns it on for a by-URL server too', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: false, servers: [] }))
-    renderer.addCustomMcp('mine', 'https://example.com/mcp')
-    expect(renderer.elements.get('mcp-enabled')?.checked).toBe(true)
-  })
-
-  it('does not override a deliberate switch-off when a later server is added', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: false, servers: [TAVILY] }))
-    renderer.addMcpPreset('github')
-    expect(renderer.elements.get('mcp-enabled')?.checked).toBeFalsy()
-  })
-
-  it('warns when servers are configured but the feature is off — the state that looks set up and does nothing', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: false, servers: [TAVILY] }))
-    expect(renderer.elements.get('mcp-off-warning')?.hidden).toBe(false)
-  })
-
-  it('does not warn when the feature is on', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [TAVILY] }))
-    expect(renderer.elements.get('mcp-off-warning')?.hidden).toBe(true)
-  })
-
-  it('does not warn when there is nothing configured to be inert', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: false, servers: [] }))
-    expect(renderer.elements.get('mcp-off-warning')?.hidden).toBe(true)
-  })
-
-  it('says a server has no token yet, and that it will be refused without one', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [TAVILY] }))
-    expect(renderer.renderedMcpRows().join(' ')).toContain('No token saved yet')
-  })
-
-  it('says a server has a token, without showing it', async () => {
-    const renderer = await load(
-      async () => ({ ok: true, warnings: [] }),
-      readWithMcp({ enabled: true, servers: [TAVILY] }, { tokens: { tavily: true } }),
-    )
-    expect(renderer.renderedMcpRows().join(' ')).toContain('A token is saved')
-  })
-
-  it('sends a typed token to main, which is the only place it goes', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [TAVILY] }))
-    await renderer.saveMcpToken('tavily', 'tvly-abc')
-    expect(renderer.setMcpTokenCalls).toEqual([['tavily', 'tvly-abc']])
-  })
-
-  it('never puts the token in the form the save writes to disk', async () => {
-    const save = vi.fn(async () => ({ ok: true, warnings: [] }))
-    const renderer = await load(save, readWithMcp({ enabled: true, servers: [TAVILY] }))
-    await renderer.saveMcpToken('tavily', 'tvly-abc')
-    await renderer.save()
-    expect(JSON.stringify(save.mock.calls)).not.toContain('tvly-abc')
+  it('rolls the list back when main refuses the write, rather than showing a server that is not on disk', async () => {
+    const renderer = await loadMcp(true, [TAVILY])
+    renderer.saveMcpServersFails({ ok: false, message: 'nope' })
+    await renderer.removeMcpServer('tavily')
+    expect(renderer.renderedMcpRows().join(' ')).toContain('tavily')
+    expect(renderer.elements.get('error-mcp')?.textContent).toBe('nope')
   })
 
   it('says what it is doing while the harness restarts, which takes many seconds', async () => {
     let release = (): void => {}
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [TAVILY] }))
-    renderer.setMcpTokenBlocksUntil(new Promise<void>((resolve) => (release = resolve)))
-    const pending = renderer.saveMcpToken('tavily', 'tvly-abc')
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(renderer.renderedMcpRows().join(' ')).toContain('restarting the agent')
+    const renderer = await loadMcp(true, [])
+    renderer.saveMcpServersBlocksUntil(new Promise<void>((resolve) => (release = resolve)))
+    const pending = renderer.addMcpPreset('playwright')
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+    expect(renderer.elements.get('mcp-status')?.textContent).toContain('restarting the agent')
     release()
     await pending
+    expect(renderer.elements.get('mcp-status')?.textContent).toBe('')
   })
 
-  it('restores the previous status when the save is refused, rather than claiming forever', async () => {
-    const renderer = await load(async () => ({ ok: true, warnings: [] }), readWithMcp({ enabled: true, servers: [TAVILY] }))
-    await renderer.saveMcpToken('tavily', '   ')
-    expect(renderer.renderedMcpRows().join(' ')).not.toContain('restarting the agent')
+  it('submits the master switch with the form, since that half lives in desktop.json', async () => {
+    const save = vi.fn(async () => ({ ok: true, warnings: [] }))
+    const renderer = await load(save, readWithMcp(true), undefined, undefined, undefined, undefined, [TAVILY])
+    await renderer.save()
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ mcpEnabled: true }))
   })
 
-  it('clears a stored token through main', async () => {
-    const renderer = await load(
-      async () => ({ ok: true, warnings: [] }),
-      readWithMcp({ enabled: true, servers: [TAVILY] }, { tokens: { tavily: true } }),
-    )
-    await renderer.clearMcpToken('tavily')
-    expect(renderer.clearMcpTokenCalls).toEqual(['tavily'])
+  it('turns the feature on when the first server is added, so it cannot be configured yet inert', async () => {
+    const renderer = await loadMcp(false, [])
+    await renderer.addMcpPreset('playwright')
+    expect(renderer.elements.get('mcp-enabled')?.checked).toBe(true)
+  })
+
+  it('does not override a deliberate switch-off when a later server is added', async () => {
+    const renderer = await loadMcp(false, [TAVILY])
+    await renderer.addMcpPreset('playwright')
+    expect(renderer.elements.get('mcp-enabled')?.checked).toBeFalsy()
+  })
+
+  it('warns when servers are configured but the feature is off — the state that looks set up and does nothing', async () => {
+    const renderer = await loadMcp(false, [TAVILY])
+    expect(renderer.elements.get('mcp-off-warning')?.hidden).toBe(false)
+  })
+
+  it('does not warn when the feature is on', async () => {
+    const renderer = await loadMcp(true, [TAVILY])
+    expect(renderer.elements.get('mcp-off-warning')?.hidden).toBe(true)
+  })
+
+  it('does not warn when there is nothing configured to be inert', async () => {
+    const renderer = await loadMcp(false, [])
+    expect(renderer.elements.get('mcp-off-warning')?.hidden).toBe(true)
   })
 })
 

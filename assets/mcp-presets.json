@@ -1,0 +1,64 @@
+{
+  "presets": [
+    {
+      "id": "tavily",
+      "label": "Tavily (web search)",
+      "docs": "https://app.tavily.com/home",
+      "transport": "http",
+      "url": "https://mcp.tavily.com/mcp/",
+      "auth": "token",
+      "tokenLabel": "API key"
+    },
+    {
+      "id": "github",
+      "label": "GitHub",
+      "docs": "https://github.com/settings/personal-access-tokens",
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "auth": "token",
+      "tokenLabel": "Personal access token"
+    },
+    {
+      "id": "playwright",
+      "label": "Playwright (browser control)",
+      "docs": "https://github.com/microsoft/playwright-mcp",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+    {
+      "id": "filesystem",
+      "label": "Filesystem",
+      "docs": "https://github.com/modelcontextprotocol/servers",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+    },
+    {
+      "id": "memory",
+      "label": "Memory (knowledge graph)",
+      "docs": "https://github.com/modelcontextprotocol/servers",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    {
+      "id": "linear",
+      "label": "Linear",
+      "docs": "https://linear.app/docs/mcp",
+      "transport": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "auth": "oauth",
+      "unavailable": "needs a browser sign-in, not supported yet"
+    },
+    {
+      "id": "atlassian",
+      "label": "Atlassian (Jira & Confluence)",
+      "docs": "https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/",
+      "transport": "http",
+      "url": "https://mcp.atlassian.com/v1/mcp",
+      "auth": "oauth",
+      "unavailable": "needs a browser sign-in, not supported yet"
+    }
+  ]
+}

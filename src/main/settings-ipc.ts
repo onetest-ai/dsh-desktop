@@ -3,7 +3,7 @@ import type { ConfigResult, DesktopConfig } from './config'
 import { isConfigurationProblem, summarizeConfigurationNeed, summarizeFailure } from './error-summary'
 import type { OpenConfigFileResult } from './open-config-file'
 import { parseMcpBlock, type McpServerEntry } from './mcp-config'
-import { MCP_PRESETS, type McpPreset } from './mcp-presets'
+import type { McpPreset } from './mcp-presets'
 import { MCP_CLIENT_PACKAGE, mcpErrors } from './mcp-servers'
 import { parseSpec, type PluginEntry } from './plugin-entries'
 import {
@@ -125,6 +125,12 @@ export interface SettingsDeps {
    * @returns ok, or a diagnosable error.
    */
   openMcpConfigFile(): Promise<OpenConfigFileResult>
+  /**
+   * The presets to offer, shipped catalog with the user's own merged over it.
+   * Injected so tests never read the file this app ships.
+   * @returns the presets, in offer order.
+   */
+  readMcpPresets(): McpPreset[]
   restartHarness(): Promise<void>
 }
 
@@ -799,7 +805,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
         configured: stored.configured,
         form: formFor(stored),
         plugins,
-        mcp: { presets: MCP_PRESETS },
+        mcp: { presets: deps.readMcpPresets() },
       }
     },
     pickFolder: () => deps.pickFolder(),

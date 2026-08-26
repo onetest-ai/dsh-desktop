@@ -96,6 +96,19 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
       /app\.asar$/,
     )
 
+    // The preset catalog is data now, not a TypeScript constant, so nothing
+    // at compile time proves it reaches the package. A missing catalog would
+    // otherwise ship as an app with an empty picker and no error anywhere.
+    const presets = await app.evaluate(({ app: electronApp }) => {
+      const { existsSync, readFileSync } = process.getBuiltinModule('node:fs')
+      const { join } = process.getBuiltinModule('node:path')
+      const file = join(electronApp.getAppPath(), 'assets', 'mcp-presets.json')
+      if (!existsSync(file)) return { present: false, count: 0 }
+      return { present: true, count: ((JSON.parse(readFileSync(file, 'utf8')) as { presets?: unknown[] }).presets ?? []).length }
+    })
+    expect(presets.present, 'assets/mcp-presets.json is missing from the package').toBe(true)
+    expect(presets.count).toBeGreaterThan(0)
+
     const shipped = await app.evaluate(({ app: electronApp }) => {
       const { existsSync } = process.getBuiltinModule('node:fs')
       const { join } = process.getBuiltinModule('node:path')

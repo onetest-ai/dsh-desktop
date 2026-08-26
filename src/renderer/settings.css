@@ -900,3 +900,23 @@ button:disabled {
   color: var(--setup);
   font: 12px/18px -apple-system, BlinkMacSystemFont, sans-serif;
 }
+
+.mcp-custom textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--input-fill);
+  color: var(--label);
+  font: 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+}
+
+/* Inline qualifier beside a label, for the by-hand form where a field is
+   only meaningful for one of the two transports. */
+.hint-inline {
+  color: var(--label-secondary);
+  font-weight: normal;
+}

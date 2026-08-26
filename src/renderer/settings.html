@@ -100,22 +100,39 @@
         <button id="add-mcp-preset" type="button">Add</button>
       </div>
       <p class="hint" id="mcp-preset-note"></p>
+
       <details class="mcp-custom">
-        <summary>Add a server by URL</summary>
-        <label for="mcp-custom-id">Name</label>
-        <input id="mcp-custom-id" type="text" placeholder="my-server" spellcheck="false">
-        <label for="mcp-custom-url">URL</label>
+        <summary>Add a server by hand</summary>
+        <label for="mcp-custom-name">Name</label>
+        <input id="mcp-custom-name" type="text" placeholder="my-server" spellcheck="false">
+        <label for="mcp-custom-command">Command <span class="hint-inline">(for a local server)</span></label>
+        <input id="mcp-custom-command" type="text" placeholder="npx" spellcheck="false">
+        <label for="mcp-custom-args">Arguments <span class="hint-inline">(space separated)</span></label>
+        <input id="mcp-custom-args" type="text" placeholder="-y @playwright/mcp@latest" spellcheck="false">
+        <label for="mcp-custom-url">URL <span class="hint-inline">(for a remote server instead)</span></label>
         <input id="mcp-custom-url" type="text" placeholder="https://example.com/mcp" spellcheck="false">
         <button id="add-mcp-custom" type="button">Add</button>
         <p class="error" id="error-mcp-custom"></p>
+      </details>
+
+      <details class="mcp-custom">
+        <summary>Paste a configuration block</summary>
+        <p class="hint">Paste the <code>mcpServers</code> block from any server's README — the same JSON Claude Desktop and Cursor take.</p>
+        <textarea id="mcp-paste" rows="6" spellcheck="false" placeholder='{ "mcpServers": { "memory": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"] } } }'></textarea>
+        <button id="paste-mcp-block" type="button">Add from JSON</button>
+        <p class="error" id="error-mcp-paste"></p>
       </details>
     </section>
 
     <p class="group-label" id="mcp-servers-label">Servers</p>
     <section class="group group-flat" aria-labelledby="mcp-servers-label">
       <p class="mcp-off-warning" id="mcp-off-warning" role="status" hidden>MCP is switched off, so none of these servers are connected. Tick <strong>Connect to MCP servers</strong> above and save.</p>
+      <p class="hint" id="mcp-status" role="status"></p>
       <ul id="mcp-rows" class="plugin-rows"></ul>
       <p class="error" id="error-mcp"></p>
+      <p class="hint">Servers are saved as soon as you change them, in <code>mcp.json</code>. The switch above is saved with the rest of the form.</p>
+      <button type="button" id="open-mcp-config-file" class="open-config-file">Open mcp.json…</button>
+      <p class="check-result" id="open-mcp-config-file-result" role="status"></p>
     </section>
   </section>
 

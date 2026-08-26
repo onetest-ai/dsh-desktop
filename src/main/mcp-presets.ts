@@ -1,91 +1,119 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 /**
- * The MCP servers this app offers out of the box.
+ * One offered MCP server.
  *
- * A preset is data, never code: every entry is a remote Streamable HTTP
- * server reached over one URL, so adding a vendor is one row here. Nothing
- * in this module knows about any particular service beyond what the row
- * states.
- *
- * The `auth` field is the load-bearing distinction. A `token` preset accepts
- * a long-lived credential the user can paste (a personal access token, an
- * API key), which is all this app can carry today. An `oauth` preset issues
- * no such credential at all — its `401` names OAuth as the only accepted
- * scheme — so it is listed but not selectable, and stays that way until the
- * app can run an authorization flow. Listing it disabled is deliberate: a
- * token field for a server that accepts no token is a dead end the user
- * would only discover after pasting something.
+ * `unavailable`, when set, is why the preset cannot be added yet — an OAuth-
+ * only server issues no credential this app can carry. Such a preset is still
+ * listed: a user looking for Linear should learn it is known and unsupported,
+ * not be left wondering whether they typed the name wrong.
  */
 export interface McpPreset {
-  /** Stable id, used as the server's default id and as its tool namespace. */
   id: string
-  /** Name shown in the settings picker. */
   label: string
-  /** The server's Streamable HTTP endpoint. */
-  url: string
-  /** Where the user gets a credential, or reads about the server. */
-  docs: string
-  /** Whether a pasteable credential exists (`token`) or only OAuth does (`oauth`). */
-  auth: 'token' | 'oauth'
-  /** What the credential is called by this vendor; shown as the field's label. Set only for `token`. */
+  docs?: string
+  transport: 'stdio' | 'http'
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  url?: string
+  auth?: 'token' | 'oauth'
   tokenLabel?: string
+  unavailable?: string
 }
 
 /**
- * Every offered preset, in the order the settings picker lists them:
- * usable ones first, then the ones awaiting OAuth support.
+ * The catalog shipped inside the app bundle.
  *
- * The `oauth` rows are not aspirational placeholders — each was probed
- * directly and answers an unauthenticated `initialize` with
- * `WWW-Authenticate: Bearer realm="OAuth"` and no other accepted scheme (see
- * `docs/notes/mcp-servers.md`).
+ * Resolved relative to this module the same way `settings-window.ts` reaches
+ * the renderer, so it works from `dist/` and from inside `app.asar` alike.
+ * `assets/**` is already in electron-builder's `files`, so the catalog ships
+ * with no build step of its own — and, because nothing type-checks it any
+ * more, `tests/smoke.spec.ts` asserts it is actually in the package.
+ * @returns the absolute path of the shipped catalog.
  */
-export const MCP_PRESETS: readonly McpPreset[] = [
-  {
-    id: 'tavily',
-    label: 'Tavily (web search)',
-    url: 'https://mcp.tavily.com/mcp/',
-    docs: 'https://app.tavily.com/home',
-    auth: 'token',
-    tokenLabel: 'API key',
-  },
-  {
-    id: 'github',
-    label: 'GitHub',
-    url: 'https://api.githubcopilot.com/mcp/',
-    docs: 'https://github.com/settings/personal-access-tokens',
-    auth: 'token',
-    tokenLabel: 'Personal access token',
-  },
-  {
-    id: 'linear',
-    label: 'Linear',
-    url: 'https://mcp.linear.app/mcp',
-    docs: 'https://linear.app/docs/mcp',
-    auth: 'oauth',
-  },
-  {
-    id: 'atlassian',
-    label: 'Atlassian (Jira & Confluence)',
-    url: 'https://mcp.atlassian.com/v1/mcp',
-    docs: 'https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/',
-    auth: 'oauth',
-  },
-]
-
-/**
- * Look up a preset by id.
- * @param id - the preset id, as stored on a server entry.
- * @returns the preset, or undefined when no row declares that id.
- */
-export function findPreset(id: string): McpPreset | undefined {
-  return MCP_PRESETS.find((preset) => preset.id === id)
+export function shippedPresetsPath(): string {
+  return join(__dirname, '..', '..', 'assets', 'mcp-presets.json')
 }
 
 /**
- * The presets a user can actually add today: those issuing a credential
- * this app can carry.
- * @returns every `token` preset, in declaration order.
+ * The optional per-machine catalog, merged over the shipped one.
+ * @param dshHome - the resolved `$DSH_HOME` directory.
+ * @returns the absolute path of the user's catalog.
  */
-export function selectablePresets(): McpPreset[] {
-  return MCP_PRESETS.filter((preset) => preset.auth === 'token')
+export function userPresetsPath(dshHome: string): string {
+  return join(dshHome, 'mcp-presets.json')
+}
+
+/**
+ * Validate one catalog entry.
+ *
+ * An entry that names no usable transport is dropped rather than repaired:
+ * a preset that cannot be added is worse than a preset that is absent,
+ * because it appears in the picker and then fails.
+ * @param raw - the candidate, from untrusted JSON.
+ * @returns the preset, or undefined when it is unusable.
+ */
+function validate(raw: unknown): McpPreset | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const preset = raw as Partial<McpPreset>
+  if (typeof preset.id !== 'string' || preset.id === '') return undefined
+  if (typeof preset.label !== 'string' || preset.label === '') return undefined
+  if (preset.transport === 'stdio') {
+    if (typeof preset.command !== 'string' || preset.command === '') return undefined
+  } else if (preset.transport === 'http') {
+    if (typeof preset.url !== 'string' || !preset.url.startsWith('https://')) return undefined
+  } else {
+    return undefined
+  }
+  return preset as McpPreset
+}
+
+/**
+ * Read one catalog file.
+ *
+ * A missing, unreadable, or malformed file yields no presets: the catalog is
+ * a convenience, and a broken one must cost the user their preset list rather
+ * than the ability to start.
+ * @param file - the catalog path.
+ * @returns the valid presets it declares.
+ */
+function readCatalog(file: string): McpPreset[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    return []
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return []
+  const presets = (parsed as { presets?: unknown }).presets
+  if (!Array.isArray(presets)) return []
+  const valid: McpPreset[] = []
+  for (const raw of presets) {
+    const preset = validate(raw)
+    if (preset !== undefined) valid.push(preset)
+  }
+  return valid
+}
+
+/**
+ * The catalog to offer: the shipped presets, with the user's own merged over
+ * them by id.
+ *
+ * The user file is what makes the catalog updatable without an app release —
+ * correcting a vendor's endpoint, or handing a team its own internal servers.
+ * A preset names a command to run, so that file carries exactly the trust its
+ * own user already has over `mcp.json`, which they can edit by hand anyway.
+ * This is also why no catalog is ever fetched over the network: the same data
+ * arriving from a URL would be arbitrary code execution at app start.
+ * @param shippedFile - the catalog inside the bundle.
+ * @param userFile - the per-machine catalog, usually absent.
+ * @returns the presets to offer, shipped order first.
+ */
+export function loadPresets(shippedFile: string, userFile: string): McpPreset[] {
+  const merged = new Map<string, McpPreset>()
+  for (const preset of readCatalog(shippedFile)) merged.set(preset.id, preset)
+  for (const preset of readCatalog(userFile)) merged.set(preset.id, preset)
+  return [...merged.values()]
 }

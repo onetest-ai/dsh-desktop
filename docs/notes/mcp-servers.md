@@ -1,24 +1,43 @@
 # MCP servers
 
-How the MCP tab mounts remote [Model Context Protocol](https://modelcontextprotocol.io/) servers into the harness, and why each part sits where it does.
+How MCP servers are configured, why the configuration is a standard file, and why credentials never reach the generated overlay.
 
-## The problem the plugin list could not solve
+## `mcp.json`, in the format everyone else uses
 
-A server is already expressible as a plugin entry: `@deepseek-ai/dsh-mcp-client` takes one server's transport, URL, and headers as its config, and this app already installs a package and mounts it with a config (`plugin-entries.ts`). What it cannot express is *two* servers. One package backs every server, and the plugin list is one entry per package — `settings-validate.ts`'s `parsePluginsField` rejects a duplicate, and `runtime-files.ts`'s `insertId` derives the overlay row id from the package name, so two entries would collide even if the list allowed them.
+Configuration lives in `$DSH_HOME/mcp.json`, in the same `mcpServers` shape Claude Desktop, Cursor, and VS Code take:
 
-So MCP is its own config section (`DesktopConfig.mcp`) rather than a plugin entry, and the tab is its own tab. The user-facing difference matches: a plugin is a package you name, a server is a URL and a credential.
+```json
+{
+  "mcpServers": {
+    "tavily":     { "type": "http", "url": "https://mcp.tavily.com/mcp/", "headers": { "Authorization": "Bearer tvly-…" } },
+    "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@latest"] }
+  }
+}
+```
 
-## One entry, many rows
+JSON, not YAML: every server's README publishes JSON, and "paste the block from the docs" is the whole point. A block copied in works unmodified; a block copied out still works in another client.
 
-`patchOverlay` already supports one ready entry contributing several rows with ids of its own choosing — the `declaredPatch` path, built for a package that declares its own mount. MCP reuses it: `index.ts`'s `resolveDeclaredPatch` returns `serverRows(config.mcp)` for the MCP client package instead of reading that package's manifest, so N servers become N rows under `mcp-<id>`, all naming the same package.
+**Transport is inferred** from `command` or `url` rather than read from `type`. Most published blocks omit that key, so trusting it would reject the majority of real configurations.
 
-Nothing in `runtime-files.ts` changed for this. The synthesized-row path would not have worked: it takes its id from the package name, and it serializes `config` as JSON, which cannot express the `!!js` expression below.
+**Unknown keys survive a round trip.** A block may carry fields belonging to other clients (`autoApprove`, `timeout`); dropping them on write would silently degrade a config the user pasted from somewhere and may paste back.
 
-`attributeBootFailure` still attributes correctly with several rows sharing a `name`: it maps matched rows to their *package*, and all of them carry the same one.
+**`disabled: true` marks a server off.** The standard format has no enabled field, but `disabled` is the de-facto extension other clients ignore, so the file stays portable in both directions. The app-level master switch is not here — it lives in `desktop.json`, because it is a property of this app, not of any server.
 
-## The token never touches disk in cleartext
+## What is not in `mcp.json`
 
-The generated overlay is rewritten on every boot and sits in a plain file, so it names the token instead of carrying it:
+The master switch and the resolved MCP client version stay in `desktop.json`. The first is an app toggle; the second is app state that means nothing to another MCP client and would be noise in a file meant to be shared.
+
+## Credentials
+
+Tokens are stored **in the clear**, inline, at mode `0600` — the same thing `.mcp.json`, `~/.aws/credentials`, `~/.npmrc`, and the `gh` CLI do, and what makes a pasted block work unmodified.
+
+Do not reintroduce OS-keychain storage. It was tried and removed: a keychain item's ACL trusts specific signed binaries, so every re-signed build, every bundle-id change, and every separate copy of the app raised its own login-password prompt. Ordinary users met that dialog several times before the app worked, which is a bad trade for a developer tool whose agent already runs shell commands as them.
+
+`0600` does not restrict the app or the user's editor — both run as that user. It keeps other accounts on the machine out, which is all cleartext storage can offer. One caveat: an editor that saves by writing a temp file and renaming may replace the file with its own default mode, often `0644`. The app restores `0600` on its next write, but not instantly.
+
+### Why the overlay still uses `!!js`
+
+The generated harness overlay is written `0644`. Putting credentials in it would downgrade them from owner-only to readable by any local account. So every `env` value and every `headers` value is replaced in the overlay by a `!!js process.env.…` lookup, and the app passes the literal values through the harness child's environment instead:
 
 ```yaml
 - id: mcp-tavily
@@ -28,54 +47,37 @@ The generated overlay is rewritten on every boot and sits in a plain file, so it
     transport: streamable-http
     url: https://mcp.tavily.com/mcp/
     headers:
-      Authorization: !!js '`Bearer ${process.env.DSH_MCP_TOKEN_TAVILY}`'
+      Authorization: !!js process.env.DSH_MCP_0_AUTHORIZATION
 ```
 
-The harness's own cordis loader evaluates `!!js` under a plugin entry's `config`, in the harness child — this app writes the expression and never evaluates it (`bundle-patch.ts`'s `jsExpression`). The value arrives through the child's environment, built by `serverEnv` and passed to `dshWebCommand`'s `extraEnv`.
+Applied to **every** value, not only the ones that look secret: which values are sensitive is not knowable from a key name.
 
-The expression needs no `undefined` guard: `serverEnv` defines a variable for every server a row is emitted for, empty when no token is stored, and the two are generated together for the same boot. A missing token therefore produces the server's own `401` rather than a header reading `Bearer undefined`.
+**The variable names lead with the server's index.** Sanitizing a name and a key into one identifier can collide — server `a-b` key `c` and server `a` key `b-c` both become `A_B_C` — and a collision would hand one server another's credential. The sanitized suffix survives only so the variable is recognizable while debugging.
 
-## Where the token lives
+The harness scrubs `/KEY|PASSWORD|SECRET|TOKEN/i` from what a child inherits, but explicit `env` merges *after* that scrub, so the injected values land while the `DSH_MCP_*` variables themselves are scrubbed out of the MCP server's own environment.
 
-`secrets.ts`, in **cleartext**, in `$DSH_HOME/desktop-secrets.json` with mode `0600` — the same thing `.mcp.json`, `~/.aws/credentials`, `~/.npmrc`, and the `gh` CLI do.
+## Rows, not one plugin
 
-This replaced Electron's `safeStorage`, which was tried and removed. A Keychain item's ACL trusts specific signed binaries, so every re-signed build, every bundle-id change, and every separate copy of the app raises its own login-password prompt. Ordinary users met a scary dialog several times before the app worked. For a developer tool whose agent already runs shell commands as that user, that is a bad trade.
+`patchOverlay`'s `declaredPatch` path emits one `@deepseek-ai/dsh-mcp-client` row per active server, each under `mcp-<name>`. The synthesized-row path would not do: it takes its id from the package name, which collides on the second server, and serializes `config` as JSON, which cannot express `!!js`.
 
-What `0600` buys: other accounts on the machine cannot read the file. What it does not: any process running as this user can, and the tokens are captured by Time Machine and any file-syncing backup. That is the accepted tradeoff, not an oversight.
+The MCP client package is refused by the Plugins tab, hidden from that list, and skipped at boot. A bare entry for it carries no config, which cordis rejects at load.
 
-The document is versioned. The superseded format stored base64 ciphertext under the same `{id: string}` shape, so the two are indistinguishable by inspection — an unversioned document is discarded rather than guessed at, because a leftover ciphertext read as a token would be sent to a server as a bearer credential.
+## Presets
 
-`read` reports *whether* each server has a token, never the value (`McpInfo.tokens`). With storage in the clear this is no longer a confidentiality boundary — the user can open the file — only a reason not to render a credential into the DOM on every load.
+The catalog is `assets/mcp-presets.json` — data, not code. `assets/**` is already in electron-builder's `files`, so it ships with no build step; because nothing type-checks it any more, `tests/smoke.spec.ts` asserts it is actually inside the package, and that assertion is proven by removing the file and watching the test fail.
 
-Saving a token does not resolve until the harness has respawned with it, measured at roughly 17 seconds. The row says so while it waits; without that it sits on stale text behind a disabled button and reads as nothing happening.
+`$DSH_HOME/mcp-presets.json` merges over it **by id**. That is what makes the catalog updatable without an app release: correcting a vendor's endpoint, or handing a team its own internal servers.
 
-## The client is not a plugin the user manages
+A preset names a command to run, so a **remote** catalog is deliberately out of scope — fetching one would be arbitrary code execution at app start. A local file carries exactly the trust its own user already has over `mcp.json`.
 
-`@deepseek-ai/dsh-mcp-client` is refused by the Plugins tab's Add control, filtered out of the list it shows, dropped from `plugins` on save, and skipped when boot derives statuses. A bare entry for it has no config, which cordis rejects at load — so before this, adding it there produced a permanently failing row offering a Config editor for something only the MCP tab can fill in.
+Presets that accept only a browser sign-in (Linear, Atlassian) are listed and disabled, with the reason shown, rather than hidden: a user looking for Linear should learn it is known and unsupported.
 
-Four layers because the entry can arrive by hand edit or predate the MCP tab, and each answers a different moment: adding, showing, persisting, booting.
+## Two things the tab has to say out loud
 
-## Two switches, both required
+**Servers save immediately, the switch saves with the form.** They live in different files, and `save` writes only `desktop.json`.
 
-The master switch and each server's own switch both gate mounting (`activeServers`). A server enabled under a switched-off feature installs nothing and contributes no row — which is a state the tab used to reach silently, with a token saved and nothing connected. Adding the first server now turns the feature on, and a servers-listed-but-feature-off state carries a standing warning.
+**A write does not resolve until the harness respawns** — measured at around 17 seconds. The tab says so while it waits; without that it sits on stale rows behind disabled controls and reads as nothing happening.
 
-## Presets are data
+## Known limitation: the cold-start ceiling
 
-`mcp-presets.ts` is a table: id, label, URL, docs link, and how the server authenticates. Adding a vendor is one row.
-
-The `auth` field is what makes the table load-bearing. A `token` preset accepts a long-lived credential the user can paste. An `oauth` preset issues none at all — probed directly, each answers an unauthenticated `initialize` with `WWW-Authenticate: Bearer realm="OAuth"` and no other accepted scheme:
-
-| Server | Endpoint | Result |
-|---|---|---|
-| Tavily | `https://mcp.tavily.com/mcp/` | 401, also accepts a pasted API key |
-| GitHub | `https://api.githubcopilot.com/mcp/` | 401, also accepts a pasted PAT |
-| Linear | `https://mcp.linear.app/mcp` | 401 `realm="OAuth"` — no pasteable token |
-| Atlassian | `https://mcp.atlassian.com/v1/mcp` | 401 `realm="OAuth"` — no pasteable token |
-
-Linear and Atlassian ship in the catalog but are listed disabled, labelled as needing a sign-in this app cannot do yet. Hiding them would leave a user who looks for Linear unsure whether they typed the name wrong; giving them a token field would be a dead end discovered only after pasting something.
-
-## Not done yet: OAuth
-
-The MCP specification defines authorization generically — protected-resource metadata discovery (RFC 9728), authorization-server discovery, dynamic client registration (RFC 7591), PKCE, token exchange, refresh — and `@modelcontextprotocol/sdk` implements all of it in `client/auth.js`. So supporting Linear, Atlassian, GitHub-over-OAuth, Notion and every future compliant server is **one** generic `OAuthClientProvider` backed by this app's own secret store, not per-vendor work. A preset would still need no vendor code.
-
-The open design question is the redirect URI, which a desktop app has to answer one of two ways — a transient loopback listener, or a paste-the-code flow. That decision is what the follow-up owes; the catalog, the row generation, and the secret store are all already shaped to take it.
+`npx -y <package>` downloads on first run. The MCP client awaits `listTools()` during plugin activation on the SDK's 60-second default, which the harness does not expose as configuration. A cold fetch that exceeds it activates the server with **zero tools and no obvious error**. Pre-installing the package, or pinning an absolute command path, avoids it.

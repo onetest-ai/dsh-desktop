@@ -127,22 +127,35 @@ A plugin that fails to install, or that cannot actually be loaded once installed
 
 ## MCP
 
-The **MCP** tab connects the agent to remote [Model Context Protocol](https://modelcontextprotocol.io/) servers. Each enabled server becomes its own `@deepseek-ai/dsh-mcp-client` instance in the harness, and its tools reach the model under that server's own name. The master switch is off by default: with it off, nothing is installed, no server is contacted, and no tool schemas enter the model's context.
+The **MCP** tab connects the agent to [Model Context Protocol](https://modelcontextprotocol.io/) servers — local ones it launches (`npx`, `uvx`, `docker`) and remote ones it calls over HTTPS. Each enabled server becomes its own `@deepseek-ai/dsh-mcp-client` instance in the harness, and its tools reach the model under that server's own name.
 
-The switch and each server's own switch are both required: a server listed under a switched-off feature is not connected, and the tab says so rather than looking configured and doing nothing. Adding your first server turns the feature on for you.
+Configuration lives in `~/.dsh/mcp.json`, in the same `mcpServers` format Claude Desktop, Cursor, and VS Code use:
 
-Presets ship for **Tavily** and **GitHub** — add one, paste the token it asks for, and save. **Linear** and **Atlassian** are listed but not selectable: both accept only a browser sign-in (OAuth), which this app cannot do yet, so a pasted token would be a dead end. Any other Streamable HTTP server can be added by URL. HTTPS is required — the token travels to that URL as a bearer credential.
+```json
+{
+  "mcpServers": {
+    "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@latest"] },
+    "tavily": { "type": "http", "url": "https://mcp.tavily.com/mcp/", "headers": { "Authorization": "Bearer tvly-…" } }
+  }
+}
+```
 
-Tokens live in `~/.dsh/desktop-secrets.json`, owner-readable only (`0600`), **in cleartext** — the same approach as `.mcp.json`, `~/.aws/credentials`, and the `gh` CLI. The OS keychain was tried and dropped: it re-prompts for your login password on every re-signed build and every copy of the app, which is a hostile first run for no meaningful gain in a tool whose agent already runs shell commands as you. Any process running as your user can read that file, and it is captured by backups.
+That means **you can paste the block from any server's README unmodified** — the tab has a field for exactly that — and a block copied out still works in another client. Presets are offered for Tavily, GitHub, Playwright, Filesystem, and Memory; anything else can be added by hand or by paste. **Linear** and **Atlassian** are listed but not selectable: both accept only a browser sign-in, which this app cannot do yet.
 
-Tokens are kept out of `desktop.json` so the "Open config file…" button never puts one on screen, and the generated harness overlay names each token by environment variable rather than carrying its value.
+The master switch is off by default. With it off nothing is installed, no server is contacted, and no tool schemas enter the model's context. Adding your first server turns it on for you, and a servers-configured-but-switched-off state says so rather than looking configured and doing nothing.
 
-Saving a token restarts the harness, since the value only reaches it through the child's environment at spawn. The MCP client package is managed by this tab, not the Plugins tab — it cannot be added there, and an entry left over from a hand edit is dropped on the next save. Details and the OAuth follow-up are in [`docs/notes/mcp-servers.md`](docs/notes/mcp-servers.md).
+Servers save as soon as you change them; the switch saves with the rest of the form. A save restarts the agent, which takes some seconds — the tab says so while it waits.
+
+**Tokens are stored in the clear**, inline in `mcp.json` at mode `0600`, the same approach as `.mcp.json`, `~/.aws/credentials`, and the `gh` CLI. The OS keychain was tried and dropped: it re-prompts for your login password on every re-signed build and every copy of the app. Any process running as your user can read that file, and it is captured by backups. The generated harness overlay never contains a credential — it refers to each by environment variable — because that file is world-readable.
+
+Presets come from `assets/mcp-presets.json`, and `~/.dsh/mcp-presets.json` merges over it by id, so a wrong endpoint or a team's internal servers can be fixed without waiting for an app release.
+
+Details are in [`docs/notes/mcp-servers.md`](docs/notes/mcp-servers.md).
 
 ## Development
 
 ```bash
-npm test           # 593 unit tests
+npm test           # 647 unit tests
 npm run test:smoke # Playwright, against a packaged build (run `npm run pack` first)
 npm run build      # compile only
 ```
@@ -154,7 +167,8 @@ Design notes and the decisions taken while building this live in [`docs/`](docs/
 ## Known limitations
 
 - **A plugin that requires its own configuration can crash the whole boot, not just itself.** The app's own loadability check only confirms the entry file and its declared dependencies resolve — it cannot know a plugin also requires config this version has no way to supply (the way `@onetest/dsh-deck` requires a `base` route-mount path with no default). Such a plugin installs and passes that check, but cordis's own config resolution then rejects it at boot, and that rejection currently takes the whole harness process down rather than just omitting the one plugin. There is no per-plugin configuration yet, so a plugin with a required config field of its own cannot be listed safely.
-- **MCP servers needing a browser sign-in cannot be added.** Linear, Atlassian, and any other OAuth-only server are listed but disabled. The MCP specification defines authorization generically and the SDK already implements it, so this is one generic flow rather than per-vendor work — but a desktop redirect URI has to be settled first. See [`docs/notes/mcp-servers.md`](docs/notes/mcp-servers.md).
+- **MCP servers needing a browser sign-in cannot be added.** Linear, Atlassian, and any other OAuth-only server are listed but disabled. The MCP specification defines authorization generically and the SDK already implements it, so this is one generic flow rather than per-vendor work — but a desktop redirect URI has to be settled first.
+- **A local MCP server whose first run downloads its package can start with no tools.** `npx -y <package>` fetches on first use, and the MCP client waits for the server's tool list on a 60-second budget the harness does not expose. Exceed it and the server connects with zero tools and no obvious error. Pre-install the package, or give an absolute command path.
 - **`dsh://` links only focus the app.** The harness Web UI has no per-session URLs, so there is no address to deep-link to.
 - **Not notarized by default, and macOS-only.** Builds are ad-hoc signed, so a downloaded copy needs one trip through System Settings before it opens; `npm run release` removes that with a Developer ID. No Windows or Linux packaging target is configured.
 - The tray icon, menus, and shortcut have not been verified visually by an automated test — only their behavior in code.
