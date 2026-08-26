@@ -128,8 +128,10 @@
     <section class="group group-flat" aria-labelledby="mcp-servers-label">
       <p class="mcp-off-warning" id="mcp-off-warning" role="status" hidden>MCP is switched off, so none of these servers are connected. Tick <strong>Connect to MCP servers</strong> above and save.</p>
       <p class="hint" id="mcp-status" role="status"></p>
+      <pre class="progress" id="mcp-progress" role="status" hidden></pre>
       <ul id="mcp-rows" class="plugin-rows"></ul>
       <p class="error" id="error-mcp"></p>
+      <button type="button" id="mcp-add-anyway" class="mcp-add-anyway" hidden>Add it anyway</button>
       <p class="hint">Servers are saved as soon as you change them, in <code>mcp.json</code>. The switch above is saved with the rest of the form.</p>
       <button type="button" id="open-mcp-config-file" class="open-config-file">Open mcp.json…</button>
       <p class="check-result" id="open-mcp-config-file-result" role="status"></p>

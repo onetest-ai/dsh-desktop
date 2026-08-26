@@ -3,6 +3,7 @@ import type { ConfigResult, DesktopConfig } from './config'
 import { isConfigurationProblem, summarizeConfigurationNeed, summarizeFailure } from './error-summary'
 import type { OpenConfigFileResult } from './open-config-file'
 import { parseMcpBlock, type McpServerEntry } from './mcp-config'
+import type { ProbeResult, ProbeTarget } from './mcp-probe'
 import type { McpPreset } from './mcp-presets'
 import { MCP_CLIENT_PACKAGE, mcpErrors } from './mcp-servers'
 import { parseSpec, type PluginEntry } from './plugin-entries'
@@ -125,6 +126,14 @@ export interface SettingsDeps {
    * @returns ok, or a diagnosable error.
    */
   openMcpConfigFile(): Promise<OpenConfigFileResult>
+  /**
+   * Start a candidate stdio server and list its tools, streaming its stderr
+   * through `onLine` — which is where `npx` reports a first-run download.
+   * @param target - the command to run, as `mcp.json` would hold it.
+   * @param onLine - receives progress lines as they arrive.
+   * @returns the tool names, or why the server could not be reached.
+   */
+  probeMcpServer(target: ProbeTarget, onLine: (line: string) => void): Promise<ProbeResult>
   /**
    * The presets to offer, shipped catalog with the user's own merged over it.
    * Injected so tests never read the file this app ships.
@@ -304,6 +313,23 @@ export interface SettingsHandlers {
    *   yet" for a config that has never been written.
    */
   openConfigFile(): Promise<OpenConfigFileResult>
+  /**
+   * Start a candidate stdio server and report what it offers, before it is
+   * ever written to `mcp.json`.
+   *
+   * Exists because the harness gives a server 60 seconds to list its tools
+   * and does not expose that bound: an `npx`-based server whose first run
+   * downloads its package can exceed it and then mount with no tools and no
+   * error. Doing the download here, with progress, means the harness always
+   * meets a warm cache.
+   *
+   * Deliberately unbounded in time — a bound here would reintroduce exactly
+   * the failure it exists to prevent.
+   * @param server - the candidate entry.
+   * @param onLine - receives the server's own output as it arrives.
+   * @returns what the server offers, or why it could not be reached.
+   */
+  prepareMcpServer(server: McpServerEntry, onLine?: (line: string) => void): Promise<ProbeResult>
   /**
    * The configured MCP servers, as `mcp.json` currently holds them.
    * @returns the entries, in file order.
@@ -824,6 +850,21 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     validatePluginConfig: (text) => parsePluginConfig(text),
     checkBinaries: (pnpmPath, npmPath) => deps.checkBinaries(pnpmPath, npmPath),
     openConfigFile: () => deps.openConfigFile(),
+    prepareMcpServer: async (server, onLine) => {
+      if (server.transport !== 'stdio') {
+        // Nothing to download and nothing to launch: a remote server is
+        // reached per request by the harness, so there is no cold start to
+        // warm and no local process to prove.
+        return { ok: false, message: 'Only local servers can be prepared; a remote server is contacted when it is used.' }
+      }
+      if (server.command === undefined || server.command === '') {
+        return { ok: false, message: `"${server.name}" needs a command to run.` }
+      }
+      return await deps.probeMcpServer(
+        { command: server.command, args: server.args, env: server.env, ...(server.cwd === undefined ? {} : { cwd: server.cwd }) },
+        onLine ?? (() => {}),
+      )
+    },
     readMcpServers: () => deps.readMcpServers(),
     saveMcpServers: (servers) => performSaveMcpServers(servers),
     pasteMcpBlock: (text) => performPasteMcpBlock(text),

@@ -920,3 +920,16 @@ button:disabled {
   color: var(--label-secondary);
   font-weight: normal;
 }
+
+/* The escape hatch when a probe refuses a server the user still wants. Kept
+   quiet: it is a considered override, not the ordinary path. */
+.mcp-add-anyway {
+  margin-top: 6px;
+}
+
+/* A probed server's own output while it starts. Bounded so a long npm
+   download cannot push the rest of the tab off screen. */
+#mcp-progress {
+  max-height: 160px;
+  overflow-y: auto;
+}

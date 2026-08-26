@@ -10,6 +10,7 @@ import { createInstallRunner } from './install-process'
 import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { mcpConfigPath, readMcpConfig, writeMcpConfig, type McpServerEntry } from './mcp-config'
 import { migrateMcpConfig } from './mcp-migrate'
+import { createMcpProber } from './mcp-probe'
 import { loadPresets, shippedPresetsPath, userPresetsPath } from './mcp-presets'
 import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-servers'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
@@ -279,6 +280,13 @@ export async function applySettings(previous: DesktopConfig | undefined, next: D
  */
 const installs = createInstallRunner()
 
+/**
+ * Probes candidate MCP servers, and owns their children the same way
+ * `installs` owns an install's — a probed server may spawn a browser or a
+ * language server, and quitting must reap the whole group.
+ */
+const probes = createMcpProber()
+
 /** Real `InstallDeps`, backing `runtime-install.ts`'s effects with the actual filesystem and `npm`. */
 const installDeps: InstallDeps = {
   run: (command, args, options) => installs.run(command, args, options),
@@ -319,6 +327,7 @@ const settingsHandlers = createSettingsHandlers({
   writeMcpServers: (servers) => writeMcpConfig(mcpConfigPath(DSH_HOME), servers),
   openMcpConfigFile: () => openConfigFile(mcpConfigPath(DSH_HOME), existsSync, (path) => shell.openPath(path)),
   readMcpPresets: () => loadPresets(shippedPresetsPath(), userPresetsPath(DSH_HOME)),
+  probeMcpServer: (target, onLine) => probes.probe(target, onLine),
   restartHarness: () => restart(),
 })
 
@@ -845,7 +854,7 @@ async function shutdown(): Promise<void> {
   // an unreaped `npm` keeps writing into $DSH_HOME after Electron is gone.
   // Killing it also makes the in-flight save's install reject, which is what
   // lets that save unwind instead of finishing behind the quit's back.
-  await installs.stopAll()
+  await Promise.all([installs.stopAll(), probes.stopAll()])
   await stopCurrent()
   await transition
   // A transition that was mid-flight may have registered a child of its own

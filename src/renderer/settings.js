@@ -76,6 +76,10 @@ let mcpServers = []
 // The shipped preset catalog, from `read()` rather than duplicated here.
 let mcpPresets = []
 
+// A server whose probe failed and which "Add anyway" would write regardless.
+// Cleared on every new attempt, so the button can never write a stale entry.
+let pendingServer
+
 // Updates offered but not yet accepted, keyed by package name so any number
 // of floating plugins can each carry their own pending update at once — a
 // single shared hint element would let a second push silently overwrite the
@@ -196,6 +200,11 @@ async function validatePluginConfigRow(textarea, errorNode, summaryNode) {
  */
 function renderPresetPicker() {
   const picker = el('mcp-preset')
+  // Rebuilding the options resets the selection to the first one, and this
+  // runs on the picker's own change event — so without restoring it, choosing
+  // a preset silently reverted to whichever is listed first and Add wrote
+  // that one instead. Captured before the rebuild, reapplied after.
+  const chosen = picker.value
   picker.textContent = ''
   const taken = new Set(mcpServers.map((server) => server.name))
   for (const preset of mcpPresets) {
@@ -209,6 +218,7 @@ function renderPresetPicker() {
     option.disabled = Boolean(preset.unavailable) || taken.has(preset.id)
     picker.append(option)
   }
+  if (mcpPresets.some((preset) => preset.id === chosen)) picker.value = chosen
   // Derived from the catalog rather than read back off the <select>, so the
   // note and the Add button agree with the same source the options were
   // built from.
@@ -317,6 +327,70 @@ function renderMcpRows() {
 }
 
 /**
+ * Start a candidate stdio server before it is written, and report what it
+ * offers.
+ *
+ * The harness gives a server 60 seconds to list its tools and does not expose
+ * that bound, so an `npx` server whose first run downloads its package can
+ * mount with no tools and no error. Doing the download here — with the
+ * server's own output on screen — means the harness always meets a warm
+ * cache. A remote server skips this: there is nothing to download and nothing
+ * local to launch.
+ * @param {object} server - the candidate entry.
+ * @returns {Promise<{ ok: boolean, tools?: string[], message?: string }>} what it offers, or why not.
+ */
+async function prepareServer(server) {
+  if (server.transport !== 'stdio') return { ok: true, tools: [] }
+  const progress = el('mcp-progress')
+  progress.textContent = ''
+  progress.hidden = false
+  el('mcp-status').textContent = `Starting ${server.name}… first run may download it, which can take a while.`
+  try {
+    return await window.settings.prepareMcpServer(server)
+  } catch (failure) {
+    return { ok: false, message: messageOf(failure) }
+  } finally {
+    progress.hidden = progress.textContent === ''
+  }
+}
+
+/**
+ * Add a server, having first proved it starts.
+ *
+ * A failed probe does not write: a server that cannot start would otherwise
+ * sit in the list looking configured while contributing nothing. "Add anyway"
+ * exists because a probe can be wrong — a server needing credentials this
+ * window has not collected yet will refuse to start and still be worth
+ * saving — so the refusal is a default, never a wall.
+ * @param {object} server - the entry to add.
+ * @returns {Promise<void>} resolves once the add settled.
+ */
+async function addServer(server) {
+  const error = el('error-mcp')
+  error.textContent = ''
+  pendingServer = undefined
+  el('mcp-add-anyway').hidden = true
+  mcpBusy(true)
+  try {
+    const probed = await prepareServer(server)
+    if (!probed.ok) {
+      error.textContent = probed.message
+      markTabError('mcp', true)
+      pendingServer = server
+      el('mcp-add-anyway').hidden = false
+      return
+    }
+    if (probed.tools.length > 0) {
+      el('mcp-status').textContent = `${server.name} is ready — ${String(probed.tools.length)} tools.`
+    }
+  } finally {
+    mcpBusy(false)
+  }
+  enableMcpForFirstServer()
+  await commitMcpServers([...mcpServers, server])
+}
+
+/**
  * Write a server list through main and adopt whatever it accepted.
  *
  * Servers are persisted immediately rather than on the window's Save button:
@@ -340,6 +414,7 @@ async function commitMcpServers(next) {
   // Without this the tab sits on its previous rows behind disabled controls
   // for that whole time, which reads as nothing having happened.
   mcpBusy(true)
+  el('mcp-status').textContent = 'Saving, and restarting the agent so it takes effect…'
   try {
     const result = await window.settings.saveMcpServers(next)
     if (!result.ok) {
@@ -367,7 +442,7 @@ async function commitMcpServers(next) {
  * @param {boolean} busy - whether a write is in flight.
  */
 function mcpBusy(busy) {
-  el('mcp-status').textContent = busy ? 'Saving, and restarting the agent so it takes effect…' : ''
+  if (!busy) el('mcp-status').textContent = ''
   for (const id of ['add-mcp-preset', 'add-mcp-custom', 'paste-mcp-block']) el(id).disabled = busy
 }
 
@@ -395,9 +470,7 @@ async function addPresetServer() {
   const preset = mcpPresets.find((candidate) => candidate.id === el('mcp-preset').value)
   if (preset === undefined || preset.unavailable !== undefined) return
   if (mcpServers.some((server) => server.name === preset.id)) return
-  enableMcpForFirstServer()
-  await commitMcpServers([
-    ...mcpServers,
+  await addServer(
     {
       name: preset.id,
       disabled: false,
@@ -409,7 +482,7 @@ async function addPresetServer() {
       headers: {},
       rest: {},
     },
-  ])
+  )
 }
 
 /**
@@ -443,9 +516,7 @@ async function addCustomServer() {
     return
   }
   const args = el('mcp-custom-args').value.trim()
-  enableMcpForFirstServer()
-  await commitMcpServers([
-    ...mcpServers,
+  await addServer(
     {
       name,
       disabled: false,
@@ -457,7 +528,7 @@ async function addCustomServer() {
       headers: {},
       rest: {},
     },
-  ])
+  )
   for (const id of ['mcp-custom-name', 'mcp-custom-command', 'mcp-custom-args', 'mcp-custom-url']) el(id).value = ''
 }
 
@@ -1109,6 +1180,16 @@ el('add-mcp-custom').addEventListener('click', () => void addCustomServer())
 // not after.
 el('mcp-preset').addEventListener('change', renderPresetPicker)
 el('mcp-enabled').addEventListener('change', renderMcpOffWarning)
+el('mcp-add-anyway').addEventListener('click', () => {
+  if (pendingServer === undefined) return
+  const server = pendingServer
+  pendingServer = undefined
+  el('mcp-add-anyway').hidden = true
+  el('error-mcp').textContent = ''
+  markTabError('mcp', false)
+  enableMcpForFirstServer()
+  void commitMcpServers([...mcpServers, server])
+})
 el('paste-mcp-block').addEventListener('click', () => void pasteMcpBlock())
 el('open-mcp-config-file').addEventListener('click', () => {
   void openMcpConfigFile()
@@ -1118,6 +1199,14 @@ el('open-mcp-config-file').addEventListener('click', () => {
 // install runs, and a later update-available result once the background
 // registry lookup finishes. Neither adds a way to call into main.
 window.settings.onProgress(appendProgress)
+// A probed server's own output, shown while it starts. Separate from the npm
+// progress node so a long download does not scroll a save's output away.
+window.settings.onMcpProgress((line) => {
+  const node = el('mcp-progress')
+  node.hidden = false
+  node.textContent = `${node.textContent}${line}\n`
+  node.scrollTop = node.scrollHeight
+})
 window.settings.onUpdateAvailable((latest) => {
   if (latest === el('version').value) return
   el('latest-version').textContent = latest

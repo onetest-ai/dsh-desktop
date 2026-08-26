@@ -30,6 +30,16 @@ function declaredIds(): string[] {
 }
 
 /**
+ * The tag `settings.html` declares for an id, lowercased.
+ * @param id - the element id.
+ * @returns the tag name, or `div` when the markup does not say.
+ */
+function declaredTagName(id: string): string {
+  const match = new RegExp(`<([a-zA-Z]+)([^>]*\\s)?id="${id}"`).exec(MARKUP)
+  return match?.[1].toLowerCase() ?? 'div'
+}
+
+/**
  * Ids `settings.html` marks `hidden` in the markup itself, so the fixture's
  * initial state matches what a real DOM parse would give `element.hidden`
  * before any script runs.
@@ -157,6 +167,12 @@ function element(id: string): FakeElement {
     set textContent(value: string) {
       text = value
       children = []
+      // A real <select> loses its selection when its options go: `value`
+      // reflects the selected option, and there is none left. Modelled here
+      // because rebuilding a picker's options is exactly how a renderer drops
+      // a user's choice, and a fake that kept `value` made that class of bug
+      // invisible to every test in this file.
+      if (node.tagName === 'select') node.value = ''
     },
     get children(): FakeElement[] {
       return children
@@ -292,6 +308,14 @@ interface Renderer {
   saveMcpServersFails(outcome: { ok: boolean; message?: string }): void
   /** Holds `saveMcpServers` open until the promise settles, as a real harness restart does. */
   saveMcpServersBlocksUntil(gate: Promise<void>): void
+  /** Candidates passed to `settings.prepareMcpServer`. */
+  prepareMcpServerCalls: { name: string }[]
+  /** Makes every later probe refuse with this message. */
+  prepareMcpServerFails(message: string): void
+  /** Pushes one line as a probed server's own output. */
+  pushMcpProgress(line: string): void
+  /** Clicks "Add it anyway" after a refused probe. */
+  addAnyway(): Promise<void>
   /** How many times `settings.read` has been called so far (the initial load, plus one per reload). */
   readCallCount(): number
 }
@@ -346,6 +370,10 @@ async function load(
   const elements = new Map(
     declaredIds().map((id) => {
       const node = element(id)
+      // Taken from the markup rather than defaulted: a <select> loses its
+      // selection when its options are replaced, and a fake that did not know
+      // it was one could not model that.
+      node.tagName = declaredTagName(id)
       node.hidden = hiddenIds.has(id)
       const selected = ariaSelected.get(id)
       if (selected !== undefined) node.setAttribute('aria-selected', selected)
@@ -389,6 +417,9 @@ async function load(
   let mcpServerStore: Record<string, unknown>[] = initialMcpServers ?? []
   let saveMcpServersOutcome: { ok: boolean; message?: string } | undefined
   let saveMcpServersGate: Promise<void> | undefined
+  const prepareMcpServerCalls: { name: string }[] = []
+  let prepareOutcome: { ok: boolean; tools?: string[]; message?: string } | undefined
+  let mcpProgressListener: ((line: string) => void) | undefined
   let pasteMcpBlockOutcome: { ok: boolean; message?: string } | undefined
   const defaultCheckBinaries: CheckBinariesOutcome = async () => ({
     pnpm: { ok: true, version: '9.1.0' },
@@ -450,6 +481,16 @@ async function load(
       return (onCheckBinaries ?? defaultCheckBinaries)(pnpmPath, npmPath)
     }),
     openConfigFile: vi.fn(async () => (onOpenConfigFile ?? (async () => ({ ok: true })))()),
+    prepareMcpServer: vi.fn(async (server: { name: string }) => {
+      prepareMcpServerCalls.push(server)
+      return prepareOutcome ?? { ok: true, tools: ['alpha', 'beta'] }
+    }),
+    onMcpProgress: vi.fn((listener: (line: string) => void) => {
+      mcpProgressListener = listener
+      return () => {
+        mcpProgressListener = undefined
+      }
+    }),
     onProgress: vi.fn((listener: (line: string) => void) => {
       progressListener = listener
     }),
@@ -589,6 +630,15 @@ async function load(
     },
     saveMcpServersBlocksUntil: (gate) => {
       saveMcpServersGate = gate
+    },
+    prepareMcpServerCalls,
+    prepareMcpServerFails: (message) => {
+      prepareOutcome = { ok: false, message }
+    },
+    pushMcpProgress: (line) => mcpProgressListener?.(line),
+    addAnyway: async () => {
+      elements.get('mcp-add-anyway')?.listeners.get('click')?.()
+      await settleAsyncHandlers()
     },
     renderedPluginRows: () => rows().map((row) => textOf(row)),
     renderedPluginRowClasses: () => rows().map((row) => row.className),
@@ -1772,6 +1822,57 @@ describe('MCP tab', () => {
     release()
     await pending
     expect(renderer.elements.get('mcp-status')?.textContent).toBe('')
+  })
+
+it('keeps the chosen preset selected when the picker re-renders, rather than reverting to the first', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.addMcpPreset('playwright')
+    expect(renderer.saveMcpServersCalls.at(-1)?.map((s) => s.name)).toEqual(['playwright'])
+  })
+
+  it('starts a stdio server before writing it, so the harness never meets a cold download', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.addMcpPreset('playwright')
+    expect(renderer.prepareMcpServerCalls.map((s) => s.name)).toEqual(['playwright'])
+  })
+
+  it('does not probe a remote server, which has nothing to download', async () => {
+    const renderer = await loadMcp(true, [])
+    await renderer.addMcpPreset('tavily')
+    expect(renderer.prepareMcpServerCalls).toEqual([])
+    expect(renderer.saveMcpServersCalls.at(-1)?.map((s) => s.name)).toEqual(['tavily'])
+  })
+
+  it('shows the probed server’s own output while it starts', async () => {
+    const renderer = await loadMcp(true, [])
+    renderer.pushMcpProgress('Progress: 42%')
+    expect(renderer.elements.get('mcp-progress')?.textContent).toContain('Progress: 42%')
+  })
+
+  it('does not write a server that could not start, which would look configured and do nothing', async () => {
+    const renderer = await loadMcp(true, [])
+    renderer.prepareMcpServerFails('npx: command not found')
+    await renderer.addMcpPreset('playwright')
+    expect(renderer.saveMcpServersCalls).toEqual([])
+    expect(renderer.elements.get('error-mcp')?.textContent).toContain('command not found')
+  })
+
+  it('offers to add it anyway, because a probe can be wrong about a server worth keeping', async () => {
+    const renderer = await loadMcp(true, [])
+    renderer.prepareMcpServerFails('needs credentials')
+    await renderer.addMcpPreset('playwright')
+    expect(renderer.elements.get('mcp-add-anyway')?.hidden).toBe(false)
+    await renderer.addAnyway()
+    expect(renderer.saveMcpServersCalls.at(-1)?.map((s) => s.name)).toEqual(['playwright'])
+  })
+
+  it('hides the override once it has been used, so it cannot write the same entry twice', async () => {
+    const renderer = await loadMcp(true, [])
+    renderer.prepareMcpServerFails('needs credentials')
+    await renderer.addMcpPreset('playwright')
+    await renderer.addAnyway()
+    await renderer.addAnyway()
+    expect(renderer.saveMcpServersCalls).toHaveLength(1)
   })
 
   it('submits the master switch with the form, since that half lives in desktop.json', async () => {

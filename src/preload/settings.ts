@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 /**
  * The settings renderer's entire capability surface.
  *
- * Twelve operations reach the main process, plus three receive-only
+ * Thirteen operations reach the main process, plus four receive-only
  * subscriptions. The renderer has no `fs`, no path construction, and no way
  * to write anything: every value it can persist goes through `save` or
  * `acceptPluginUpdate`, both of which validate in main. `acceptPluginUpdate`
@@ -44,10 +44,16 @@ contextBridge.exposeInMainWorld('settings', {
   validatePluginConfig: (text: string) => ipcRenderer.invoke('settings:validate-plugin-config', text),
   checkBinaries: (pnpmPath: string, npmPath: string) => ipcRenderer.invoke('settings:check-binaries', pnpmPath, npmPath),
   openConfigFile: () => ipcRenderer.invoke('settings:open-config-file'),
+  prepareMcpServer: (server: unknown) => ipcRenderer.invoke('settings:prepare-mcp-server', server),
   readMcpServers: () => ipcRenderer.invoke('settings:read-mcp-servers'),
   saveMcpServers: (servers: unknown) => ipcRenderer.invoke('settings:save-mcp-servers', servers),
   pasteMcpBlock: (text: string) => ipcRenderer.invoke('settings:paste-mcp-block', text),
   openMcpConfigFile: () => ipcRenderer.invoke('settings:open-mcp-config-file'),
+  onMcpProgress: (listener: (line: string) => void) => {
+    const handler = (_event: IpcRendererEvent, line: string): void => listener(line)
+    ipcRenderer.on('settings:mcp-progress', handler)
+    return () => ipcRenderer.removeListener('settings:mcp-progress', handler)
+  },
   onProgress: (listener: (line: string) => void) => {
     const handler = (_event: IpcRendererEvent, line: string): void => listener(line)
     ipcRenderer.on('settings:progress', handler)

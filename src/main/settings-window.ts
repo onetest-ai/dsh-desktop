@@ -75,6 +75,9 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
       handlers.checkBinaries(pnpmPath, npmPath),
     )
     ipcMain.handle('settings:open-config-file', () => handlers.openConfigFile())
+    ipcMain.handle('settings:prepare-mcp-server', (event, server: McpServerEntry) =>
+      handlers.prepareMcpServer(server, (line) => pushToSender(event.sender, 'settings:mcp-progress', line)),
+    )
     ipcMain.handle('settings:read-mcp-servers', () => handlers.readMcpServers())
     ipcMain.handle('settings:save-mcp-servers', (_event, servers: McpServerEntry[]) => handlers.saveMcpServers(servers))
     ipcMain.handle('settings:paste-mcp-block', (_event, text: string) => handlers.pasteMcpBlock(text))

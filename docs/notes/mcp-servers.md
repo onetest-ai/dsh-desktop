@@ -78,6 +78,24 @@ Presets that accept only a browser sign-in (Linear, Atlassian) are listed and di
 
 **A write does not resolve until the harness respawns** — measured at around 17 seconds. The tab says so while it waits; without that it sits on stale rows behind disabled controls and reads as nothing happening.
 
+## Preparing a server before it is written
+
+Adding a local server starts it first: the app spawns the command, completes a real MCP `initialize` and `tools/list`, and streams the server's own stderr into the tab — which is where `npx` reports a first-run download. Only then is `mcp.json` written.
+
+This exists because of the ceiling below. The harness gives a server 60 seconds to list its tools and does not expose that bound, so an `npx` server whose first run downloads its package can mount with **zero tools and no error**. Doing the download here means the harness always meets a warm cache.
+
+The probe is deliberately **unbounded in time**. A timeout here would reintroduce exactly the failure it exists to prevent — a server that would have worked, reported as broken because a timer expired. Its children are spawned into their own process group and reaped through the same `stopGroup` the harness child uses, because a probed server may itself launch a browser or a language server.
+
+A failed probe does **not** write the server: one that cannot start would otherwise sit in the list looking configured while contributing nothing. "Add it anyway" is offered beside the error, because a probe can be wrong — a server needing credentials the window has not collected yet will refuse to start and still be worth saving. The refusal is a default, never a wall.
+
+Remote servers skip it: nothing to download, no local process to prove.
+
+### A `<select>` loses its selection when its options are replaced
+
+`renderPresetPicker` runs on the picker's own `change` event and rebuilds its options, which resets `value` to the first entry. Choosing "Memory" and pressing Add therefore added Tavily. The selection is captured before the rebuild and reapplied after.
+
+The unit suite could not see this: its fake DOM kept `value` across a `textContent = ''`, so the bug was invisible there and only the packaged app exposed it. The fake now models the real behaviour — an element's tag comes from the markup, and clearing a `select` clears its value — so this class of bug is catchable at the unit layer from here on.
+
 ## Known limitation: the cold-start ceiling
 
 `npx -y <package>` downloads on first run. The MCP client awaits `listTools()` during plugin activation on the SDK's 60-second default, which the harness does not expose as configuration. A cold fetch that exceeds it activates the server with **zero tools and no obvious error**. Pre-installing the package, or pinning an absolute command path, avoids it.
