@@ -156,6 +156,12 @@ Design notes and the decisions taken while building this live in [`docs/`](docs/
 - **Not notarized by default, and macOS-only.** Builds are ad-hoc signed, so a downloaded copy needs one trip through System Settings before it opens; `npm run release` removes that with a Developer ID. No Windows or Linux packaging target is configured.
 - The tray icon, menus, and shortcut have not been verified visually by an automated test — only their behavior in code.
 
+## Releases
+
+Released builds are on the [releases page](https://github.com/onetest-ai/dsh-desktop/releases); what has landed since the last one is in [`CHANGELOG.md`](CHANGELOG.md).
+
+Cutting one: `npm run release` (with a Developer ID certificate installed and notary credentials in the environment) produces a signed, notarized, stapled `.dmg` under `release/`. Attach it to a GitHub release — never commit it, since GitHub rejects files over 100MB and a binary in git history is permanent.
+
 ## Contributing
 
 Issues and pull requests are welcome at [onetest-ai/dsh-desktop](https://github.com/onetest-ai/dsh-desktop).
