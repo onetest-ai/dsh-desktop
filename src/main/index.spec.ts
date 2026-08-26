@@ -1368,3 +1368,35 @@ describe('a stored MCP client plugin entry', () => {
     expect(specs).toEqual(['@deepseek-ai/dsh-hooks-claude-code'])
   })
 })
+
+describe('shell PATH', () => {
+  it('passes the cached PATH to the spawned harness', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'dsh-shellpath-boot-'))
+    const original = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+    try {
+      writeFileSync(
+        join(home, 'shell-path.json'),
+        JSON.stringify({ version: 1, path: '/opt/homebrew/bin:/usr/bin', shell: '/bin/zsh', resolvedAt: 'x' }),
+      )
+      await bootReady()
+      expect(dshWebCommandMock.mock.calls.at(-1)![4]).toBe('/opt/homebrew/bin:/usr/bin')
+    } finally {
+      if (original === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = original
+    }
+  })
+
+  it('boots with no cached PATH at all, which is a first run', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'dsh-shellpath-empty-'))
+    const original = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+    try {
+      await bootReady()
+      expect(dshWebCommandMock.mock.calls.at(-1)![4]).toBeUndefined()
+    } finally {
+      if (original === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = original
+    }
+  })
+})

@@ -32,6 +32,7 @@ import { ensurePluginLink, reconcilePluginLinks } from './plugin-link'
 import { ensurePluginPresets, reconcilePluginPresets } from './plugin-presets'
 import { preflight } from './preflight'
 import { attributeBootFailure, runtimeFilePaths, writeRuntimeFiles, type AttributionRow } from './runtime-files'
+import { readCachedShellPath, resolveShellPath, runShell, shellPathCachePath, writeCachedShellPath } from './shell-path'
 import { deleteSecret, getSecret, hasSecret, reconcileSecrets, secretsPath, setSecret } from './secrets'
 import type { InstallDeps } from './runtime-install'
 import { dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
@@ -149,6 +150,40 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
  */
 function mcpEnv(config: DesktopConfig): Record<string, string> {
   return serverEnv(config.mcp, (id) => getSecret(secretsPath(DSH_HOME), id))
+}
+
+/**
+ * The login-shell PATH this boot should hand the harness child.
+ *
+ * Read from cache rather than resolved here: resolution costs seconds (an
+ * interactive login shell sources the user's whole rc file), which must not
+ * be added to every launch. `refreshShellPath` updates the cache in the
+ * background, so a machine whose toolchain moved is correct from the next
+ * launch onward.
+ * @returns the cached PATH, or undefined on a first run or after a failure.
+ */
+function cachedShellPath(): string | undefined {
+  return readCachedShellPath(shellPathCachePath(DSH_HOME))
+}
+
+/**
+ * Re-resolve the login-shell PATH and cache it, off the launch path.
+ *
+ * Deliberately fire-and-forget and deliberately not awaited: nothing in this
+ * boot uses the result, and a shell that takes its full timeout must delay
+ * nothing the user can see. A failure leaves the previous cache in place.
+ */
+function refreshShellPath(): void {
+  setTimeout(() => {
+    const resolved = resolveShellPath(process.env.SHELL, runShell)
+    if (resolved === undefined) return
+    try {
+      writeCachedShellPath(shellPathCachePath(DSH_HOME), resolved, process.env.SHELL ?? '', new Date().toISOString())
+    } catch {
+      // A cache that cannot be written is not worth reporting: the next
+      // launch simply resolves again, and nothing else depends on it.
+    }
+  }, 0).unref()
 }
 
 /**
@@ -756,7 +791,7 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
 
   try {
     const handle = await startServer({
-      spec: dshWebCommand(config, patchPath, DSH_HOME, mcpEnv(config)),
+      spec: dshWebCommand(config, patchPath, DSH_HOME, mcpEnv(config), cachedShellPath()),
       timeoutMs: READY_TIMEOUT_MS,
       onSpawned: (stop) => {
         child = { generation: mine, stop }
@@ -895,6 +930,10 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   void app.whenReady().then(async () => {
+    // Scheduled before anything else and never awaited: the resolution runs
+    // on its own turn, so a slow rc file delays nothing here, and its result
+    // is only ever read by the NEXT launch.
+    refreshShellPath()
     installMenu(showSettings)
     window = createWindow()
     window.on('close', (event) => {
