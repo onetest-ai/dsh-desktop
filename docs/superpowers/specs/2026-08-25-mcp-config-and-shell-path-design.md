@@ -63,6 +63,12 @@ MCP configuration moves out of `desktop.json` into `$DSH_HOME/mcp.json`, in the 
 
 **Entry points.** Presets (curated, growing) fill the form with one click; "Add custom" offers stdio or HTTP; "Paste JSON" accepts a whole `mcpServers` block and creates however many servers it names. All three write the same file, which the user may also hand-edit.
 
+**Presets are data, not code.** The catalog ships as `assets/mcp-presets.json` — `assets/**/*` is already in `build.files`, so it is packaged with no new build step. An optional `$DSH_HOME/mcp-presets.json` is merged over it by preset id, which is what makes the catalog updatable without an app release: correcting an endpoint, or handing a team its own internal servers, is a file edit.
+
+Both files are validated at read time and an invalid entry is skipped rather than throwing — a malformed catalog costs the user their preset list, never the ability to start. Because the shipped file is no longer type-checked, a test asserts it is present inside the built package and parses, covering the one failure this format introduces: a catalog that goes missing with no compile error.
+
+A preset names a command to run, so a *remote* catalog would be an arbitrary-code-execution vector and is deliberately out of scope. A local file the user or their administrator controls is not: it carries exactly the trust of `mcp.json`, which the same user can already edit by hand.
+
 **Migration** runs once: `desktop.json`'s `mcp` section plus `desktop-secrets.json` become `mcp.json`, and both old sources are removed.
 
 ## Known limitation, documented not solved
