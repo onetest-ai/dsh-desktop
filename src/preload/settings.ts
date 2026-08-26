@@ -24,7 +24,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
  * `setMcpToken`/`clearMcpToken` are the ninth and tenth: an MCP server's
  * token is the one value the renderer can persist that never goes through
  * `save`, because it is never part of the form and never reaches
- * `desktop.json` — main puts it straight into the OS keychain. The traffic is
+ * `desktop.json` — main writes it to its own file. The traffic is
  * one-way by design: a token can be written and cleared, never read back, so
  * a stored credential cannot be recovered through this window.
  * `onProgress`/`onUpdateAvailable`/`onPluginUpdateAvailable` add no way to

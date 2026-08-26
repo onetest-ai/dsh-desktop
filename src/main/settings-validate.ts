@@ -36,7 +36,7 @@ export interface SettingsForm {
    *
    * A server's token is deliberately absent: tokens never travel through the
    * form, because the form is what `writeConfig` persists into
-   * `desktop.json`. They go through their own channel into the OS keychain
+   * `desktop.json`. They go through their own channel into their own file
    * instead (see `secrets.ts`).
    */
   mcp: { enabled: boolean; servers: McpServer[] }

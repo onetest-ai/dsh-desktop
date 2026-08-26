@@ -321,8 +321,8 @@ export interface SettingsHandlers {
    * Store one MCP server's token and respawn the harness so it takes effect.
    *
    * Separate from `save` because a token is not part of the form and never
-   * reaches `desktop.json`: it goes straight to the OS keychain, and the
-   * running harness only picks it up through a restart.
+   * reaches `desktop.json`: it goes to its own file (see `secrets.ts`), and
+   * the running harness only picks it up through a restart.
    * @param id - the server id the token belongs to.
    * @param token - the token as typed; blank is rejected rather than stored.
    * @returns whether it was stored, and why not when it was not.

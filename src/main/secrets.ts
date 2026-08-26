@@ -19,14 +19,11 @@ export function secretsPath(dshHome: string): string {
  * The on-disk document.
  *
  * Tokens are stored in the clear, deliberately, matching what `.mcp.json`,
- * `~/.aws/credentials`, `~/.npmrc`, and the `gh` CLI do. The alternative —
- * Electron's `safeStorage`, backed by the OS keychain — was tried and
- * removed: a Keychain item's ACL trusts specific signed binaries, so every
- * re-signed build, every bundle-id change, and every separate copy of the app
- * raises its own password prompt. A first-run experience that asks an
- * ordinary user for their login password several times is worse than the
- * threat it defends against, for a developer tool whose agent already runs
- * shell commands as that user.
+ * `~/.aws/credentials`, `~/.npmrc`, and the `gh` CLI do. Do not reintroduce
+ * OS-keychain storage here: it was tried and removed because a keychain
+ * item's ACL trusts specific signed binaries, so every re-signed build and
+ * every copy of the app raised its own login-password prompt. The full
+ * reasoning is in `docs/notes/mcp-servers.md`.
  *
  * What the clear text does NOT defend against: any process running as this
  * user can read these tokens, and they are captured by Time Machine and any
