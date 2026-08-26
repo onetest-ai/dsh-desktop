@@ -137,9 +137,17 @@ describe('stopAll', () => {
 describe('timeoutMs', () => {
   it('kills a run that outlives its bound and rejects naming the limit', async () => {
     const runner = createInstallRunner()
-    const { run, pids } = await startLongRunning(runner, 250)
+    // The bound has to outlast spawning the two Node processes this test
+    // watches for, because `startLongRunning` waits for both to print their
+    // pid before the rejection is asserted. At 250ms the timeout under test
+    // killed the tree before either process had booted under full-suite
+    // load, and the helper failed with "expected +0 to be 2" — the test
+    // racing its own precondition rather than exercising the timeout. The
+    // spawned script runs forever, so a larger bound tests exactly the same
+    // behaviour and only costs the wall-clock it now waits.
+    const { run, pids } = await startLongRunning(runner, 2000)
 
-    await expect(run).rejects.toThrow(/exceeded 250ms and was stopped/)
+    await expect(run).rejects.toThrow(/exceeded 2000ms and was stopped/)
 
     await vi.waitFor(() => {
       expect(pids.filter(alive)).toEqual([])
