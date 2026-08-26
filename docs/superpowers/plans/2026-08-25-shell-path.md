@@ -309,8 +309,13 @@ Expected: PASS, 14 tests.
 Temporarily change `['-ilc', 'echo $PATH']` to `['-lc', 'echo $PATH']` and re-run.
 Expected: the "asks an interactive login shell" test FAILS. Restore the line.
 
-Then temporarily delete the `chmodSync` line and re-run.
-Expected: the "writes owner-only" test still passes (the `mode` option covers a new file) — this is expected, and the `chmodSync` covers the pre-existing-file case, which the `secrets.spec.ts` suite already proves. Restore the line.
+Then change `.at(-1)` to `.at(0)` and re-run.
+Expected: "uses the last line" FAILS. Restore it.
+
+Then delete the `if (!candidate.split(':')…) return undefined` guard and re-run.
+Expected: "rejects output that is not a PATH" FAILS. Restore it.
+
+Each mutation must break exactly one test, and the right one. A mutation that breaks nothing means the behaviour is unpinned; a mutation that breaks several means the tests are coupled to the implementation rather than to the behaviour.
 
 - [ ] **Step 6: Verify against a real shell, once, by hand**
 
