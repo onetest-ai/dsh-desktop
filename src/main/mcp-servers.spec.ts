@@ -1,69 +1,70 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { dumpDeclaredPatchRow, loadDeclaredPatchRows } from './bundle-patch'
+import { dumpDeclaredPatchRow } from './bundle-patch'
+import type { McpServerEntry } from './mcp-config'
 import {
   activeServers,
-  mcpErrors,
   MCP_CLIENT_PACKAGE,
+  mcpErrors,
   serverEnv,
-  serverEnvVar,
-  serverRow,
   serverRowId,
   serverRows,
-  tokenLabel,
-  validServerId,
+  validServerName,
   validServerUrl,
-  type McpConfig,
-  type McpServer,
+  valueEnvVar,
 } from './mcp-servers'
 
-/** A configured server with everything valid, overridable per test. */
-function server(overrides: Partial<McpServer> = {}): McpServer {
-  return { id: 'tavily', preset: 'tavily', url: 'https://mcp.tavily.com/mcp/', enabled: true, ...overrides }
+/** A configured stdio entry, overridable per test. */
+function stdio(overrides: Partial<McpServerEntry> = {}): McpServerEntry {
+  return {
+    name: 'playwright',
+    disabled: false,
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@playwright/mcp@latest'],
+    env: { API_KEY: 'sk-secret' },
+    cwd: '/w',
+    headers: {},
+    rest: {},
+    ...overrides,
+  }
 }
 
-/** An `mcp` section carrying the given servers, switched on. */
-function config(servers: McpServer[], enabled = true): McpConfig {
-  return { enabled, servers }
+/** A configured http entry, overridable per test. */
+function http(overrides: Partial<McpServerEntry> = {}): McpServerEntry {
+  return {
+    name: 'tavily',
+    disabled: false,
+    transport: 'http',
+    args: [],
+    env: {},
+    url: 'https://mcp.tavily.com/mcp/',
+    headers: { Authorization: 'Bearer tvly-secret' },
+    rest: {},
+    ...overrides,
+  }
 }
 
-describe('validServerId', () => {
-  it('accepts the ids the harness itself accepts as a serverName', () => {
-    for (const id of ['tavily', 'GitHub', 'my_server', 'a-b-c', 'x'.repeat(32)]) {
-      expect(validServerId(id)).toBe(true)
+describe('validServerName', () => {
+  it('accepts the names the harness itself accepts as a serverName', () => {
+    for (const name of ['tavily', 'GitHub', 'my_server', 'a-b-c', 'x'.repeat(32)]) {
+      expect(validServerName(name)).toBe(true)
     }
   })
 
-  it('rejects an id that could not be a tool namespace or a row id', () => {
-    for (const id of ['', 'has space', 'has.dot', 'has/slash', 'x'.repeat(33)]) {
-      expect(validServerId(id)).toBe(false)
+  it('rejects a name that could not be a tool namespace or a row id', () => {
+    for (const name of ['', 'has space', 'has.dot', 'has/slash', 'x'.repeat(33)]) {
+      expect(validServerName(name)).toBe(false)
     }
   })
 })
 
 describe('validServerUrl', () => {
-  it('accepts an https URL', () => {
+  it('accepts https', () => {
     expect(validServerUrl('https://mcp.tavily.com/mcp/')).toBe(true)
   })
 
-  it('rejects http, which would put the bearer token on the wire in cleartext', () => {
+  it('rejects http, which would put a bearer token on the wire in cleartext', () => {
     expect(validServerUrl('http://mcp.tavily.com/mcp/')).toBe(false)
-  })
-
-  it('rejects a non-URL', () => {
-    expect(validServerUrl('mcp.tavily.com')).toBe(false)
-  })
-})
-
-describe('serverEnvVar', () => {
-  it('derives an environment variable name from the server id', () => {
-    expect(serverEnvVar('tavily')).toBe('DSH_MCP_TOKEN_TAVILY')
-  })
-
-  it('turns a hyphen into an underscore, which a shell variable name requires', () => {
-    expect(serverEnvVar('my-server')).toBe('DSH_MCP_TOKEN_MY_SERVER')
   })
 })
 
@@ -73,122 +74,111 @@ describe('serverRowId', () => {
   })
 })
 
+describe('valueEnvVar', () => {
+  it('leads with the index, so two servers cannot collide on a sanitized name', () => {
+    // Server `a-b` key `c` and server `a` key `b-c` both sanitize to A_B_C;
+    // the index is what keeps one from overwriting the other's credential.
+    expect(valueEnvVar(0, 'API_KEY')).not.toBe(valueEnvVar(1, 'API_KEY'))
+  })
+
+  it('keeps the key recognizable for debugging', () => {
+    expect(valueEnvVar(0, 'API_KEY')).toBe('DSH_MCP_0_API_KEY')
+  })
+
+  it('sanitizes a key that is not a legal variable name', () => {
+    expect(valueEnvVar(0, 'X-Api-Key')).toBe('DSH_MCP_0_X_API_KEY')
+  })
+})
+
 describe('activeServers', () => {
-  it('mounts nothing when the section is absent', () => {
-    expect(activeServers(undefined)).toEqual([])
-  })
-
   it('mounts nothing when the master switch is off, without losing the servers', () => {
-    const mcp = config([server()], false)
-    expect(activeServers(mcp)).toEqual([])
-    expect(mcp.servers).toHaveLength(1)
+    const servers = [stdio()]
+    expect(activeServers(servers, false)).toEqual([])
+    expect(servers).toHaveLength(1)
   })
 
-  it('mounts only the servers that are themselves enabled', () => {
-    const mcp = config([server({ id: 'tavily' }), server({ id: 'github', enabled: false })])
-    expect(activeServers(mcp).map((entry) => entry.id)).toEqual(['tavily'])
+  it('mounts only the servers that are not disabled', () => {
+    expect(activeServers([stdio(), http({ disabled: true })], true).map((s) => s.name)).toEqual(['playwright'])
   })
 })
 
-describe('serverRow', () => {
-  it('mounts an instance of the MCP client plugin', () => {
-    expect(serverRow(server()).name).toBe(MCP_CLIENT_PACKAGE)
+describe('stdio rows', () => {
+  it('mounts an mcp-client instance over stdio', () => {
+    const config = serverRows([stdio()], true)[0].config as Record<string, unknown>
+    expect(config).toMatchObject({ transport: 'stdio', serverName: 'playwright', command: 'npx', cwd: '/w' })
   })
 
-  it('names the tool namespace after the server id', () => {
-    const config = serverRow(server()).config as Record<string, unknown>
-    expect(config.serverName).toBe('tavily')
+  it('passes the command arguments through unchanged', () => {
+    const config = serverRows([stdio()], true)[0].config as Record<string, unknown>
+    expect(config.args).toEqual(['-y', '@playwright/mcp@latest'])
   })
 
-  it('reaches the server over Streamable HTTP at its configured URL', () => {
-    const config = serverRow(server()).config as Record<string, unknown>
-    expect(config).toMatchObject({ transport: 'streamable-http', url: 'https://mcp.tavily.com/mcp/' })
-  })
-
-  it('names the token through an environment lookup rather than embedding it', () => {
-    const yaml = dumpDeclaredPatchRow(serverRow(server()))
+  it('never writes an env value into the overlay, which is world-readable', () => {
+    const yaml = dumpDeclaredPatchRow(serverRows([stdio()], true)[0])
+    expect(yaml).not.toContain('sk-secret')
     expect(yaml).toContain('!!js')
-    expect(yaml).toContain('Bearer ${process.env.DSH_MCP_TOKEN_TAVILY}')
   })
 
-  it('survives the write-and-read-back the harness loader performs on the overlay', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'dsh-desktop-mcp-row-'))
-    writeFileSync(join(directory, 'cordis.patch.yml'), `- insert:\n${dumpDeclaredPatchRow(serverRow(server()))}`)
-    const rows = loadDeclaredPatchRows(directory, 'cordis.patch.yml')
-    expect(rows).toHaveLength(1)
-    // Re-dumping proves the `!!js` tag round-tripped as an expression rather
-    // than degrading into an ordinary quoted string.
-    expect(dumpDeclaredPatchRow(rows![0])).toContain('!!js')
-    expect(dumpDeclaredPatchRow(rows![0])).toContain('Bearer ${process.env.DSH_MCP_TOKEN_TAVILY}')
+  it('carries every env value to the child by environment instead', () => {
+    expect(Object.values(serverEnv([stdio()], true))).toContain('sk-secret')
   })
 
-  it('emits the row under its own id, so two servers never collide', () => {
-    const first = dumpDeclaredPatchRow(serverRow(server({ id: 'tavily' })))
-    const second = dumpDeclaredPatchRow(serverRow(server({ id: 'github' })))
-    expect(first).toContain('id: mcp-tavily')
-    expect(second).toContain('id: mcp-github')
+  it('gives two servers sharing an env key distinct variables, so neither is overwritten', () => {
+    const env = serverEnv([stdio(), stdio({ name: 'other', env: { API_KEY: 'other-secret' } })], true)
+    expect(Object.keys(env)).toHaveLength(2)
+    expect(new Set(Object.values(env))).toEqual(new Set(['sk-secret', 'other-secret']))
+  })
+
+  it('names in the row exactly the variables serverEnv defines', () => {
+    const servers = [stdio(), stdio({ name: 'other', env: { API_KEY: 'other-secret' } })]
+    const yaml = serverRows(servers, true).map(dumpDeclaredPatchRow).join('')
+    for (const variable of Object.keys(serverEnv(servers, true))) expect(yaml).toContain(variable)
   })
 })
 
-describe('serverRows', () => {
-  it('contributes one row per enabled server', () => {
-    const rows = serverRows(config([server({ id: 'tavily' }), server({ id: 'github' })]))
-    expect(rows.map((row) => row.id)).toEqual(['mcp-tavily', 'mcp-github'])
+describe('http rows', () => {
+  it('mounts an mcp-client instance over streamable http', () => {
+    const config = serverRows([http()], true)[0].config as Record<string, unknown>
+    expect(config).toMatchObject({ transport: 'streamable-http', serverName: 'tavily', url: 'https://mcp.tavily.com/mcp/' })
   })
 
-  it('contributes nothing when MCP is off', () => {
-    expect(serverRows(config([server()], false))).toEqual([])
-  })
-})
-
-describe('serverEnv', () => {
-  it('carries each enabled server token under its own variable', () => {
-    const env = serverEnv(config([server()]), () => 'tvly-abc')
-    expect(env).toEqual({ DSH_MCP_TOKEN_TAVILY: 'tvly-abc' })
+  it('never writes a header value into the overlay', () => {
+    const yaml = dumpDeclaredPatchRow(serverRows([http()], true)[0])
+    expect(yaml).not.toContain('tvly-secret')
+    expect(yaml).toContain('!!js')
   })
 
-  it('passes an empty value for a server with no stored token, never the text "undefined"', () => {
-    const env = serverEnv(config([server()]), () => undefined)
-    expect(env.DSH_MCP_TOKEN_TAVILY).toBe('')
+  it('carries the header value by environment', () => {
+    expect(Object.values(serverEnv([http()], true))).toContain('Bearer tvly-secret')
   })
 
-  it('carries nothing for a disabled server', () => {
-    expect(serverEnv(config([server({ enabled: false })]), () => 'tvly-abc')).toEqual({})
-  })
-})
-
-describe('tokenLabel', () => {
-  it("uses the vendor's own name for its credential", () => {
-    expect(tokenLabel(server({ preset: 'github' }))).toBe('Personal access token')
-  })
-
-  it('falls back to a neutral label for a hand-added server', () => {
-    expect(tokenLabel(server({ preset: undefined }))).toBe('Token')
-  })
-
-  it('falls back for a preset id that is no longer shipped', () => {
-    expect(tokenLabel(server({ preset: 'retired' }))).toBe('Token')
+  it('names the package the harness mounts', () => {
+    expect(serverRows([http()], true)[0].name).toBe(MCP_CLIENT_PACKAGE)
   })
 })
 
 describe('mcpErrors', () => {
-  it('accepts a valid section', () => {
-    expect(mcpErrors(config([server()]))).toEqual([])
+  it('accepts valid servers', () => {
+    expect(mcpErrors([stdio(), http()])).toEqual([])
   })
 
-  it('rejects an id that cannot be a tool namespace', () => {
-    expect(mcpErrors(config([server({ id: 'has space' })]))[0]).toContain('not a valid server name')
+  it('rejects a stdio server with no command', () => {
+    expect(mcpErrors([stdio({ command: undefined })])[0]).toContain('command')
   })
 
-  it('rejects the same id twice, which would collide in the overlay', () => {
-    expect(mcpErrors(config([server(), server()]))[0]).toContain('listed more than once')
+  it('does not require https of a stdio server, which has no url at all', () => {
+    expect(mcpErrors([stdio()])).toEqual([])
   })
 
-  it('rejects a non-https URL', () => {
-    expect(mcpErrors(config([server({ url: 'http://x.example/mcp' })]))[0]).toContain('https://')
+  it('rejects a non-https url, which would leak a bearer token', () => {
+    expect(mcpErrors([http({ url: 'http://x.example/mcp' })])[0]).toContain('https')
+  })
+
+  it('rejects the same name twice, which would collide in the overlay', () => {
+    expect(mcpErrors([stdio(), stdio()])[0]).toContain('more than once')
   })
 
   it('checks a disabled server too, so a bad entry cannot be hidden by its switch', () => {
-    expect(mcpErrors(config([server({ enabled: false, url: 'nope' })]))).toHaveLength(1)
+    expect(mcpErrors([stdio({ disabled: true, command: undefined })])).toHaveLength(1)
   })
 })

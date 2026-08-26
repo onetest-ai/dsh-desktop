@@ -2,7 +2,6 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { ConfigurationError } from './configuration-error'
 import type { HarnessSource } from './harness-source'
-import { mcpErrors, type McpConfig } from './mcp-servers'
 import { validSpecShape, type PluginEntry } from './plugin-entries'
 
 /** Resolved desktop settings. `pnpmPath`/`npmPath` pin binaries when PATH cannot find them. */
@@ -30,16 +29,22 @@ export interface DesktopConfig {
    */
   plugins?: PluginEntry[]
   /**
-   * The MCP servers to mount, each as its own `@deepseek-ai/dsh-mcp-client`
-   * instance. Kept out of `plugins` because one package backs every server,
-   * which that list's one-entry-per-package rule forbids — and because the
-   * two are configured differently: a plugin is a package the user names,
-   * while a server is a URL and a credential.
+   * Whether MCP servers are mounted at all.
    *
-   * Optional so a `desktop.json` predating this field stays valid; absent
-   * means no MCP at all, the same as present-but-disabled.
+   * Only the master switch lives here; the servers themselves live in
+   * `mcp.json` (see `mcp-config.ts`), in the format other MCP clients use, so
+   * a block can be pasted between them unmodified. Absent means off.
    */
-  mcp?: McpConfig
+  mcpEnabled?: boolean
+  /**
+   * The concrete installed version of the MCP client package, resolved by a
+   * save exactly like a plugin entry's `version`.
+   *
+   * App state, not server configuration, so it stays here rather than in
+   * `mcp.json` — that file is the portable one, and a version this app
+   * happens to have installed means nothing to another MCP client.
+   */
+  mcpClientVersion?: string
 }
 
 export const DEFAULT_NOTIFY_PORT = 43117
@@ -135,27 +140,6 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     }
   }
 
-  if (record.mcp !== undefined) {
-    const mcp = record.mcp as Partial<McpConfig>
-    if (typeof mcp.enabled !== 'boolean' || !Array.isArray(mcp.servers)) {
-      throw new ConfigurationError(`dsh-desktop: ${filePath} "mcp" must be {enabled, servers} with a boolean and a list`)
-    }
-    // Same defense-in-depth as the plugin checks above: the Settings form
-    // validates a server before it is ever written, but this file is
-    // hand-editable and a server's id reaches an overlay row id, a tool
-    // namespace, and an environment-variable name, while its URL is where a
-    // stored bearer token gets sent.
-    for (const server of mcp.servers) {
-      if (server === null || typeof server !== 'object' || typeof server.id !== 'string' || typeof server.url !== 'string' || typeof server.enabled !== 'boolean') {
-        throw new ConfigurationError(`dsh-desktop: ${filePath} every "mcp.servers" entry must be {id, url, enabled}`)
-      }
-    }
-    const errors = mcpErrors(mcp as McpConfig)
-    if (errors.length > 0) {
-      throw new ConfigurationError(`dsh-desktop: ${filePath} "mcp" is invalid: ${errors.join('; ')}`)
-    }
-  }
-
   if (record.extraPath !== undefined && typeof record.extraPath !== 'string') {
     throw new ConfigurationError(`dsh-desktop: ${filePath} "extraPath" must be a string`)
   }
@@ -168,7 +152,8 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     ...(record.npmPath === undefined ? {} : { npmPath: record.npmPath }),
     ...(record.extraPath === undefined ? {} : { extraPath: record.extraPath }),
     ...(record.plugins === undefined ? {} : { plugins: record.plugins }),
-    ...(record.mcp === undefined ? {} : { mcp: record.mcp }),
+    ...(record.mcpEnabled === undefined ? {} : { mcpEnabled: record.mcpEnabled }),
+    ...(record.mcpClientVersion === undefined ? {} : { mcpClientVersion: record.mcpClientVersion }),
   }
 }
 

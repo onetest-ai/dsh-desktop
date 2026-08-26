@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 /**
  * The settings renderer's entire capability surface.
  *
- * Ten operations reach the main process, plus three receive-only
+ * Twelve operations reach the main process, plus three receive-only
  * subscriptions. The renderer has no `fs`, no path construction, and no way
  * to write anything: every value it can persist goes through `save` or
  * `acceptPluginUpdate`, both of which validate in main. `acceptPluginUpdate`
@@ -21,12 +21,12 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
  * itself. `openConfigFile` is an eighth: it asks main to open `desktop.json`
  * in the OS-associated editor — the renderer never learns the path or
  * touches the filesystem itself, only the pass/fail outcome.
- * `setMcpToken`/`clearMcpToken` are the ninth and tenth: an MCP server's
- * token is the one value the renderer can persist that never goes through
- * `save`, because it is never part of the form and never reaches
- * `desktop.json` — main writes it to its own file. The traffic is
- * one-way by design: a token can be written and cleared, never read back, so
- * a stored credential cannot be recovered through this window.
+ * `readMcpServers`/`saveMcpServers`/`pasteMcpBlock`/`openMcpConfigFile` are
+ * the ninth through twelfth: MCP servers are the one thing the renderer can
+ * persist that never goes through `save`, because they live in `mcp.json`
+ * rather than in the form `save` writes to `desktop.json`. Every one is
+ * validated in main before anything is written, and `openMcpConfigFile` hands
+ * the file to the OS without the renderer ever learning its path.
  * `onProgress`/`onUpdateAvailable`/`onPluginUpdateAvailable` add no way to
  * *call* into main — they only let the renderer listen for what main chooses
  * to push, each returning an unsubscribe function. `validatePlugin`,
@@ -44,8 +44,10 @@ contextBridge.exposeInMainWorld('settings', {
   validatePluginConfig: (text: string) => ipcRenderer.invoke('settings:validate-plugin-config', text),
   checkBinaries: (pnpmPath: string, npmPath: string) => ipcRenderer.invoke('settings:check-binaries', pnpmPath, npmPath),
   openConfigFile: () => ipcRenderer.invoke('settings:open-config-file'),
-  setMcpToken: (id: string, token: string) => ipcRenderer.invoke('settings:set-mcp-token', id, token),
-  clearMcpToken: (id: string) => ipcRenderer.invoke('settings:clear-mcp-token', id),
+  readMcpServers: () => ipcRenderer.invoke('settings:read-mcp-servers'),
+  saveMcpServers: (servers: unknown) => ipcRenderer.invoke('settings:save-mcp-servers', servers),
+  pasteMcpBlock: (text: string) => ipcRenderer.invoke('settings:paste-mcp-block', text),
+  openMcpConfigFile: () => ipcRenderer.invoke('settings:open-mcp-config-file'),
   onProgress: (listener: (line: string) => void) => {
     const handler = (_event: IpcRendererEvent, line: string): void => listener(line)
     ipcRenderer.on('settings:progress', handler)

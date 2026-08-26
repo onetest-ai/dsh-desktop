@@ -2,7 +2,7 @@ import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { DEFAULT_HOTKEY, DEFAULT_NOTIFY_PORT, type ConfigResult, type DesktopConfig } from './config'
 import type { HarnessSource } from './harness-source'
-import { mcpErrors, MCP_CLIENT_PACKAGE, type McpConfig, type McpServer } from './mcp-servers'
+import { MCP_CLIENT_PACKAGE } from './mcp-servers'
 import { defaultPlugins, parseSpec, validSpecShape, type PluginEntry } from './plugin-entries'
 
 /** The settings form's raw values. Every field is a string because HTML forms yield strings. */
@@ -34,17 +34,13 @@ export interface SettingsForm {
    */
   plugins: { spec: string; config: string }[]
   /**
-   * The MCP tab's state: the master switch, and one row per configured
-   * server. Like `plugins`, and unlike every other member, this is built by
-   * the renderer from its own row controls rather than being a raw HTML
-   * field value.
+   * Whether MCP servers are mounted at all.
    *
-   * A server's token is deliberately absent: tokens never travel through the
-   * form, because the form is what `writeConfig` persists into
-   * `desktop.json`. They go through their own channel into their own file
-   * instead (see `secrets.ts`).
+   * Only the switch travels through the form: the servers themselves live in
+   * `mcp.json` and are saved through their own channel, because that file is
+   * the portable one and `save` writes `desktop.json`.
    */
-  mcp: { enabled: boolean; servers: McpServer[] }
+  mcpEnabled: boolean
 }
 
 /** Per-field messages for a rejected form; absent keys validated cleanly. */
@@ -270,9 +266,6 @@ export function validateSettings(form: SettingsForm): ValidationResult {
   )
   if (!parsedPlugins.ok) errors.plugins = parsedPlugins.message
 
-  const mcpProblems = mcpErrors(mcpFrom(form))
-  if (mcpProblems.length > 0) errors.mcp = mcpProblems.join('; ')
-
   if (harness === undefined || Object.keys(errors).length > 0) {
     return { ok: false, errors }
   }
@@ -280,7 +273,6 @@ export function validateSettings(form: SettingsForm): ValidationResult {
   const pnpmPath = form.pnpmPath.trim()
   const npmPath = form.npmPath.trim()
   const extraPath = form.extraPath.trim()
-  const mcp = mcpFrom(form)
   return {
     ok: true,
     config: {
@@ -292,38 +284,11 @@ export function validateSettings(form: SettingsForm): ValidationResult {
       // parse against the previously stored entries to carry forward an
       // already-resolved version for a spec that has not changed.
       plugins: parsedPlugins.ok ? parsedPlugins.entries : [],
-      // `clientVersion` is resolved and installed by `settings-ipc.ts`'s
-      // `performSave`, exactly like a plugin entry's own `version`, and is
-      // carried forward there from the previously stored section.
-      //
-      // Omitted entirely when MCP is off with nothing configured, so a user
-      // who never opens the tab keeps a `desktop.json` with no trace of it —
-      // the field is optional precisely so its absence can mean untouched.
-      // A section with servers survives being switched off, since turning
-      // the feature back on must not have lost them.
-      ...(mcp.enabled || mcp.servers.length > 0 ? { mcp } : {}),
+      ...(form.mcpEnabled ? { mcpEnabled: true } : {}),
       ...(pnpmPath === '' ? {} : { pnpmPath }),
       ...(npmPath === '' ? {} : { npmPath }),
       ...(extraPath === '' ? {} : { extraPath }),
     },
-  }
-}
-
-/**
- * The `mcp` section one submitted form describes, before its client version
- * is resolved.
- * @param form - the submitted values.
- * @returns the section, with servers taken in the order the form listed them.
- */
-function mcpFrom(form: SettingsForm): McpConfig {
-  return {
-    enabled: form.mcp.enabled,
-    servers: form.mcp.servers.map((server) => ({
-      id: server.id.trim(),
-      ...(server.preset === undefined || server.preset === '' ? {} : { preset: server.preset }),
-      url: server.url.trim(),
-      enabled: server.enabled,
-    })),
   }
 }
 
@@ -348,13 +313,13 @@ export function formFor(result: ConfigResult): SettingsForm {
     // the first plugin, so the first save installs it rather than special-
     // casing it outside this generic list.
     plugins: defaultPlugins().map((entry) => ({ spec: entry.spec, config: '' })),
-    // Off with nothing configured: MCP is opt-in, and a fresh install must
-    // not reach any third-party server on its own.
-    mcp: { enabled: false, servers: [] },
+    // Off by default: MCP is opt-in, and a fresh install must not reach any
+    // third-party server on its own.
+    mcpEnabled: false,
   }
   if (!result.configured) return base
 
-  const { harness, notifyPort, hotkey, pnpmPath, npmPath, extraPath, plugins, mcp } = result.config
+  const { harness, notifyPort, hotkey, pnpmPath, npmPath, extraPath, plugins, mcpEnabled } = result.config
   return {
     ...base,
     kind: harness.kind,
@@ -370,6 +335,6 @@ export function formFor(result: ConfigResult): SettingsForm {
       spec: entry.spec,
       config: entry.config === undefined ? '' : JSON.stringify(entry.config, undefined, 2),
     })),
-    ...(mcp === undefined ? {} : { mcp: { enabled: mcp.enabled, servers: mcp.servers } }),
+    mcpEnabled: mcpEnabled === true,
   }
 }

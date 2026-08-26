@@ -8,13 +8,9 @@ import { ConfigurationError } from './configuration-error'
 import { configPath, PROFILE, resolveDshHome, type HarnessSource } from './harness-source'
 import { createInstallRunner } from './install-process'
 import { createManagedInstaller, createUpdateChecker } from './managed-install'
-import {
-  activeServers,
-  MCP_CLIENT_PACKAGE,
-  serverEnv,
-  serverRows,
-  type McpConfig,
-} from './mcp-servers'
+import { mcpConfigPath, readMcpConfig, writeMcpConfig, type McpServerEntry } from './mcp-config'
+import { migrateMcpConfig } from './mcp-migrate'
+import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-servers'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
 import { openConfigFile } from './open-config-file'
 import {
@@ -33,7 +29,6 @@ import { ensurePluginPresets, reconcilePluginPresets } from './plugin-presets'
 import { preflight } from './preflight'
 import { attributeBootFailure, runtimeFilePaths, writeRuntimeFiles, type AttributionRow } from './runtime-files'
 import { readCachedShellPath, resolveShellPath, runShell, shellPathCachePath, writeCachedShellPath } from './shell-path'
-import { deleteSecret, getSecret, hasSecret, reconcileSecrets, secretsPath, setSecret } from './secrets'
 import type { InstallDeps } from './runtime-install'
 import { dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
 import { createSettingsHandlers } from './settings-ipc'
@@ -134,7 +129,7 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
     // section — the master switch, a server's URL, or which servers are on
     // — only reaches the harness through a respawn. Compared by value
     // because the section is rebuilt fresh on every save.
-    mcpChanged(previous.mcp, next.mcp)
+    mcpChanged(previous, next)
   )
 }
 
@@ -142,14 +137,22 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
  * Every enabled MCP server's token, as environment variables for the harness
  * child.
  *
- * Read at spawn time rather than cached: a token can be replaced from the
- * settings window between two boots, and the restart that follows must pick
- * up the new value.
+ * Read at spawn time rather than cached: `mcp.json` is hand-editable and may
+ * have changed since the last boot, and the restart that follows a save must
+ * pick up the new values.
  * @param config - the desktop settings this boot is starting from.
  * @returns the variables to add to the child's environment.
  */
 function mcpEnv(config: DesktopConfig): Record<string, string> {
-  return serverEnv(config.mcp, (id) => getSecret(secretsPath(DSH_HOME), id))
+  return serverEnv(configuredMcpServers(), config.mcpEnabled === true)
+}
+
+/**
+ * Every server `mcp.json` configures, enabled or not.
+ * @returns the configured entries, in file order.
+ */
+function configuredMcpServers(): McpServerEntry[] {
+  return readMcpConfig(mcpConfigPath(DSH_HOME))
 }
 
 /**
@@ -187,21 +190,19 @@ function refreshShellPath(): void {
 }
 
 /**
- * Whether two `mcp` sections differ in anything baked into a boot.
+ * Whether the MCP master switch or client version changed in a way a boot
+ * bakes in.
  *
- * A stored token is deliberately not part of this: it lives outside the
- * config (see `secrets.ts`), and the settings handler restarts explicitly
- * when one changes.
- * @param previous - the section applied to the running harness.
- * @param next - the section just saved.
+ * The servers themselves are deliberately not compared here: they live in
+ * `mcp.json`, outside the config this function is given, so a save that edits
+ * them restarts the harness explicitly (see `settings-ipc.ts`) rather than
+ * being detected by comparing two `DesktopConfig` values that are identical.
+ * @param previous - the settings applied to the running harness.
+ * @param next - the settings just saved.
  * @returns whether the harness has to be respawned.
  */
-function mcpChanged(previous: McpConfig | undefined, next: McpConfig | undefined): boolean {
-  const before = activeServers(previous)
-  const after = activeServers(next)
-  if (previous?.clientVersion !== next?.clientVersion) return true
-  if (before.length !== after.length) return true
-  return before.some((server, index) => server.id !== after[index].id || server.url !== after[index].url)
+function mcpChanged(previous: DesktopConfig | undefined, next: DesktopConfig): boolean {
+  return previous?.mcpEnabled !== next.mcpEnabled || previous?.mcpClientVersion !== next.mcpClientVersion
 }
 
 /**
@@ -313,12 +314,9 @@ const settingsHandlers = createSettingsHandlers({
   disabledPlugins: () => Object.fromEntries(disabledPlugins),
   clientLinkWarnings: () => Object.fromEntries(clientLinkWarnings),
   openConfigFile: () => openConfigFile(CONFIG_PATH, existsSync, (path) => shell.openPath(path)),
-  mcpSecrets: {
-    has: (id) => hasSecret(secretsPath(DSH_HOME), id),
-    set: (id, value) => setSecret(secretsPath(DSH_HOME), id, value),
-    clear: (id) => deleteSecret(secretsPath(DSH_HOME), id),
-    reconcile: (keep) => reconcileSecrets(secretsPath(DSH_HOME), keep),
-  },
+  readMcpServers: () => readMcpConfig(mcpConfigPath(DSH_HOME)),
+  writeMcpServers: (servers) => writeMcpConfig(mcpConfigPath(DSH_HOME), servers),
+  openMcpConfigFile: () => openConfigFile(mcpConfigPath(DSH_HOME), existsSync, (path) => shell.openPath(path)),
   restartHarness: () => restart(),
 })
 
@@ -719,11 +717,11 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
     // installed and resolved exactly like an entry but never appears in
     // that list. It is skipped entirely when no server is enabled — the
     // whole point of the master switch is that the harness pays nothing.
-    const mcpServers = activeServers(config.mcp)
+    const mcpServers = activeServers(configuredMcpServers(), config.mcpEnabled === true)
     const mcpEntries: PluginEntry[] =
       mcpServers.length === 0 || excludePackages.has(MCP_CLIENT_PACKAGE)
         ? []
-        : [{ spec: MCP_CLIENT_PACKAGE, ...(config.mcp?.clientVersion === undefined ? {} : { version: config.mcp.clientVersion }) }]
+        : [{ spec: MCP_CLIENT_PACKAGE, ...(config.mcpClientVersion === undefined ? {} : { version: config.mcpClientVersion }) }]
     const statuses = [...configured, ...mcpEntries].map((entry) =>
       pluginStatus(installDeps, DSH_HOME, entry, parseSpec(entry.spec).package === HOOKS_PACKAGE ? hooksPath : undefined),
     )
@@ -767,7 +765,9 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
       // and take precedence over anything that package may declare for
       // itself: a single declared row could only mount one server, and its
       // id would collide the moment a second was configured.
-      if (status.package === MCP_CLIENT_PACKAGE && mcpServers.length > 0) return serverRows(config.mcp)
+      if (status.package === MCP_CLIENT_PACKAGE && mcpServers.length > 0) {
+        return serverRows(configuredMcpServers(), config.mcpEnabled === true)
+      }
       const declaredPath = bundlePatchDeclaration(status.packageDir)
       return declaredPath !== undefined ? loadDeclaredPatchRows(status.packageDir, declaredPath) : undefined
     }
@@ -934,6 +934,9 @@ if (!app.requestSingleInstanceLock()) {
     // on its own turn, so a slow rc file delays nothing here, and its result
     // is only ever read by the NEXT launch.
     refreshShellPath()
+    // Before anything reads `mcp.json`: converts the superseded `mcp` section
+    // and token store, once, and is a no-op afterwards.
+    migrateMcpConfig(DSH_HOME)
     installMenu(showSettings)
     window = createWindow()
     window.on('close', (event) => {

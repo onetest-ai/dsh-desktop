@@ -27,7 +27,7 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
   return {
     kind: 'local', repo: REPO, package: PKG, version: 'latest',
     workspace: '', notifyPort: '43117', hotkey: 'CommandOrControl+Shift+D',
-    pnpmPath: '', npmPath: '', extraPath: '', plugins: [], mcp: { enabled: false, servers: [] }, ...overrides,
+    pnpmPath: '', npmPath: '', extraPath: '', plugins: [], mcpEnabled: false, ...overrides,
   }
 }
 
@@ -58,7 +58,9 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     disabledPlugins: vi.fn(() => ({})),
     clientLinkWarnings: vi.fn(() => ({})),
     openConfigFile: vi.fn(async () => ({ ok: true }) as const),
-    mcpSecrets: { has: () => false, set: vi.fn(), clear: vi.fn(), reconcile: vi.fn() },
+    readMcpServers: vi.fn(() => [] as never[]),
+    writeMcpServers: vi.fn(),
+    openMcpConfigFile: vi.fn(async () => ({ ok: true }) as const),
     restartHarness: vi.fn(async () => {}),
     ...overrides,
   }
@@ -70,7 +72,7 @@ describe('read', () => {
       configured: true,
       form: expect.objectContaining({ kind: 'local', repo: REPO, notifyPort: '43117' }),
       plugins: [],
-      mcp: { tokens: {}, presets: expect.any(Array) },
+      mcp: { presets: expect.any(Array) },
     })
   })
 
@@ -80,7 +82,7 @@ describe('read', () => {
       configured: false,
       form: expect.objectContaining({ repo: '', notifyPort: '43117' }),
       plugins: [],
-      mcp: { tokens: {}, presets: expect.any(Array) },
+      mcp: { presets: expect.any(Array) },
     })
   })
 
@@ -955,210 +957,136 @@ describe('openConfigFile', () => {
 })
 
 describe('MCP', () => {
-  const TAVILY = { id: 'tavily', preset: 'tavily', url: 'https://mcp.tavily.com/mcp/', enabled: true }
   const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
+  const TAVILY = { name: 'tavily', disabled: false, transport: 'http' as const, args: [], env: {}, url: 'https://mcp.tavily.com/mcp/', headers: {}, rest: {} }
+  const PLAYWRIGHT = { name: 'playwright', disabled: false, transport: 'stdio' as const, command: 'npx', args: ['-y', '@playwright/mcp@latest'], env: {}, headers: {}, rest: {} }
 
-  /** A form with the MCP tab configured. */
-  function mcpForm(enabled: boolean, servers = [TAVILY]): SettingsForm {
-    return form({ mcp: { enabled, servers } })
+  /** The servers `writeMcpServers` was last called with. */
+  function written(d: SettingsDeps): unknown[] {
+    return vi.mocked(d.writeMcpServers).mock.calls.at(-1)![0]
   }
 
-  /** The config `writeConfig` was last called with. */
-  function written(d: SettingsDeps): DesktopConfig {
-    return vi.mocked(d.writeConfig).mock.calls.at(-1)![0]
-  }
-
-  describe('save', () => {
-    it('writes no mcp section at all when the tab was never touched', async () => {
-      const d = deps()
-      await createSettingsHandlers(d).save(form())
-      expect(written(d).mcp).toBeUndefined()
+  describe('readMcpServers', () => {
+    it('returns what mcp.json holds', () => {
+      const d = deps({ readMcpServers: vi.fn(() => [TAVILY]) })
+      expect(createSettingsHandlers(d).readMcpServers()).toEqual([TAVILY])
     })
 
-    it('persists the configured servers', async () => {
+    it('sends the shipped presets, so the renderer needs no copy of them', () => {
+      expect(createSettingsHandlers(deps()).read().mcp.presets.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('saveMcpServers', () => {
+    it('writes the servers and restarts the harness so they take effect', async () => {
       const d = deps()
-      await createSettingsHandlers(d).save(mcpForm(true))
-      expect(written(d).mcp).toMatchObject({ enabled: true, servers: [TAVILY] })
+      expect(await createSettingsHandlers(d).saveMcpServers([TAVILY, PLAYWRIGHT])).toEqual({ ok: true })
+      expect(written(d)).toEqual([TAVILY, PLAYWRIGHT])
+      expect(d.restartHarness).toHaveBeenCalled()
     })
 
-    it('keeps the servers when the master switch is turned off', async () => {
+    it('rejects a stdio server with no command, without writing', async () => {
       const d = deps()
-      await createSettingsHandlers(d).save(mcpForm(false))
-      expect(written(d).mcp).toMatchObject({ enabled: false, servers: [TAVILY] })
+      const result = await createSettingsHandlers(d).saveMcpServers([{ ...PLAYWRIGHT, command: undefined }])
+      expect(result.ok).toBe(false)
+      expect(d.writeMcpServers).not.toHaveBeenCalled()
     })
 
-    it('installs the MCP client once when a server is enabled', async () => {
+    it('rejects a non-https url, which would leak a bearer token', async () => {
       const d = deps()
-      await createSettingsHandlers(d).save(mcpForm(true))
-      const installed = vi.mocked(d.installPlugin).mock.calls.filter(([pkg]) => pkg === MCP_CLIENT)
-      expect(installed).toHaveLength(1)
+      const result = await createSettingsHandlers(d).saveMcpServers([{ ...TAVILY, url: 'http://x.example/mcp' }])
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.message).toContain('https')
+    })
+
+    it('rejects two servers sharing a name, which would collide in the overlay', async () => {
+      const d = deps()
+      expect((await createSettingsHandlers(d).saveMcpServers([TAVILY, TAVILY])).ok).toBe(false)
+    })
+
+    it('writes nothing while the app is shutting down', async () => {
+      const d = deps({ isQuitting: () => true })
+      expect((await createSettingsHandlers(d).saveMcpServers([TAVILY])).ok).toBe(false)
+      expect(d.writeMcpServers).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('pasteMcpBlock', () => {
+    it('adds the servers a README block names', async () => {
+      const d = deps()
+      const result = await createSettingsHandlers(d).pasteMcpBlock(
+        JSON.stringify({ mcpServers: { playwright: { command: 'npx', args: ['-y', '@playwright/mcp@latest'] } } }),
+      )
+      expect(result.ok).toBe(true)
+      expect((written(d) as { name: string }[]).map((s) => s.name)).toEqual(['playwright'])
+    })
+
+    it('keeps the servers already configured', async () => {
+      const d = deps({ readMcpServers: vi.fn(() => [TAVILY]) })
+      await createSettingsHandlers(d).pasteMcpBlock(JSON.stringify({ mcpServers: { playwright: { command: 'npx' } } }))
+      expect((written(d) as { name: string }[]).map((s) => s.name)).toEqual(['tavily', 'playwright'])
+    })
+
+    it('refuses a name already in use rather than overwriting what the user configured', async () => {
+      const d = deps({ readMcpServers: vi.fn(() => [TAVILY]) })
+      const result = await createSettingsHandlers(d).pasteMcpBlock(
+        JSON.stringify({ mcpServers: { tavily: { url: 'https://other.example/mcp' } } }),
+      )
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.message).toContain('tavily')
+      expect(d.writeMcpServers).not.toHaveBeenCalled()
+    })
+
+    it('reports unparseable text instead of writing nothing silently', async () => {
+      const d = deps()
+      const result = await createSettingsHandlers(d).pasteMcpBlock('{ not json')
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.message).toMatch(/JSON/i)
+    })
+  })
+
+  describe('the MCP client install', () => {
+    it('installs the client once when a server is active', async () => {
+      const d = deps({ readMcpServers: vi.fn(() => [TAVILY]) })
+      await createSettingsHandlers(d).save(form({ mcpEnabled: true }))
+      expect(vi.mocked(d.installPlugin).mock.calls.filter(([pkg]) => pkg === MCP_CLIENT)).toHaveLength(1)
     })
 
     it('installs it once for two servers, not once per server', async () => {
-      const d = deps()
-      await createSettingsHandlers(d).save(mcpForm(true, [TAVILY, { ...TAVILY, id: 'github', preset: 'github' }]))
+      const d = deps({ readMcpServers: vi.fn(() => [TAVILY, PLAYWRIGHT]) })
+      await createSettingsHandlers(d).save(form({ mcpEnabled: true }))
       expect(vi.mocked(d.installPlugin).mock.calls.filter(([pkg]) => pkg === MCP_CLIENT)).toHaveLength(1)
     })
 
     it('does not install it when the master switch is off', async () => {
-      const d = deps()
-      await createSettingsHandlers(d).save(mcpForm(false))
+      const d = deps({ readMcpServers: vi.fn(() => [TAVILY]) })
+      await createSettingsHandlers(d).save(form({ mcpEnabled: false }))
       expect(vi.mocked(d.installPlugin).mock.calls.some(([pkg]) => pkg === MCP_CLIENT)).toBe(false)
     })
 
-    it('does not install it when every server is individually disabled', async () => {
-      const d = deps()
-      await createSettingsHandlers(d).save(mcpForm(true, [{ ...TAVILY, enabled: false }]))
+    it('does not install it when every server is disabled', async () => {
+      const d = deps({ readMcpServers: vi.fn(() => [{ ...TAVILY, disabled: true }]) })
+      await createSettingsHandlers(d).save(form({ mcpEnabled: true }))
       expect(vi.mocked(d.installPlugin).mock.calls.some(([pkg]) => pkg === MCP_CLIENT)).toBe(false)
     })
 
     it('stores the resolved client version', async () => {
-      const d = deps({ installPlugin: vi.fn(async () => '1.2.3') })
-      await createSettingsHandlers(d).save(mcpForm(true))
-      expect(written(d).mcp?.clientVersion).toBe('1.2.3')
+      const d = deps({ readMcpServers: vi.fn(() => [TAVILY]), installPlugin: vi.fn(async () => '1.2.3') })
+      await createSettingsHandlers(d).save(form({ mcpEnabled: true }))
+      expect(vi.mocked(d.writeConfig).mock.calls.at(-1)![0].mcpClientVersion).toBe('1.2.3')
     })
 
-    it('reinstalls at the version already resolved rather than re-resolving latest', async () => {
-      const stored: DesktopConfig = { ...STORED, mcp: { enabled: true, clientVersion: '1.2.3', servers: [TAVILY] } }
-      const d = deps({ readConfig: () => ({ configured: true, config: stored }) })
-      await createSettingsHandlers(d).save(mcpForm(true))
-      const call = vi.mocked(d.installPlugin).mock.calls.find(([pkg]) => pkg === MCP_CLIENT)
-      expect(call?.[1]).toBe('1.2.3')
-    })
-
-    it('never fails the whole save because the MCP client could not be installed', async () => {
+    it('never fails the whole save because the client could not be installed', async () => {
       const d = deps({
+        readMcpServers: vi.fn(() => [TAVILY]),
         installPlugin: vi.fn(async (pkg) => {
           if (pkg === MCP_CLIENT) throw new Error('registry unreachable')
           return '1.0.0'
         }),
       })
-      const result = await createSettingsHandlers(d).save(mcpForm(true))
+      const result = await createSettingsHandlers(d).save(form({ mcpEnabled: true }))
       expect(result.ok).toBe(true)
       if (result.ok) expect(result.warnings.join(' ')).toContain('registry unreachable')
-    })
-
-    it('forgets the token of a server that was removed', async () => {
-      const stored: DesktopConfig = { ...STORED, mcp: { enabled: true, servers: [TAVILY] } }
-      const d = deps({ readConfig: () => ({ configured: true, config: stored }) })
-      await createSettingsHandlers(d).save(mcpForm(true, []))
-      expect(d.mcpSecrets.reconcile).toHaveBeenCalledWith(new Set())
-    })
-
-    it('keeps the token of a server that survived the save', async () => {
-      const d = deps()
-      await createSettingsHandlers(d).save(mcpForm(true))
-      expect(d.mcpSecrets.reconcile).toHaveBeenCalledWith(new Set(['tavily']))
-    })
-
-    it('rejects two servers sharing an id, which would collide in the overlay', async () => {
-      const d = deps()
-      const result = await createSettingsHandlers(d).save(mcpForm(true, [TAVILY, TAVILY]))
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.errors.mcp).toContain('more than once')
-      expect(d.writeConfig).not.toHaveBeenCalled()
-    })
-
-    it('rejects a non-https server URL, which would leak the token', async () => {
-      const d = deps()
-      const result = await createSettingsHandlers(d).save(mcpForm(true, [{ ...TAVILY, url: 'http://x.example/mcp' }]))
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.errors.mcp).toContain('https')
-    })
-  })
-
-  describe('the MCP client never appears as a plugin', () => {
-    it('is hidden from the Plugins list even while still stored on disk', () => {
-      const stored: DesktopConfig = { ...STORED, plugins: [{ spec: MCP_CLIENT, version: '1.0.0' }] }
-      const d = deps({ readConfig: () => ({ configured: true, config: stored }) })
-      expect(createSettingsHandlers(d).read().plugins).toEqual([])
-    })
-
-    it('is dropped from disk by the next save', async () => {
-      const stored: DesktopConfig = { ...STORED, plugins: [{ spec: MCP_CLIENT, version: '1.0.0' }] }
-      const d = deps({ readConfig: () => ({ configured: true, config: stored }) })
-      await createSettingsHandlers(d).save(form({ plugins: rows(MCP_CLIENT) }))
-      expect(written(d).plugins).toEqual([])
-    })
-
-    it('is not installed as a plugin entry when no MCP server is enabled', async () => {
-      const d = deps()
-      await createSettingsHandlers(d).save(form({ plugins: rows(MCP_CLIENT) }))
-      expect(vi.mocked(d.installPlugin).mock.calls.some(([pkg]) => pkg === MCP_CLIENT)).toBe(false)
-    })
-  })
-
-  describe('read', () => {
-    it('reports which servers have a token, never the token itself', () => {
-      const stored: DesktopConfig = { ...STORED, mcp: { enabled: true, servers: [TAVILY] } }
-      const d = deps({
-        readConfig: () => ({ configured: true, config: stored }),
-        mcpSecrets: { has: (id) => id === 'tavily', set: vi.fn(), clear: vi.fn(), reconcile: vi.fn() },
-      })
-      expect(createSettingsHandlers(d).read().mcp).toMatchObject({ tokens: { tavily: true } })
-    })
-  })
-
-  describe('setMcpToken', () => {
-    it('stores the token and restarts the harness so it takes effect', async () => {
-      const d = deps()
-      expect(await createSettingsHandlers(d).setMcpToken('tavily', 'tvly-abc')).toEqual({ ok: true })
-      expect(d.mcpSecrets.set).toHaveBeenCalledWith('tavily', 'tvly-abc')
-      expect(d.restartHarness).toHaveBeenCalled()
-    })
-
-    it('trims the pasted token, which usually arrives with whitespace', async () => {
-      const d = deps()
-      await createSettingsHandlers(d).setMcpToken('tavily', '  tvly-abc\n')
-      expect(d.mcpSecrets.set).toHaveBeenCalledWith('tavily', 'tvly-abc')
-    })
-
-    it('refuses a blank token rather than storing an empty credential', async () => {
-      const d = deps()
-      const result = await createSettingsHandlers(d).setMcpToken('tavily', '   ')
-      expect(result.ok).toBe(false)
-      expect(d.mcpSecrets.set).not.toHaveBeenCalled()
-      expect(d.restartHarness).not.toHaveBeenCalled()
-    })
-
-    it('reports a failed write instead of pretending it saved', async () => {
-      const d = deps({
-        mcpSecrets: {
-          has: () => false,
-          set: vi.fn(() => {
-            throw new Error("EACCES: permission denied, open '/home/.dsh/desktop-secrets.json'")
-          }),
-          clear: vi.fn(),
-          reconcile: vi.fn(),
-        },
-      })
-      const result = await createSettingsHandlers(d).setMcpToken('tavily', 'tvly-abc')
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.message).toContain('EACCES')
-      // No restart: nothing changed, so respawning the harness would only
-      // interrupt the user for a write that never landed.
-      expect(d.restartHarness).not.toHaveBeenCalled()
-    })
-
-    it('stores nothing while the app is shutting down', async () => {
-      const d = deps({ isQuitting: () => true })
-      expect((await createSettingsHandlers(d).setMcpToken('tavily', 'tvly-abc')).ok).toBe(false)
-      expect(d.mcpSecrets.set).not.toHaveBeenCalled()
-    })
-  })
-
-  describe('clearMcpToken', () => {
-    it('forgets the token and restarts the harness without it', async () => {
-      const d = deps()
-      expect(await createSettingsHandlers(d).clearMcpToken('tavily')).toEqual({ ok: true })
-      expect(d.mcpSecrets.clear).toHaveBeenCalledWith('tavily')
-      expect(d.restartHarness).toHaveBeenCalled()
-    })
-
-    it('clears nothing while the app is shutting down', async () => {
-      const d = deps({ isQuitting: () => true })
-      expect((await createSettingsHandlers(d).clearMcpToken('tavily')).ok).toBe(false)
-      expect(d.mcpSecrets.clear).not.toHaveBeenCalled()
     })
   })
 })

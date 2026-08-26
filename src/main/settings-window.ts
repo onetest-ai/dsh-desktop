@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, type WebContents } from 'electron'
 import { join } from 'node:path'
 import type { SettingsHandlers } from './settings-ipc'
+import type { McpServerEntry } from './mcp-config'
 import type { SettingsForm } from './settings-validate'
 
 let settingsWindow: BrowserWindow | undefined
@@ -74,8 +75,10 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
       handlers.checkBinaries(pnpmPath, npmPath),
     )
     ipcMain.handle('settings:open-config-file', () => handlers.openConfigFile())
-    ipcMain.handle('settings:set-mcp-token', (_event, id: string, token: string) => handlers.setMcpToken(id, token))
-    ipcMain.handle('settings:clear-mcp-token', (_event, id: string) => handlers.clearMcpToken(id))
+    ipcMain.handle('settings:read-mcp-servers', () => handlers.readMcpServers())
+    ipcMain.handle('settings:save-mcp-servers', (_event, servers: McpServerEntry[]) => handlers.saveMcpServers(servers))
+    ipcMain.handle('settings:paste-mcp-block', (_event, text: string) => handlers.pasteMcpBlock(text))
+    ipcMain.handle('settings:open-mcp-config-file', () => handlers.openMcpConfigFile())
     channelsRegistered = true
   }
 

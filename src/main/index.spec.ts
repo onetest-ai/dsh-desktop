@@ -396,7 +396,17 @@ async function readyHandler(): Promise<void> {
   await settle()
 }
 
+// `index.ts` resolves DSH_HOME at module load, and its whenReady handler
+// writes there — a migration, a shell-path cache. Without a home of its own
+// every test in this file operates on the developer's real ~/.dsh, which is
+// exactly what happened: a test run migrated a live config and left a cache
+// file behind. Set for EVERY test, not per-suite, so a case added later
+// cannot reintroduce it by forgetting.
+let realDshHome: string | undefined
+
 beforeEach(() => {
+  realDshHome = process.env.DSH_HOME
+  process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-index-home-'))
   vi.resetModules()
   children.length = 0
   fake.handlers.clear()
@@ -435,6 +445,11 @@ beforeEach(() => {
   fake.globalShortcut.register.mockReturnValue(true)
   fake.window.isDestroyed.mockReturnValue(false)
   installStartServer()
+})
+
+afterEach(() => {
+  if (realDshHome === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = realDshHome
 })
 
 describe('boot', () => {
@@ -1254,13 +1269,9 @@ describe('applySettings', () => {
 
 describe('MCP servers at boot', () => {
   const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
-  const TAVILY = { id: 'tavily', preset: 'tavily', url: 'https://mcp.tavily.com/mcp/', enabled: true }
 
-  // Every case here reads the secret store, which lives under `$DSH_HOME`.
-  // Without a home of its own the suite would read the developer's real
-  // `~/.dsh` and see whatever tokens they have actually saved — which is how
-  // the empty-token case first failed, decrypting a real credential with the
-  // fake key.
+  // Every case reads mcp.json and the secret values under $DSH_HOME. Without
+  // a home of its own the suite would read the developer's real ~/.dsh.
   let mcpHome: string
   let originalDshHome: string | undefined
 
@@ -1275,9 +1286,14 @@ describe('MCP servers at boot', () => {
     else process.env.DSH_HOME = originalDshHome
   })
 
-  /** A stored config with the MCP section set. */
-  function withMcp(mcp: DesktopConfig['mcp']): void {
-    configResult = { configured: true, config: { ...STORED, mcp } }
+  /** Write an mcp.json into this case's home. */
+  function withServers(servers: Record<string, unknown>): void {
+    writeFileSync(join(mcpHome, 'mcp.json'), JSON.stringify({ mcpServers: servers }))
+  }
+
+  /** Store settings with the master switch in a given state. */
+  function withSwitch(mcpEnabled: boolean, mcpClientVersion = '1.2.3'): void {
+    configResult = { configured: true, config: { ...STORED, mcpEnabled, mcpClientVersion } }
   }
 
   /** The `resolveDeclaredPatch` callback `bootNow` handed `writeRuntimeFiles`. */
@@ -1286,55 +1302,49 @@ describe('MCP servers at boot', () => {
   }
 
   it('resolves the MCP client alongside the configured plugins when a server is enabled', async () => {
-    withMcp({ enabled: true, clientVersion: '1.2.3', servers: [TAVILY] })
+    withServers({ tavily: { type: 'http', url: 'https://mcp.tavily.com/mcp/' } })
+    withSwitch(true)
     await bootReady()
     expect(pluginStatusMock).toHaveBeenCalledWith(expect.anything(), expect.any(String), { spec: MCP_CLIENT, version: '1.2.3' }, undefined)
   })
 
   it('does not resolve it at all when the master switch is off', async () => {
-    withMcp({ enabled: false, clientVersion: '1.2.3', servers: [TAVILY] })
+    withServers({ tavily: { type: 'http', url: 'https://mcp.tavily.com/mcp/' } })
+    withSwitch(false)
     await bootReady()
     expect(pluginStatusMock.mock.calls.some((call) => (call[2] as { spec: string }).spec === MCP_CLIENT)).toBe(false)
   })
 
-  it('does not resolve it when every server is switched off', async () => {
-    withMcp({ enabled: true, clientVersion: '1.2.3', servers: [{ ...TAVILY, enabled: false }] })
+  it('does not resolve it when every server is disabled', async () => {
+    withServers({ tavily: { type: 'http', url: 'https://mcp.tavily.com/mcp/', disabled: true } })
+    withSwitch(true)
     await bootReady()
     expect(pluginStatusMock.mock.calls.some((call) => (call[2] as { spec: string }).spec === MCP_CLIENT)).toBe(false)
   })
 
   it('gives the MCP client one overlay row per enabled server, each under its own id', async () => {
-    withMcp({
-      enabled: true,
-      clientVersion: '1.2.3',
-      servers: [TAVILY, { id: 'github', preset: 'github', url: 'https://api.githubcopilot.com/mcp/', enabled: true }],
+    withServers({
+      tavily: { type: 'http', url: 'https://mcp.tavily.com/mcp/' },
+      playwright: { command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
     })
+    withSwitch(true)
     await bootReady()
     const rows = declaredPatchResolver()({ package: MCP_CLIENT, packageDir: '/tmp/mcp' }) as { id: string; name: string }[]
-    expect(rows.map((row) => row.id)).toEqual(['mcp-tavily', 'mcp-github'])
+    expect(rows.map((row) => row.id)).toEqual(['mcp-tavily', 'mcp-playwright'])
     expect(new Set(rows.map((row) => row.name))).toEqual(new Set([MCP_CLIENT]))
   })
 
-  it('carries each enabled server token to the harness child by environment, never in the overlay', async () => {
-    writeFileSync(
-      join(mcpHome, 'desktop-secrets.json'),
-      JSON.stringify({ version: 1, tokens: { tavily: 'tvly-abc' } }),
-    )
-    withMcp({ enabled: true, clientVersion: '1.2.3', servers: [TAVILY] })
+  it('carries a stdio server env value to the harness child by environment, never in the overlay', async () => {
+    withServers({ gh: { command: 'npx', args: ['-y', 'server-github'], env: { GITHUB_TOKEN: 'ghp-secret' } } })
+    withSwitch(true)
     await bootReady()
     const env = dshWebCommandMock.mock.calls.at(-1)![3] as Record<string, string>
-    expect(env).toEqual({ DSH_MCP_TOKEN_TAVILY: 'tvly-abc' })
+    expect(Object.values(env)).toContain('ghp-secret')
   })
 
-  it('passes an empty value for a server with no stored token, rather than the text "undefined"', async () => {
-    withMcp({ enabled: true, clientVersion: '1.2.3', servers: [TAVILY] })
-    await bootReady()
-    const env = dshWebCommandMock.mock.calls.at(-1)![3] as Record<string, string>
-    expect(env.DSH_MCP_TOKEN_TAVILY).toBe('')
-  })
-
-  it('adds no MCP environment at all when nothing is enabled', async () => {
-    withMcp({ enabled: false, servers: [TAVILY] })
+  it('adds no MCP environment at all when the switch is off', async () => {
+    withServers({ gh: { command: 'npx', env: { GITHUB_TOKEN: 'ghp-secret' } } })
+    withSwitch(false)
     await bootReady()
     expect(dshWebCommandMock.mock.calls.at(-1)![3]).toEqual({})
   })
