@@ -119,6 +119,7 @@ export function dshWebCommand(
   patchFile: string,
   dshHome: string,
   extraEnv: Record<string, string> = {},
+  shellPath?: string,
 ): SpawnSpec {
   const spec = spawnFor(config.harness, { pnpm: () => resolveBinary(config.pnpmPath, 'pnpm', process.env) }, patchFile, dshHome)
   const launcherDir =
@@ -126,11 +127,47 @@ export function dshWebCommand(
   // Only the process about to be spawned gets the extended PATH; the app's
   // own process.env is never touched.
   const withPath = envWithLauncherDir(launcherDir, process.env)
-  if (Object.keys(extraEnv).length === 0) return withPath === undefined ? spec : { ...spec, env: withPath }
-  // `withPath` is undefined for a bare command name, where `startServer`
-  // would fall back to `process.env`; the fallback has to be materialized
-  // here instead, or the extra variables would have nothing to merge onto.
-  return { ...spec, env: { ...(withPath ?? process.env), ...extraEnv } }
+  const base = withPath ?? process.env
+  // Nothing to prepend and nothing to add means nothing to build: return the
+  // spec untouched rather than a rebuilt one. `composePath` drops duplicate
+  // entries, and an ambient PATH that already contains some would otherwise
+  // come back changed, turning a no-op call into a materialized environment.
+  const prepend = [config.extraPath, shellPath].filter((entry): entry is string => entry !== undefined && entry !== '')
+  if (Object.keys(extraEnv).length === 0 && prepend.length === 0) {
+    return withPath === undefined ? spec : { ...spec, env: withPath }
+  }
+  return { ...spec, env: { ...base, ...extraEnv, PATH: composePath(base.PATH ?? '', config.extraPath, shellPath) } }
+}
+
+/**
+ * Build the child's `PATH`: the manual override first, then the resolved
+ * login-shell PATH, then whatever this process inherited.
+ *
+ * The override leads because it exists for the case where resolution got it
+ * wrong. `envWithLauncherDir` has already prepended the launcher's own
+ * directory to `inherited`, and that entry stays ahead of the inherited
+ * system directories, which is what keeps a pinned `pnpmPath`/`npmPath`
+ * authoritative for the launcher itself.
+ *
+ * Duplicates are dropped, keeping each entry's first occurrence, so a
+ * resolved PATH that already contains the inherited directories does not
+ * produce a `PATH` several kilobytes long.
+ * @param inherited - the PATH the child would otherwise get.
+ * @param extraPath - the user's manual override, if set.
+ * @param shellPath - the resolved login-shell PATH, if established.
+ * @returns the composed PATH.
+ */
+function composePath(inherited: string, extraPath: string | undefined, shellPath: string | undefined): string {
+  const seen = new Set<string>()
+  const entries: string[] = []
+  for (const source of [extraPath, shellPath, inherited]) {
+    for (const entry of (source ?? '').split(':')) {
+      if (entry === '' || seen.has(entry)) continue
+      seen.add(entry)
+      entries.push(entry)
+    }
+  }
+  return entries.join(':')
 }
 
 /**

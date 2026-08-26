@@ -318,3 +318,43 @@ describe('stop', () => {
     expect(exits.length).toBe(1)
   })
 })
+
+describe('dshWebCommand PATH composition', () => {
+  const CONFIG = { harness: { kind: 'local' as const, repo: '/tmp/h' }, notifyPort: 1, hotkey: 'X' }
+
+  /** The PATH entries the child would be spawned with. */
+  function pathEntries(spec: { env?: NodeJS.ProcessEnv }): string[] {
+    return (spec.env?.PATH ?? '').split(':')
+  }
+
+  it('puts the resolved shell PATH ahead of the inherited one', () => {
+    const spec = dshWebCommand(CONFIG, '/tmp/p.yml', '/tmp/home', {}, '/opt/homebrew/bin')
+    expect(pathEntries(spec)).toContain('/opt/homebrew/bin')
+  })
+
+  it('puts an explicit extraPath ahead of the resolved one, since it is the override', () => {
+    const spec = dshWebCommand(
+      { ...CONFIG, extraPath: '/my/override' },
+      '/tmp/p.yml',
+      '/tmp/home',
+      {},
+      '/opt/homebrew/bin',
+    )
+    const entries = pathEntries(spec)
+    expect(entries.indexOf('/my/override')).toBeLessThan(entries.indexOf('/opt/homebrew/bin'))
+  })
+
+  it('changes nothing when neither is set, so today’s behaviour is preserved', () => {
+    // Asserted against the untouched shape rather than against another call
+    // down the same path: comparing two composed results hides a composition
+    // that alters the PATH for everyone equally, which is exactly the bug
+    // this test failed to catch the first time it was written.
+    const spec = dshWebCommand(CONFIG, '/tmp/p.yml', '/tmp/home', {}, undefined)
+    expect(spec.env).toBeUndefined()
+  })
+
+  it('does not duplicate an entry the inherited PATH already had', () => {
+    const spec = dshWebCommand(CONFIG, '/tmp/p.yml', '/tmp/home', {}, '/usr/bin')
+    expect(pathEntries(spec).filter((entry) => entry === '/usr/bin')).toHaveLength(1)
+  })
+})

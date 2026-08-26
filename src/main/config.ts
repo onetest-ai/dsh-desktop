@@ -13,6 +13,16 @@ export interface DesktopConfig {
   pnpmPath?: string
   npmPath?: string
   /**
+   * Extra `PATH` entries for the harness child, prepended ahead of the
+   * resolved login-shell PATH.
+   *
+   * An override for a machine where shell resolution fails — a shell this app
+   * cannot run, or an rc file that establishes tools some other way. It is
+   * not the mechanism: the resolved PATH is, and it self-heals across version
+   * manager upgrades where a hardcoded entry does not.
+   */
+  extraPath?: string
+  /**
    * Packages the desktop shell installs and inserts into the harness,
    * managed exactly like `harness`'s own managed source — pinned, cached,
    * update-checked. Optional so a `desktop.json` predating this field stays
@@ -146,12 +156,17 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     }
   }
 
+  if (record.extraPath !== undefined && typeof record.extraPath !== 'string') {
+    throw new ConfigurationError(`dsh-desktop: ${filePath} "extraPath" must be a string`)
+  }
+
   return {
     harness,
     notifyPort: record.notifyPort ?? DEFAULT_NOTIFY_PORT,
     hotkey: record.hotkey ?? DEFAULT_HOTKEY,
     ...(record.pnpmPath === undefined ? {} : { pnpmPath: record.pnpmPath }),
     ...(record.npmPath === undefined ? {} : { npmPath: record.npmPath }),
+    ...(record.extraPath === undefined ? {} : { extraPath: record.extraPath }),
     ...(record.plugins === undefined ? {} : { plugins: record.plugins }),
     ...(record.mcp === undefined ? {} : { mcp: record.mcp }),
   }

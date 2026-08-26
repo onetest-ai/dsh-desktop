@@ -230,3 +230,22 @@ describe('loadConfig', () => {
     })
   })
 })
+
+describe('extraPath', () => {
+  it('is read back from the config', () => {
+    const file = writeConfigFile(JSON.stringify({ harness: { kind: 'local', repo: '/tmp' }, extraPath: '/my/bin' }))
+    const result = loadConfig(file)
+    expect(result.configured && result.config.extraPath).toBe('/my/bin')
+  })
+
+  it('is optional, so a config predating it stays valid', () => {
+    const file = writeConfigFile(JSON.stringify({ harness: { kind: 'local', repo: '/tmp' } }))
+    const result = loadConfig(file)
+    expect(result.configured && result.config.extraPath).toBeUndefined()
+  })
+
+  it('is rejected when it is not a string, since it reaches a spawned PATH', () => {
+    const file = writeConfigFile(JSON.stringify({ harness: { kind: 'local', repo: '/tmp' }, extraPath: 42 }))
+    expect(() => loadConfig(file)).toThrow(/extraPath/)
+  })
+})
