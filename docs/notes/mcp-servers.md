@@ -96,6 +96,24 @@ Remote servers skip it: nothing to download, no local process to prove.
 
 The unit suite could not see this: its fake DOM kept `value` across a `textContent = ''`, so the bug was invisible there and only the packaged app exposed it. The fake now models the real behaviour — an element's tag comes from the markup, and clearing a `select` clears its value — so this class of bug is catchable at the unit layer from here on.
 
+## Two scopes: global here, per-project there
+
+The official client mounts **one connection per profile row, shared by every session**. Its `cwd` therefore has a single value, so a server that writes files — Playwright's screenshots and `.playwright-mcp` logs — puts them in whichever directory the app launched from, for every session at once. No setting fixes that; a single connection cannot have several working directories.
+
+`dsh-project-mcp-bridge` is shipped by default to close it. It reads `<session cwd>/.dsh/mcp.json` on `agent/created` and connects **per agent, never pooled** — N sessions calling one server run N processes, each with `cwd` defaulting to that session's own directory. Sessions that never call a server hold no process at all; connections lazily open on first call and are released after an idle timeout.
+
+So:
+
+| | global (`~/.dsh/mcp.json`, this tab) | per-project (`<project>/.dsh/mcp.json`) |
+|---|---|---|
+| processes | one, shared by every session | one per agent that calls it |
+| `cwd` | wherever the app launched | that session's directory |
+| good for | Tavily, GitHub — anything stateless and remote | Playwright, filesystem — anything that touches the project |
+
+A global server **wins** a name collision unless the project entry sets `"override": true`. That is worth saying out loud in the UI, because the failure is silent: the project entry simply never mounts.
+
+It is **pinned** (`dsh-project-mcp-bridge@0.2.1`). The package is weeks old, publishes no public repository, and spawns processes from project-supplied configuration, so an update is a review rather than a bump. It is MIT and a single 679-line file — if it stalls or blocks us, vendoring it in is an afternoon, and forking something proven beats writing a parallel implementation against pre-1.0 harness internals.
+
 ## Known limitation: the cold-start ceiling
 
 `npx -y <package>` downloads on first run. The MCP client awaits `listTools()` during plugin activation on the SDK's 60-second default, which the harness does not expose as configuration. A cold fetch that exceeds it activates the server with **zero tools and no obvious error**. Pre-installing the package, or pinning an absolute command path, avoids it.

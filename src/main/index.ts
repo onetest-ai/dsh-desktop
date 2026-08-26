@@ -11,6 +11,7 @@ import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { mcpConfigPath, readMcpConfig, writeMcpConfig, type McpServerEntry } from './mcp-config'
 import { migrateMcpConfig } from './mcp-migrate'
 import { createMcpProber } from './mcp-probe'
+import { ensureDefaultPlugins } from './plugin-defaults'
 import { loadPresets, shippedPresetsPath, userPresetsPath } from './mcp-presets'
 import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-servers'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
@@ -948,6 +949,9 @@ if (!app.requestSingleInstanceLock()) {
     // Before anything reads `mcp.json`: converts the superseded `mcp` section
     // and token store, once, and is a no-op afterwards.
     migrateMcpConfig(DSH_HOME)
+    // Offers each shipped default once, recorded by generation so a default
+    // the user removes stays removed.
+    ensureDefaultPlugins(DSH_HOME)
     installMenu(showSettings)
     window = createWindow()
     window.on('close', (event) => {

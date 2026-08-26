@@ -91,6 +91,7 @@
     <section class="group group-flat">
       <label class="mcp-master"><input type="checkbox" id="mcp-enabled"> Connect to MCP servers</label>
       <p class="hint">Each enabled server's tools become available to the agent under its own name. With this off, no server is contacted and nothing is added to the agent's context.</p>
+      <p class="hint">Servers here are <strong>global</strong>: one process shared by every session, so a server that writes files uses one directory for all of them. For a server that should follow the project — Playwright, filesystem — put it in <code>&lt;project&gt;/.dsh/mcp.json</code> instead, where each session gets its own process in its own directory. A global server of the same name wins unless that entry sets <code>"override": true</code>.</p>
     </section>
 
     <p class="group-label" id="mcp-add-label">Add a server</p>

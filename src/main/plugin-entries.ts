@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { managedDir } from './harness-source'
+import { DEFAULT_PLUGIN_SPECS } from './plugin-defaults'
 import { isInstalled, type InstallDeps } from './runtime-install'
 
 /** The Claude Code hook bridge package, pre-seeded as the first plugin entry. */
@@ -34,7 +35,7 @@ export interface PluginEntry {
 
 /** The plugin list a fresh, never-configured install starts from. */
 export function defaultPlugins(): PluginEntry[] {
-  return [{ spec: HOOKS_PACKAGE }]
+  return [{ spec: HOOKS_PACKAGE }, ...DEFAULT_PLUGIN_SPECS.map((spec) => ({ spec }))]
 }
 
 /** A spec's package name and, when present, the pinned version it named. */

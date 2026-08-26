@@ -313,7 +313,7 @@ describe('validateSettings — port and hotkey', () => {
 })
 
 describe('formFor', () => {
-  it('fills defaults for a first run, pre-seeding the hook bridge as the only plugin', () => {
+  it('fills defaults for a first run, pre-seeding the shipped plugins', () => {
     const filled = formFor({ configured: false })
     expect(filled.kind).toBe('local')
     expect(filled.repo).toBe('')
@@ -321,7 +321,7 @@ describe('formFor', () => {
     expect(filled.hotkey).toBe('CommandOrControl+Shift+D')
     expect(filled.package).toBe('@deepseek-ai/dsh')
     expect(filled.version).toBe('latest')
-    expect(filled.plugins).toEqual([{ spec: HOOKS_PACKAGE, config: '' }])
+    expect(filled.plugins[0]).toEqual({ spec: HOOKS_PACKAGE, config: '' })
   })
 
   it('round-trips a stored local config, including per-entry config', () => {

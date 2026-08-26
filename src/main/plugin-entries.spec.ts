@@ -1,3 +1,4 @@
+import { PROJECT_MCP_BRIDGE } from './plugin-defaults'
 import { describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -43,7 +44,16 @@ function installPackage(pkg: string, manifestExtra: Record<string, unknown>): st
 
 describe('defaultPlugins', () => {
   it('pre-seeds the notification hook bridge as the first entry', () => {
-    expect(defaultPlugins()).toEqual([{ spec: HOOKS_PACKAGE }])
+    expect(defaultPlugins()[0]).toEqual({ spec: HOOKS_PACKAGE })
+  })
+
+  it('also pre-seeds the per-project MCP bridge, pinned', () => {
+    // Pinned rather than floating: it is shipped by default, publishes no
+    // public repository, and spawns processes from project configuration, so
+    // an update must be a deliberate act.
+    const specs = defaultPlugins().map((entry) => entry.spec)
+    expect(specs).toContain(PROJECT_MCP_BRIDGE)
+    expect(PROJECT_MCP_BRIDGE).toMatch(/@\d+\.\d+\.\d+$/)
   })
 })
 

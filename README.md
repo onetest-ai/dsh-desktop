@@ -148,6 +148,8 @@ Servers save as soon as you change them; the switch saves with the rest of the f
 
 **Tokens are stored in the clear**, inline in `mcp.json` at mode `0600`, the same approach as `.mcp.json`, `~/.aws/credentials`, and the `gh` CLI. The OS keychain was tried and dropped: it re-prompts for your login password on every re-signed build and every copy of the app. Any process running as your user can read that file, and it is captured by backups. The generated harness overlay never contains a credential — it refers to each by environment variable — because that file is world-readable.
 
+**Servers configured here are global** — one process shared by every session, so a server that writes files uses a single directory for all of them. For a server that should follow the project, put it in `<project>/.dsh/mcp.json` instead: the bundled `dsh-project-mcp-bridge` plugin gives every session of that project its own process, running in that project's directory. This is what keeps Playwright's screenshots and logs in the project they belong to. A global server of the same name wins unless the project entry sets `"override": true`.
+
 Presets come from `assets/mcp-presets.json`, and `~/.dsh/mcp-presets.json` merges over it by id, so a wrong endpoint or a team's internal servers can be fixed without waiting for an app release.
 
 Details are in [`docs/notes/mcp-servers.md`](docs/notes/mcp-servers.md).
@@ -155,7 +157,7 @@ Details are in [`docs/notes/mcp-servers.md`](docs/notes/mcp-servers.md).
 ## Development
 
 ```bash
-npm test           # 647 unit tests
+npm test           # 675 unit tests
 npm run test:smoke # Playwright, against a packaged build (run `npm run pack` first)
 npm run build      # compile only
 ```
