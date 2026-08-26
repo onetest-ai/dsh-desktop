@@ -17,6 +17,11 @@ export interface SettingsForm {
   pnpmPath: string
   npmPath: string
   /**
+   * Extra `PATH` entries for the harness child, colon-separated. Blank means
+   * none, and writes no `extraPath` at all.
+   */
+  extraPath: string
+  /**
    * One row per configured plugin, built by the renderer from its row-based
    * Add control — not raw HTML field values, unlike every other member of
    * this interface. `spec` is typed the way the user would on a command
@@ -274,6 +279,7 @@ export function validateSettings(form: SettingsForm): ValidationResult {
 
   const pnpmPath = form.pnpmPath.trim()
   const npmPath = form.npmPath.trim()
+  const extraPath = form.extraPath.trim()
   const mcp = mcpFrom(form)
   return {
     ok: true,
@@ -298,6 +304,7 @@ export function validateSettings(form: SettingsForm): ValidationResult {
       ...(mcp.enabled || mcp.servers.length > 0 ? { mcp } : {}),
       ...(pnpmPath === '' ? {} : { pnpmPath }),
       ...(npmPath === '' ? {} : { npmPath }),
+      ...(extraPath === '' ? {} : { extraPath }),
     },
   }
 }
@@ -336,6 +343,7 @@ export function formFor(result: ConfigResult): SettingsForm {
     hotkey: DEFAULT_HOTKEY,
     pnpmPath: '',
     npmPath: '',
+    extraPath: '',
     // A never-configured install pre-seeds the notification hook bridge as
     // the first plugin, so the first save installs it rather than special-
     // casing it outside this generic list.
@@ -346,7 +354,7 @@ export function formFor(result: ConfigResult): SettingsForm {
   }
   if (!result.configured) return base
 
-  const { harness, notifyPort, hotkey, pnpmPath, npmPath, plugins, mcp } = result.config
+  const { harness, notifyPort, hotkey, pnpmPath, npmPath, extraPath, plugins, mcp } = result.config
   return {
     ...base,
     kind: harness.kind,
@@ -357,6 +365,7 @@ export function formFor(result: ConfigResult): SettingsForm {
     hotkey,
     pnpmPath: pnpmPath ?? '',
     npmPath: npmPath ?? '',
+    extraPath: extraPath ?? '',
     plugins: (plugins ?? []).map((entry) => ({
       spec: entry.spec,
       config: entry.config === undefined ? '' : JSON.stringify(entry.config, undefined, 2),

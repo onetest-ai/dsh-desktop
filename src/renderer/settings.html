@@ -140,6 +140,16 @@
       <input id="npmPath" type="text" placeholder="found on PATH by default">
       <p class="check-result" id="check-result-npm" role="status"></p>
       <button type="button" id="check-binaries" class="check-binaries">Check</button>
+
+      <div class="field-label-row">
+        <label for="extraPath">Extra PATH entries</label>
+        <details class="field-info">
+          <summary aria-label="About extra PATH entries"><span aria-hidden="true">i</span></summary>
+          <p>Colon-separated directories added ahead of the PATH the agent's tools are found on. Normally unnecessary — the app reads your login shell's PATH automatically. Set this only when that fails.</p>
+        </details>
+      </div>
+      <input id="extraPath" type="text" placeholder="/opt/homebrew/bin:/usr/local/bin" spellcheck="false">
+      <p class="error" id="error-extraPath"></p>
     </section>
 
     <p class="group-label" id="config-file-label">Config file</p>

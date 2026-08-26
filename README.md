@@ -65,7 +65,10 @@ Reopen Settings any time from **File → Settings…** (⌘,), the application m
 | Harness source, `pnpm`/`npm` path | The harness child is restarted |
 | Notification port | The harness is restarted and the listener rebinds |
 | Show/hide shortcut | Re-registered in place |
+| Extra PATH entries | The harness child is restarted with the new PATH |
 | MCP servers | The harness child is restarted with the new server set |
+
+The app reads your login shell's `PATH` on launch and caches it, so tools installed through nvm, Homebrew, or similar are reachable even though a Finder-launched app inherits almost no `PATH`. **Extra PATH entries** on the Advanced tab is an override for when that fails; it is not normally needed. See [`docs/notes/shell-path.md`](docs/notes/shell-path.md).
 
 The notification port restart is deliberate: the port is written into the harness hook config when the child boots, so a change only reaches it through a respawn.
 

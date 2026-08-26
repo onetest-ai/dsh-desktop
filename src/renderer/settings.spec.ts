@@ -97,7 +97,7 @@ function declaredKindRadios(): Array<{ value: string; checked: boolean }> {
 }
 
 /** The field ids `settings.js` collects; asserted against the page below. */
-const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath']
+const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'extraPath']
 
 interface FakeElement {
   id: string
@@ -1765,5 +1765,16 @@ describe('MCP tab', () => {
     )
     await renderer.clearMcpToken('tavily')
     expect(renderer.clearMcpTokenCalls).toEqual(['tavily'])
+  })
+})
+
+describe('Advanced tab extra PATH', () => {
+  it('submits the field with the form', async () => {
+    const save = vi.fn(async () => ({ ok: true, warnings: [] }))
+    const renderer = await load(save)
+    const field = renderer.elements.get('extraPath')
+    if (field !== undefined) field.value = '/my/bin'
+    await renderer.save()
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ extraPath: '/my/bin' }))
   })
 })

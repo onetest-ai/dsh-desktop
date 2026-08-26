@@ -29,6 +29,7 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
     hotkey: 'CommandOrControl+Shift+D',
     pnpmPath: '',
     npmPath: '',
+    extraPath: '',
     plugins: pluginRows(HOOKS_PACKAGE),
     mcp: { enabled: false, servers: [] },
     ...overrides,
@@ -381,5 +382,17 @@ describe('the MCP client is not a plugin the user manages', () => {
     const result = validateSettings(form({ plugins: pluginRows(`${MCP_CLIENT}@1.0.0\n${HOOKS_PACKAGE}`) }))
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.config.plugins?.map((entry) => entry.spec)).toEqual([HOOKS_PACKAGE])
+  })
+})
+
+describe('extraPath field', () => {
+  it('is carried from the form into the config', () => {
+    const result = validateSettings(form({ extraPath: '/my/bin' }))
+    expect(result.ok && result.config.extraPath).toBe('/my/bin')
+  })
+
+  it('is omitted when blank, so an untouched field writes nothing', () => {
+    const result = validateSettings(form({ extraPath: '   ' }))
+    expect(result.ok && 'extraPath' in result.config).toBe(false)
   })
 })

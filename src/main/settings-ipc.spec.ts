@@ -27,7 +27,7 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
   return {
     kind: 'local', repo: REPO, package: PKG, version: 'latest',
     workspace: '', notifyPort: '43117', hotkey: 'CommandOrControl+Shift+D',
-    pnpmPath: '', npmPath: '', plugins: [], mcp: { enabled: false, servers: [] }, ...overrides,
+    pnpmPath: '', npmPath: '', extraPath: '', plugins: [], mcp: { enabled: false, servers: [] }, ...overrides,
   }
 }
 

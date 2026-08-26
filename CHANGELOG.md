@@ -6,6 +6,11 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 Nothing here has shipped in a downloadable build yet. The `v0.1.0` DMG still stores MCP tokens in the OS keychain, so anyone using it meets the login-password prompt described below until a release carries these changes.
 
+### Added
+
+- **The login shell's `PATH` is resolved and cached**, so tools installed through nvm, Homebrew, or similar are reachable to the agent even though a Finder-launched app inherits only `/usr/bin:/bin:/usr/sbin:/sbin`. Resolution uses an interactive login shell, because version managers initialize in `.zshrc` rather than `.zprofile`; it costs about 2.6 seconds, so the result is cached and refreshed in the background rather than resolved on every launch. `pnpmPath` and `npmPath` still work and are still honoured, but are usually no longer necessary — and unlike them, a resolved PATH self-heals when a version manager upgrade moves the toolchain.
+- **Extra PATH entries** on the Advanced tab, an override for a machine where shell resolution fails.
+
 ### Changed
 
 - **MCP tokens are stored in cleartext instead of the OS keychain**, in `~/.dsh/desktop-secrets.json` at mode `0600` — the approach `.mcp.json`, `~/.aws/credentials`, `~/.npmrc`, and the `gh` CLI take. A Keychain item's ACL trusts specific signed binaries, so every re-signed build, every bundle-id change, and every separate copy of the app raised its own login-password prompt; ordinary users met that dialog several times before the app worked. The tradeoff is explicit: other accounts on the machine cannot read the file, but any process running as this user can, and it is captured by backups.
