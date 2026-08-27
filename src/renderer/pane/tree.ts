@@ -82,6 +82,21 @@ export class Tree {
   }
 
   /**
+   * Read one directory again, because something in it changed.
+   *
+   * Only that directory: a change the tree made itself is local, and
+   * re-reading the whole expansion would cost a call per open folder to
+   * redraw rows that did not move.
+   * @param relative - the directory's path within the root, '' for the root.
+   * @returns resolution once it has been read.
+   */
+  async refresh(relative: string): Promise<void> {
+    // A directory nobody has opened has nothing cached to correct.
+    if (relative !== '' && !this.listings.has(relative)) return
+    await this.load(relative)
+  }
+
+  /**
    * Open a file in the Editor tab.
    * @param relative - the file's path within the root.
    */

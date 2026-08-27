@@ -81,3 +81,39 @@ describe('Tree', () => {
     expect(d.openFile).not.toHaveBeenCalled()
   })
 })
+
+describe('Tree.refresh', () => {
+  it('reads one directory again', async () => {
+    const layout = { '': [{ name: 'a.ts', directory: false }] }
+    const d = deps(layout)
+    const tree = new Tree(d)
+    await tree.show(PROJECT)
+    layout[''] = [
+      { name: 'a.ts', directory: false },
+      { name: 'b.ts', directory: false },
+    ]
+    await tree.refresh('')
+    expect(tree.entries('')?.map((entry) => entry.name)).toEqual(['a.ts', 'b.ts'])
+  })
+
+  // reason: a change the tree made is local, and re-reading every open folder
+  // would cost a call each to redraw rows that did not move.
+  it('reads only the directory named', async () => {
+    const d = deps(LAYOUT)
+    const tree = new Tree(d)
+    await tree.show(PROJECT)
+    await tree.toggle('src')
+    d.listDirectory.mockClear()
+    await tree.refresh('')
+    expect(d.listDirectory.mock.calls.map(([, relative]) => relative)).toEqual([''])
+  })
+
+  it('reads nothing for a directory nobody has opened', async () => {
+    const d = deps(LAYOUT)
+    const tree = new Tree(d)
+    await tree.show(PROJECT)
+    d.listDirectory.mockClear()
+    await tree.refresh('src')
+    expect(d.listDirectory).not.toHaveBeenCalled()
+  })
+})

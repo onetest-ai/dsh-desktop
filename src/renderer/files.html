@@ -11,7 +11,15 @@
   <div class="column-head">
     <span class="glyph" id="project-glyph"></span>
     <span class="project-name" id="project-name">No project open</span>
+    <span class="head-spacer"></span>
+    <button type="button" id="new-file" class="head-action" aria-label="New file" title="New file" disabled></button>
+    <button type="button" id="new-folder" class="head-action" aria-label="New folder" title="New folder" disabled></button>
   </div>
+  <!-- Named where it will be created, the way an editor's tree does it. -->
+  <form id="new-entry" class="new-entry" hidden>
+    <input id="new-entry-name" type="text" spellcheck="false" autocomplete="off" aria-label="Name">
+  </form>
+  <p class="error" id="new-entry-error" role="status" hidden></p>
   <section class="panel">
     <p class="empty" id="files-empty">No project open.</p>
     <ul id="file-tree" class="tree"></ul>

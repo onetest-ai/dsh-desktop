@@ -14,6 +14,8 @@ declare global {
       onProject(listener: (project: Project | undefined) => void): void
       listDirectory(root: string, relative: string): Promise<TreeEntry[]>
       openFile(root: string, relative: string): void
+      createFile(root: string, relative: string): Promise<{ ok: true; relative: string } | { ok: false; reason: string }>
+      createFolder(root: string, relative: string): Promise<{ ok: true; relative: string } | { ok: false; reason: string }>
       closeEditor(): void
       openExternal(url: string): void
       readFile(root: string, relative: string): Promise<{ ok: true; text: string } | { ok: false; reason: string }>

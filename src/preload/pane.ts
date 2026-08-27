@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('pane', {
   },
   listDirectory: (root: string, relative: string) => ipcRenderer.invoke('pane:list-directory', root, relative),
   openFile: (root: string, relative: string) => ipcRenderer.send('pane:open-file', root, relative),
+  createFile: (root: string, relative: string) => ipcRenderer.invoke('pane:create-file', root, relative),
+  createFolder: (root: string, relative: string) => ipcRenderer.invoke('pane:create-folder', root, relative),
   closeEditor: () => ipcRenderer.send('pane:close-editor'),
   openExternal: (url: string) => ipcRenderer.send('pane:open-external', url),
   readFile: (root: string, relative: string) => ipcRenderer.invoke('pane:read-file', root, relative),

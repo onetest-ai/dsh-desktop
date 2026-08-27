@@ -50,6 +50,7 @@ import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
 import { loadableUrl } from './view-tools'
 import { readTextFile, writeTextFile } from './file-io'
+import { createFile, createFolder } from './file-create'
 import { harnessTheme, settingsPath } from './harness-theme'
 import { workspacesPath } from './workspaces'
 import type { ServerStatus } from './status'
@@ -1650,6 +1651,12 @@ if (!app.requestSingleInstanceLock()) {
     )
     ipcMain.handle('pane:list-directory', (_event, root: string, relative: string) =>
       knownProject(root) ? readDirectory(root, relative) : [],
+    )
+    ipcMain.handle('pane:create-file', (_event, root: string, relative: string) =>
+      knownProject(root) ? createFile(root, relative) : OUTSIDE_PROJECT,
+    )
+    ipcMain.handle('pane:create-folder', (_event, root: string, relative: string) =>
+      knownProject(root) ? createFolder(root, relative) : OUTSIDE_PROJECT,
     )
     ipcMain.handle('pane:read-file', (_event, root: string, relative: string) =>
       knownProject(root) ? readTextFile(root, relative) : OUTSIDE_PROJECT,

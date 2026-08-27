@@ -8,6 +8,9 @@ import { followHarnessTheme } from './theme.ts'
 // tokens, so nothing here needs the answer.
 followHarnessTheme(() => {})
 
+el('new-file').append(icon('newFile', 14))
+el('new-folder').append(icon('newFolder', 14))
+
 /**
  * One element by id.
  * @param id - the element's id.
@@ -96,6 +99,7 @@ async function showProject(project: Project | undefined): Promise<void> {
   const glyph = el('project-glyph')
   glyph.textContent = ''
   if (project === undefined) {
+    for (const id of ['new-file', 'new-folder']) (el(id) as HTMLButtonElement).disabled = true
     name.textContent = 'No project open'
     el('file-tree').textContent = ''
     el('files-empty').hidden = false
@@ -104,9 +108,102 @@ async function showProject(project: Project | undefined): Promise<void> {
   if (tree.root?.path === project.path) return
   name.textContent = project.title
   glyph.append(icon('folderOpen', 14))
+  for (const id of ['new-file', 'new-folder']) (el(id) as HTMLButtonElement).disabled = false
   await tree.show(project)
   drawTree('', el('file-tree'))
 }
+
+/** What the name field, when open, is going to create. */
+let creating: 'file' | 'folder' | undefined
+/** The path within the project the new entry goes in; '' is the root. */
+let creatingIn = ''
+
+/**
+ * Open the name field for a new file or folder.
+ *
+ * Named before it is created, in the tree, the way an editor does it — rather
+ * than creating `untitled` and making the user rename it.
+ * @param kind - what to create.
+ */
+function startCreating(kind: 'file' | 'folder'): void {
+  if (tree.root === undefined) return
+  creating = kind
+  creatingIn = selectedParent()
+  const field = el('new-entry-name') as HTMLInputElement
+  field.value = ''
+  field.placeholder = kind === 'file' ? 'file name' : 'folder name'
+  el('new-entry').hidden = false
+  el('new-entry-error').hidden = true
+  field.focus()
+}
+
+/** Put the name field away, whether or not anything was created. */
+function stopCreating(): void {
+  creating = undefined
+  el('new-entry').hidden = true
+  el('new-entry-error').hidden = true
+}
+
+/**
+ * Where a new entry goes, given what the tree last opened.
+ *
+ * Beside the last file opened, or inside the last directory expanded — the
+ * closest this tree has to a selection.
+ * @returns the parent's path within the project, '' for the root.
+ */
+function selectedParent(): string {
+  const open = [...tree.open]
+  return open.length === 0 ? '' : open[open.length - 1]
+}
+
+/**
+ * Create what the name field describes, and show it.
+ * @returns resolution once the tree has been redrawn.
+ */
+async function finishCreating(): Promise<void> {
+  const project = tree.root
+  const name = (el('new-entry-name') as HTMLInputElement).value.trim()
+  if (project === undefined || creating === undefined || name === '') {
+    stopCreating()
+    return
+  }
+  const relative = creatingIn === '' ? name : `${creatingIn}/${name}`
+  const outcome = creating === 'file'
+    ? await window.pane.createFile(project.path, relative)
+    : await window.pane.createFolder(project.path, relative)
+  if (!outcome.ok) {
+    const error = el('new-entry-error')
+    error.textContent = outcome.reason
+    error.hidden = false
+    return
+  }
+  const wasFile = creating === 'file'
+  stopCreating()
+  await tree.refresh(creatingIn)
+  drawTree('', el('file-tree'))
+  // A new file opens, the way it does when you make one in an editor; a new
+  // folder just appears, since there is nothing in it to show.
+  if (wasFile) tree.openFile(relative)
+}
+
+el('new-file').addEventListener('click', () => {
+  startCreating('file')
+})
+el('new-folder').addEventListener('click', () => {
+  startCreating('folder')
+})
+el('new-entry').addEventListener('submit', (event) => {
+  event.preventDefault()
+  void finishCreating()
+})
+el('new-entry-name').addEventListener('keydown', (event) => {
+  if ((event as KeyboardEvent).key === 'Escape') stopCreating()
+})
+el('new-entry-name').addEventListener('blur', () => {
+  // Clicking away is how someone changes their mind; a field left behind over
+  // the tree is worse than losing a name they had not committed to.
+  if (el('new-entry-error').hidden) stopCreating()
+})
 
 // Main decides which project this is — the harness owns that, and a picker
 // here would be a second way to choose one.
