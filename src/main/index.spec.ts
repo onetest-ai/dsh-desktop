@@ -62,6 +62,8 @@ const fake = vi.hoisted(() => {
       windowHandlers.set(name, [...(windowHandlers.get(name) ?? []), handler])
       return window
     }),
+    // The window's own page is told the theme and where its dividers go.
+    webContents: { send: vi.fn() },
   }
 
   // The window's two views. Only what index.ts touches: it loads the harness
@@ -76,7 +78,11 @@ const fake = vi.hoisted(() => {
     },
   }
   const pane = { getBounds: vi.fn(() => ({ x: 0, y: 0, width: 520, height: 860 })), webContents: { send: vi.fn() } }
-  const files = { getBounds: vi.fn(() => ({ x: 0, y: 0, width: 220, height: 860 })) }
+  const files = {
+    getBounds: vi.fn(() => ({ x: 0, y: 0, width: 220, height: 860 })),
+    // `index.ts` tells the tree which project to show.
+    webContents: { send: vi.fn() },
+  }
   // The browser: `index.ts` drives its navigation and listens for where it
   // ends up.
   const web = {
@@ -139,6 +145,10 @@ const fake = vi.hoisted(() => {
   // `index.ts` registers the window's own channels here: the divider's
   // send-only ones and the pane's reads. `settings-window.ts` owns its own
   // and is mocked.
+  // Only what `index.ts` reads and subscribes to: whether the machine is dark,
+  // and a change to that.
+  const nativeTheme = { shouldUseDarkColors: false, on: vi.fn() }
+
   const ipcHandlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
   const ipcMain = {
     on: vi.fn((channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => {
@@ -164,6 +174,7 @@ const fake = vi.hoisted(() => {
     harness,
     web,
     ipcMain,
+    nativeTheme,
     /**
      * Invoke one of the divider's channels, as the window page would.
      * @param channel - the channel name.
@@ -190,6 +201,7 @@ vi.mock('electron', () => ({
   shell: fake.shell,
   dialog: { showOpenDialog: vi.fn() },
   ipcMain: fake.ipcMain,
+  nativeTheme: fake.nativeTheme,
   Notification: class {
     show(): void {}
   },
@@ -324,6 +336,12 @@ vi.mock('./startup-window', () => ({
   pushPhase: (...args: unknown[]) => pushPhaseMock(...(args as [])),
   pushProgress: vi.fn(),
   closeStartup: vi.fn(),
+}))
+
+const harnessThemeMock = vi.fn((): string => 'system')
+vi.mock('./harness-theme', () => ({
+  harnessTheme: (...args: unknown[]) => harnessThemeMock(...(args as [])),
+  settingsPath: (home: string) => `${home}/settings.yaml`,
 }))
 
 const readWorkspacesMock = vi.fn((): unknown[] => [])
@@ -1844,6 +1862,32 @@ describe('the side columns', () => {
   // reason: the editor column exists because a file is in it, and nothing is
   // open at launch. A stored `true` would put an empty editor on screen,
   // offering to be closed.
+  // reason: a renderer's `prefers-color-scheme` answers for the document, and
+  // a page that has not declared `color-scheme` is told light however the
+  // machine is set — which is how these columns came up white beside a dark
+  // harness. Main resolves it instead.
+  it('resolves system against the machine, not the page', async () => {
+    fake.nativeTheme.shouldUseDarkColors = true
+    await bootReady()
+    fake.views.files.webContents.send.mockClear()
+    fake.sendIpc('theme:ask')
+    expect(fake.views.files.webContents.send).toHaveBeenCalledWith('theme', true)
+  })
+
+  it('follows the harness over the machine when it names a theme', async () => {
+    fake.nativeTheme.shouldUseDarkColors = true
+    harnessThemeMock.mockReturnValue('light')
+    await bootReady()
+    fake.views.files.webContents.send.mockClear()
+    fake.sendIpc('theme:ask')
+    expect(fake.views.files.webContents.send).toHaveBeenCalledWith('theme', false)
+  })
+
+  it('re-reads the theme when the machine own setting changes', async () => {
+    await bootReady()
+    expect(fake.nativeTheme.on).toHaveBeenCalledWith('updated', expect.any(Function))
+  })
+
   it('opens at the widths the last session stored, with the editor closed', async () => {
     configResult = {
       configured: true,

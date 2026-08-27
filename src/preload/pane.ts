@@ -10,11 +10,16 @@ import { contextBridge, ipcRenderer } from 'electron'
  */
 contextBridge.exposeInMainWorld('pane', {
   askTheme: () => ipcRenderer.send('theme:ask'),
-  onTheme: (listener: (preference: string) => void) => {
-    ipcRenderer.on('theme', (_event, preference: string) => listener(preference))
+  onTheme: (listener: (dark: boolean) => void) => {
+    ipcRenderer.on('theme', (_event, dark: boolean) => listener(dark))
   },
   showWebView: (visible: boolean) => ipcRenderer.send('pane:show-web-view', visible),
-  projects: () => ipcRenderer.invoke('pane:projects'),
+  askProject: () => ipcRenderer.send('pane:ask-project'),
+  onProject: (listener: (project: { path: string; title: string } | undefined) => void) => {
+    ipcRenderer.on('pane:project', (_event, project: { path: string; title: string } | undefined) =>
+      listener(project),
+    )
+  },
   listDirectory: (root: string, relative: string) => ipcRenderer.invoke('pane:list-directory', root, relative),
   openFile: (root: string, relative: string) => ipcRenderer.send('pane:open-file', root, relative),
   closeEditor: () => ipcRenderer.send('pane:close-editor'),

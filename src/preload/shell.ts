@@ -10,8 +10,8 @@ import { contextBridge, ipcRenderer } from 'electron'
  */
 contextBridge.exposeInMainWorld('shell', {
   askTheme: () => ipcRenderer.send('theme:ask'),
-  onTheme: (listener: (preference: string) => void) => {
-    ipcRenderer.on('theme', (_event, preference: string) => listener(preference))
+  onTheme: (listener: (dark: boolean) => void) => {
+    ipcRenderer.on('theme', (_event, dark: boolean) => listener(dark))
   },
   resizeColumn: (column: string, windowX: number) => ipcRenderer.send('shell:resize-column', column, windowX),
   nudgeColumn: (column: string, delta: number) => ipcRenderer.send('shell:nudge-column', column, delta),

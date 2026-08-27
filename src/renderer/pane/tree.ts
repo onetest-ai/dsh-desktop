@@ -14,7 +14,6 @@ export interface Project {
 
 /** What the tree needs from main and from the rest of the pane. */
 export interface TreeDeps {
-  projects(): Promise<Project[]>
   listDirectory(root: string, relative: string): Promise<TreeEntry[]>
   /** Open one of the tree's files in another tab. */
   openFile(root: string, relative: string): void

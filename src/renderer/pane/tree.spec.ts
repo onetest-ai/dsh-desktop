@@ -6,7 +6,6 @@ const PROJECT = { path: '/p/demo', title: 'demo' }
 /** Deps over a fixed directory layout. */
 function deps(layout: Record<string, TreeEntry[]> = {}): TreeDeps & { listDirectory: ReturnType<typeof vi.fn> } {
   return {
-    projects: vi.fn(async () => [PROJECT]),
     listDirectory: vi.fn(async (_root: string, relative: string) => layout[relative] ?? []),
     openFile: vi.fn(),
     select: vi.fn(),

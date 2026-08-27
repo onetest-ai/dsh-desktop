@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, nativeTheme, Notification, shell } from 'electron'
 import { existsSync, mkdirSync, renameSync, rmSync, watch, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 import { loadDeclaredPatchRows } from './bundle-patch'
@@ -49,6 +49,7 @@ import { serveViewTools, VIEW_SERVER_NAME, type ViewServer } from './view-mcp'
 import { loadableUrl } from './view-tools'
 import { readTextFile, writeTextFile } from './file-io'
 import { harnessTheme, settingsPath } from './harness-theme'
+import { workspacesPath } from './workspaces'
 import type { ServerStatus } from './status'
 
 /** The config lives under `$DSH_HOME` (see `configPath`), beside the harness's own state. */
@@ -162,6 +163,8 @@ let webViewVisible = false
 
 /** Watches the harness's settings document for a theme change; closed on quit. */
 let themeWatcher: FSWatcher | undefined
+/** Watches its workspace list for the project the tree should show; closed on quit. */
+let workspaceWatcher: FSWatcher | undefined
 
 /** This app's own MCP server, serving the view tools; undefined when switched off. */
 let viewServer: ViewServer | undefined
@@ -261,6 +264,58 @@ async function readPaneSelection(): Promise<string> {
 }
 
 /**
+ * The project whose root the file tree is showing.
+ *
+ * Set from the harness's own workspace list and from whatever file is opened
+ * in the editor, never from a control in the tree: which project is open is
+ * the harness's to decide, and a second way to choose one here is how the two
+ * come to disagree.
+ */
+let currentProject: { path: string; title: string } | undefined
+
+/**
+ * Tell the file tree which project to show.
+ *
+ * Prefers a project already chosen by something the user did — opening a file
+ * — over the workspace list, which only moves when a session attaches and so
+ * lags behind what someone is looking at.
+ * @param project - the project to show, or undefined to recompute from the
+ *   harness's own list.
+ */
+function showProject(project?: { path: string; title: string }): void {
+  const next = project ?? currentProject ?? readWorkspaces(DSH_HOME)[0]
+  if (next === undefined) return
+  currentProject = { path: next.path, title: next.title }
+  if (views === undefined || views.window.isDestroyed()) return
+  views.files.webContents.send('pane:project', currentProject)
+}
+
+/**
+ * Follow the harness's workspace list for as long as the app runs.
+ *
+ * The list changes when a session attaches to a workspace, which is the
+ * closest thing the harness records to "the project being worked in" — it
+ * publishes no current-workspace of its own.
+ */
+function watchWorkspaces(): void {
+  try {
+    workspaceWatcher = watch(workspacesPath(DSH_HOME), { persistent: false }, () => {
+      const newest = readWorkspaces(DSH_HOME)[0]
+      // Only when it actually moved: this file is rewritten for reasons that
+      // have nothing to do with which project is open.
+      if (newest !== undefined && newest.path !== currentProject?.path) {
+        currentProject = undefined
+        showProject({ path: newest.path, title: newest.title })
+      }
+    })
+  } catch (error) {
+    // No workspace storage yet: the tree shows whatever it was last told,
+    // which is the harness's own default until a session lands.
+    console.warn(`dsh-desktop: the harness's workspaces could not be followed: ${(error as Error).message}`)
+  }
+}
+
+/**
  * Look for a newer harness once, in the background.
  *
  * At startup rather than when the Settings window opens: an update the user
@@ -300,8 +355,13 @@ function checkForUpdate(config: DesktopConfig): void {
 function pushTheme(): void {
   if (views === undefined || views.window.isDestroyed()) return
   const preference = harnessTheme(DSH_HOME)
+  // Resolved here rather than in each page: a renderer's
+  // `prefers-color-scheme` answers for the document, not the machine, and a
+  // page that has not declared `color-scheme` is told light however the OS is
+  // set. `nativeTheme` is the machine's own answer.
+  const dark = preference === 'dark' || (preference === 'system' && nativeTheme.shouldUseDarkColors)
   for (const target of [views.window.webContents, views.pane.webContents, views.files.webContents]) {
-    target.send('theme', preference)
+    target.send('theme', dark)
   }
 }
 
@@ -355,6 +415,10 @@ function openInPane(root: string, relative: string): void {
     storeColumns()
   }
   views.pane.webContents.send('pane:open', root, relative)
+  // Opening a file says more about what is being worked on than the workspace
+  // list does, so the tree follows it there.
+  const workspace = readWorkspaces(DSH_HOME).find((each) => each.path === root)
+  if (workspace !== undefined) showProject({ path: workspace.path, title: workspace.title })
 }
 
 /** The frameless startup splash, open only until the main window appears. */
@@ -1331,6 +1395,8 @@ async function shutdown(): Promise<void> {
   splash = undefined
   themeWatcher?.close()
   themeWatcher = undefined
+  workspaceWatcher?.close()
+  workspaceWatcher = undefined
   // The install child is reaped first and unconditionally: it is in neither
   // the lifecycle chain nor `child`, so nothing below would ever find it, and
   // an unreaped `npm` keeps writing into $DSH_HOME after Electron is gone.
@@ -1557,7 +1623,16 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.on('theme:ask', () => {
       pushTheme()
     })
+    // Asked for as the tree's page loads, for the same reason as the theme:
+    // main cannot know when a page is ready to be told.
+    ipcMain.on('pane:ask-project', () => {
+      showProject()
+    })
     watchTheme()
+    // The OS setting moves independently of the harness's, and `system` means
+    // following it.
+    nativeTheme.on('updated', pushTheme)
+    watchWorkspaces()
     // The splash covers the wait before the main window has anything to
     // paint; the moment a real page lands there — the harness URL, or the
     // error pane when boot fails — the splash has said everything it can.

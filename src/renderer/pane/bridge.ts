@@ -10,7 +10,8 @@ declare global {
   interface Window {
     pane: {
       showWebView(visible: boolean): void
-      projects(): Promise<Project[]>
+      askProject(): void
+      onProject(listener: (project: Project | undefined) => void): void
       listDirectory(root: string, relative: string): Promise<TreeEntry[]>
       openFile(root: string, relative: string): void
       closeEditor(): void
@@ -27,7 +28,7 @@ declare global {
       webReload(): void
       onWebState(listener: (state: { url: string; canGoBack: boolean; canGoForward: boolean }) => void): void
       askTheme(): void
-      onTheme(listener: (preference: string) => void): void
+      onTheme(listener: (dark: boolean) => void): void
     }
   }
 }

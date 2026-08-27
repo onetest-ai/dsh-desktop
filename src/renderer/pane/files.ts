@@ -78,45 +78,43 @@ function drawTree(relative: string, into: HTMLElement): void {
   el('files-empty').hidden = tree.root !== undefined
 }
 
-/** Fill the project picker and show whichever project is chosen. */
-async function loadProjects(): Promise<void> {
-  const picker = el('project') as HTMLSelectElement
-  const projects = await window.pane.projects()
-  picker.textContent = ''
-  for (const project of projects) {
-    const option = document.createElement('option')
-    option.value = project.path
-    option.textContent = project.title
-    picker.append(option)
-  }
-  picker.disabled = projects.length === 0
-  if (projects.length === 0) return
-  // Most recently used first, as main orders them: the closest thing the
-  // harness records to "the project I am working in".
-  await tree.show(projects[0])
-  drawTree('', el('file-tree'))
-}
-
+/** The tree's state; main decides which project it holds. */
 const tree = new Tree({
-  projects: () => window.pane.projects(),
   listDirectory: (root, relative) => window.pane.listDirectory(root, relative),
   openFile: (root, relative) => {
     window.pane.openFile(root, relative)
   },
-  // The editor is a column of its own now, and main is what puts a file in
-  // it — this page only says which file.
+  // The editor is a column of its own, and main is what puts a file in it —
+  // this page only says which file.
   select: () => {},
 })
 
-el('project').addEventListener('change', (event) => {
-  const path = (event.target as HTMLSelectElement).value
-  void window.pane.projects().then(async (projects) => {
-    const chosen = projects.find((project) => project.path === path)
-    if (chosen === undefined) return
-    await tree.show(chosen)
-    drawTree('', el('file-tree'))
-  })
+/**
+ * Show one project's tree.
+ * @param project - the project to show, or undefined when there is none.
+ * @returns resolution once its root listing is drawn.
+ */
+async function showProject(project: Project | undefined): Promise<void> {
+  const name = el('project-name')
+  const glyph = el('project-glyph')
+  glyph.textContent = ''
+  if (project === undefined) {
+    name.textContent = 'No project open'
+    el('file-tree').textContent = ''
+    el('files-empty').hidden = false
+    return
+  }
+  if (tree.root?.path === project.path) return
+  name.textContent = project.title
+  glyph.append(icon('folderOpen', 14))
+  await tree.show(project)
+  drawTree('', el('file-tree'))
+}
+
+// Main decides which project this is — the harness owns that, and a picker
+// here would be a second way to choose one.
+window.pane.onProject((project) => {
+  void showProject(project)
 })
 
-void loadProjects()
-
+window.pane.askProject()

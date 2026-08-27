@@ -2,21 +2,13 @@
 // between the views. It reports drags to main, which owns the layout — the
 // page has no way to know where the views are.
 
-// The harness keys its tokens off this attribute, and owns the preference
-// behind it; main reads that setting and pushes it here. See vendor/dsh-theme.
-const system = matchMedia('(prefers-color-scheme: dark)')
-let preference = 'system'
-const applyTheme = () => {
-  const dark = preference === 'dark' || (preference === 'system' && system.matches)
+// The harness keys its tokens off this attribute, and main decides whether it
+// applies — a page's own prefers-color-scheme answers for the document, not
+// the machine. See vendor/dsh-theme.
+window.shell.onTheme((dark) => {
   if (dark) document.body.setAttribute('data-ds-dark-theme', '')
   else document.body.removeAttribute('data-ds-dark-theme')
-}
-window.shell.onTheme((next) => {
-  preference = next === 'light' || next === 'dark' ? next : 'system'
-  applyTheme()
 })
-system.addEventListener('change', applyTheme)
-applyTheme()
 window.shell.askTheme()
 let dragging
 

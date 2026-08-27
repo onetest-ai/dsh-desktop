@@ -5,9 +5,12 @@
 <link rel="stylesheet" href="theme/base.css">
 <link rel="stylesheet" href="theme/design-platform.css">
 <link rel="stylesheet" href="pane.css">
+<body class="files">
 <main class="pane">
+  <!-- Not a picker: the tree follows whatever the harness is working in. -->
   <div class="column-head">
-    <select id="project" aria-label="Project"></select>
+    <span class="glyph" id="project-glyph"></span>
+    <span class="project-name" id="project-name">No project open</span>
   </div>
   <section class="panel">
     <p class="empty" id="files-empty">No project open.</p>

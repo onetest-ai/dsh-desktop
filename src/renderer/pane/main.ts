@@ -7,10 +7,15 @@ import './bridge.ts'
 import { followHarnessTheme } from './theme.ts'
 
 /**
- * Whether dark is in effect, applied to this page as it loads and kept in
- * step with the harness's own Appearance setting afterwards.
+ * Whether dark is in effect. Main decides and pushes it; until that arrives
+ * the editor mounts light, and `setEditorTheme` moves every open document the
+ * moment it does.
  */
-const dark = followHarnessTheme(setEditorTheme)
+let dark = false
+followHarnessTheme((next) => {
+  dark = next
+  setEditorTheme(next)
+})
 
 /**
  * One element by id.

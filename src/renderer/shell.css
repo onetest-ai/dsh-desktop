@@ -6,6 +6,9 @@
  */
 html,
 body {
+  /* Declared so native widgets, scrollbars, and form controls follow the
+     theme; the theme itself is decided in main and applied by attribute. */
+  color-scheme: light dark;
   margin: 0;
   height: 100%;
   overflow: hidden;
@@ -61,7 +64,9 @@ body {
      maximised window is not the only shape this takes. */
   padding-top: 34px;
   border-left: 1px solid var(--dsw-alias-border-l2);
-  background: var(--dsw-alias-bg-layer-2);
+  /* The harness's own sidebar fill: the rail is the same kind of surface on
+     the other edge, and anything else reads as a different application. */
+  background: var(--dsw-specific-sidebar-fill);
   box-sizing: border-box;
 }
 

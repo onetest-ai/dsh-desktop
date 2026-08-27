@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Editor</title>
+<!-- The harness's own tokens, vendored; see vendor/dsh-theme/README.md. -->
+<link rel="stylesheet" href="theme/base.css">
+<link rel="stylesheet" href="theme/design-platform.css">
+<link rel="stylesheet" href="pane.css">
+<!-- The editor's own styles, emitted beside its bundle. Loaded after the
+     pane's so the editor keeps its layout inside the panel it fills. -->
+<link rel="stylesheet" href="pane-bundle.css">
+<main class="pane">
+  <nav class="tabs" role="tablist" aria-label="Editor column">
+    <button type="button" role="tab" id="tab-editor" aria-controls="panel-editor" aria-selected="true" class="tab">Editor</button>
+    <button type="button" role="tab" id="tab-web" aria-controls="panel-web" aria-selected="false" tabindex="-1" class="tab">Web</button>
+    <span class="tab-spacer"></span>
+    <button type="button" id="close-editor" class="tab-close" aria-label="Close the editor" title="Close">✕</button>
+  </nav>
+  <section id="panel-editor" role="tabpanel" aria-labelledby="tab-editor" class="panel">
+    <!-- One entry per open file. Empty, and hidden, until something is. -->
+    <div class="file-tabs" id="file-tabs" role="tablist" aria-label="Open files" hidden></div>
+    <p class="empty" id="editor-empty">Nothing open. Pick a file from the tree, or let the agent open one.</p>
+    <div id="editor-host" class="editor" hidden></div>
+    <!-- Rendered markdown, shown instead of the editor for the tabs that
+         have a preview. -->
+    <article id="preview" class="preview" hidden></article>
+    <p class="status" id="editor-status" role="status">
+      <span id="status-text"></span>
+      <button type="button" id="toggle-preview" class="status-toggle" hidden>Preview</button>
+    </p>
+  </section>
+  <!-- Only the chrome: the page itself is a view of its own, stacked over
+       this panel by main, below this bar. -->
+  <section id="panel-web" role="tabpanel" aria-labelledby="tab-web" class="panel panel-web">
+    <div class="address">
+      <button type="button" id="web-back" class="chrome" aria-label="Back" title="Back">‹</button>
+      <button type="button" id="web-forward" class="chrome" aria-label="Forward" title="Forward">›</button>
+      <button type="button" id="web-reload" class="chrome" aria-label="Reload" title="Reload">⟳</button>
+      <input id="web-url" type="text" spellcheck="false" autocomplete="off" aria-label="Address" placeholder="example.com">
+    </div>
+  </section>
+</main>
+<script src="pane-bundle.js"></script>
