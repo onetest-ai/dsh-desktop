@@ -22,16 +22,16 @@ function specs(dir: string): string[] {
 }
 
 describe('ensureDefaultPlugins', () => {
-  it('adds the per-project MCP bridge to an install that predates it', () => {
+  it('adds nothing while the default set is empty, so no default arrives uninstallable', () => {
+    // A declared-but-absent plugin renders in the Plugins tab as a failure
+    // the user did not cause. Defaults return when startup can install them.
     const dir = home({ plugins: [{ spec: '@deepseek-ai/dsh-hooks-claude-code', version: '0.1.1' }] })
-    expect(ensureDefaultPlugins(dir)).toBe(true)
-    expect(specs(dir)).toContain(PROJECT_MCP_BRIDGE)
+    ensureDefaultPlugins(dir)
+    expect(specs(dir)).toEqual(['@deepseek-ai/dsh-hooks-claude-code'])
   })
 
-  it('pins the version, so an unaudited package cannot change under the user', () => {
-    const dir = home({ plugins: [] })
-    ensureDefaultPlugins(dir)
-    expect(specs(dir)[0]).toMatch(/@\d+\.\d+\.\d+$/)
+  it('pins whatever it ships, so an unaudited package cannot change under the user', () => {
+    expect(PROJECT_MCP_BRIDGE).toMatch(/@\d+\.\d+\.\d+$/)
   })
 
   it('keeps the plugins already configured', () => {
@@ -48,7 +48,7 @@ describe('ensureDefaultPlugins', () => {
 
   it('is a no-op the second time', () => {
     const dir = home({ plugins: [] })
-    expect(ensureDefaultPlugins(dir)).toBe(true)
+    ensureDefaultPlugins(dir)
     expect(ensureDefaultPlugins(dir)).toBe(false)
   })
 
@@ -56,12 +56,6 @@ describe('ensureDefaultPlugins', () => {
     const dir = home({ plugins: [], pluginDefaultsGeneration: DEFAULTS_GENERATION })
     expect(ensureDefaultPlugins(dir)).toBe(false)
     expect(specs(dir)).toEqual([])
-  })
-
-  it('does not add a default the user already has, under any version', () => {
-    const dir = home({ plugins: [{ spec: 'dsh-project-mcp-bridge@0.1.0', version: '0.1.0' }] })
-    ensureDefaultPlugins(dir)
-    expect(specs(dir)).toEqual(['dsh-project-mcp-bridge@0.1.0'])
   })
 
   it('does nothing on a first run, where there is no config to migrate', () => {
