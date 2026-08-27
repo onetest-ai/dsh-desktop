@@ -148,3 +148,36 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The editor panel is the one that does not scroll itself: Monaco owns its
+   own scrolling, and a panel scrollbar around it would be a second one. */
+#panel-editor {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.editor {
+  flex: 1;
+  min-height: 0;
+}
+
+.status {
+  flex: none;
+  margin: 0;
+  padding: 4px 10px;
+  border-top: 1px solid var(--pane-line);
+  color: var(--pane-dim);
+  font-size: 11px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Monaco ships its own font-face for control characters; without a size the
+   host collapses before `automaticLayout` measures it. */
+.monaco-editor {
+  position: absolute;
+}

@@ -175,6 +175,8 @@ vi.mock('./window', () => ({
   createWindow: (...args: unknown[]) => createWindow(...(args as [])),
   showError: (...args: unknown[]) => showError(...(args as [])),
   applyLayout: (...args: unknown[]) => applyLayout(...(args as [])),
+  registerPaneScheme: vi.fn(),
+  servePane: vi.fn(),
   DEFAULT_PANE_WIDTH: 420,
   installMenu: (...args: unknown[]) => installMenuMock(...(args as [])),
 }))

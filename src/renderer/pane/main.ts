@@ -1,4 +1,6 @@
 import { PANE_TABS, selectTab, type PaneTab, type TabView } from './tabs.ts'
+import { Editor } from './editor.ts'
+import { mountMonaco } from './monaco-surface.ts'
 import { Tree, type Project, type TreeEntry } from './tree.ts'
 
 /** What the preload exposes on this page. */
@@ -9,6 +11,10 @@ declare global {
       projects(): Promise<Project[]>
       listDirectory(root: string, relative: string): Promise<TreeEntry[]>
       openFile(root: string, relative: string): void
+      readFile(root: string, relative: string): Promise<{ ok: true; text: string } | { ok: false; reason: string }>
+      writeFile(root: string, relative: string, text: string): Promise<{ ok: true } | { ok: false; reason: string }>
+      onOpenFile(listener: (root: string, relative: string) => void): void
+      onFileChanged(listener: (root: string, relative: string) => void): void
     }
   }
 }
@@ -156,3 +162,37 @@ el('project').addEventListener('change', (event) => {
 })
 
 void loadProjects()
+
+// --- the editor ---------------------------------------------------------
+
+const editor = new Editor({
+  readFile: (root, relative) => window.pane.readFile(root, relative),
+  writeFile: (root, relative, text) => window.pane.writeFile(root, relative, text),
+  say: (message) => {
+    el('editor-status').textContent = message
+  },
+  mount: (text, name) => {
+    el('editor-empty').hidden = true
+    el('editor-host').hidden = false
+    return mountMonaco(el('editor-host'), text, name, matchMedia('(prefers-color-scheme: dark)').matches)
+  },
+})
+
+// Cmd/Ctrl+S saves, wherever the focus is in the pane: Monaco takes the
+// keystroke inside its own editor, and this catches it everywhere else.
+window.addEventListener('keydown', (event) => {
+  if (!(event.metaKey || event.ctrlKey) || event.key !== 's') return
+  event.preventDefault()
+  void editor.save()
+})
+
+// Opening a file is one path whether the click came from this pane's tree or
+// from a tool the agent called: both arrive here.
+window.pane.onOpenFile((root, relative) => {
+  selectTab('editor', view)
+  void editor.open({ root, relative })
+})
+
+window.pane.onFileChanged((root, relative) => {
+  void editor.reload({ root, relative })
+})

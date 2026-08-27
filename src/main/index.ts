@@ -41,9 +41,10 @@ import { createSettingsHandlers } from './settings-ipc'
 import { openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
-import { DEFAULT_PANE_WIDTH, applyLayout, createWindow, installMenu, showError, type MainWindow } from './window'
+import { DEFAULT_PANE_WIDTH, applyLayout, createWindow, installMenu, registerPaneScheme, servePane, showError, type MainWindow } from './window'
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
+import { readTextFile, writeTextFile } from './file-io'
 import type { ServerStatus } from './status'
 
 /** The config lives under `$DSH_HOME` (see `configPath`), beside the harness's own state. */
@@ -93,6 +94,26 @@ function setPane(next: { width?: number; open?: boolean }): void {
   if (next.width !== undefined) paneState.width = next.width
   if (next.open !== undefined) paneState.open = next.open
   if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, paneState)
+}
+
+/** Refusal for a root that is not a project the harness has opened. */
+const OUTSIDE_PROJECT = { ok: false as const, reason: 'That file is not inside a project the harness has opened.' }
+
+/**
+ * Show a file in the pane's editor, opening the pane if it is closed.
+ *
+ * Opening the pane is deliberate: a call that loaded a file into a hidden
+ * surface would look like nothing happened.
+ * @param root - the project directory.
+ * @param relative - the file's path within it.
+ */
+function openInPane(root: string, relative: string): void {
+  if (views === undefined || views.window.isDestroyed()) return
+  if (!paneState.open) {
+    setPane({ open: true })
+    storePane()
+  }
+  views.pane.webContents.send('pane:open', root, relative)
 }
 
 /**
@@ -1177,7 +1198,12 @@ if (!app.requestSingleInstanceLock()) {
     revealWindow()
   })
 
+  // Before the app is ready, and before anything creates a window: Chromium
+  // reads the privileged scheme table once, at startup.
+  registerPaneScheme()
+
   void app.whenReady().then(async () => {
+    servePane()
     // Scheduled before anything else and never awaited: the resolution runs
     // on its own turn, so a slow rc file delays nothing here, and its result
     // is only ever read by the NEXT launch.
@@ -1221,6 +1247,17 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('pane:list-directory', (_event, root: string, relative: string) =>
       knownProject(root) ? readDirectory(root, relative) : [],
     )
+    ipcMain.handle('pane:read-file', (_event, root: string, relative: string) =>
+      knownProject(root) ? readTextFile(root, relative) : OUTSIDE_PROJECT,
+    )
+    ipcMain.handle('pane:write-file', (_event, root: string, relative: string, text: string) =>
+      knownProject(root) ? writeTextFile(root, relative, text) : OUTSIDE_PROJECT,
+    )
+    // The tree's own clicks take the same route a view tool will, so there is
+    // one path into the editor rather than two.
+    ipcMain.on('pane:open-file', (_event, root: string, relative: string) => {
+      openInPane(root, relative)
+    })
     // The pane's Web tab: the web view is stacked over the pane's own bounds,
     // so only main can raise or drop it.
     ipcMain.on('pane:show-web-view', (_event, visible: boolean) => {

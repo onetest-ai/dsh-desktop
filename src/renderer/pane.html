@@ -2,6 +2,9 @@
 <meta charset="utf-8">
 <title>Pane</title>
 <link rel="stylesheet" href="pane.css">
+<!-- The editor's own styles, emitted beside its bundle. Loaded after the
+     pane's so the editor keeps its layout inside the panel it fills. -->
+<link rel="stylesheet" href="pane-bundle.css">
 <main class="pane">
   <nav class="tabs" role="tablist" aria-label="Side pane">
     <button type="button" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="true" class="tab">Files</button>
@@ -16,9 +19,10 @@
   <section id="panel-editor" role="tabpanel" aria-labelledby="tab-editor" class="panel" hidden>
     <p class="empty" id="editor-empty">Nothing open. Pick a file, or let the agent open one.</p>
     <div id="editor-host" class="editor" hidden></div>
+    <p class="status" id="editor-status" role="status"></p>
   </section>
   <section id="panel-web" role="tabpanel" aria-labelledby="tab-web" class="panel" hidden>
     <p class="empty" id="web-empty">Nothing loaded. The agent can open a page here.</p>
   </section>
 </main>
-<script src="pane.js"></script>
+<script src="pane-bundle.js"></script>

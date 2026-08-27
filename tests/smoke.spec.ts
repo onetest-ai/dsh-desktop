@@ -192,7 +192,8 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
           existsSync(join(dist, 'renderer', 'splash.css')) &&
           existsSync(join(dist, 'renderer', 'shell.html')) &&
           existsSync(join(dist, 'renderer', 'pane.html')) &&
-          existsSync(join(dist, 'renderer', 'pane.js')) &&
+          existsSync(join(dist, 'renderer', 'pane-bundle.js')) &&
+          existsSync(join(dist, 'renderer', 'ts.worker.js')) &&
           existsSync(join(dist, 'preload', 'pane.js')) &&
           existsSync(join(dist, 'renderer', 'splash.png')) &&
           existsSync(join(dist, 'preload', 'startup.js')),

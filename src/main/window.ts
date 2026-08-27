@@ -1,5 +1,6 @@
-import { app, BrowserWindow, Menu, WebContentsView, shell } from 'electron'
-import { join } from 'node:path'
+import { app, BrowserWindow, Menu, WebContentsView, net, protocol, shell } from 'electron'
+import { pathToFileURL } from 'node:url'
+import { join, normalize, sep } from 'node:path'
 import { errorPage } from './error-page'
 import { layout } from './layout'
 
@@ -50,6 +51,47 @@ export interface MainWindow {
 export const DEFAULT_PANE_WIDTH = 420
 
 /**
+ * Where the pane is served from.
+ *
+ * A custom scheme rather than `file://`, because Chromium refuses to
+ * construct a Worker from a file page and the editor's language services are
+ * workers. Registered as standard and secure so the page gets a real origin.
+ */
+export const PANE_ORIGIN = 'app://pane'
+
+/**
+ * Claim the pane's scheme.
+ *
+ * Must run before the app is ready — Chromium reads the privileged scheme
+ * table once, at startup — so this is called from module scope in `index.ts`
+ * rather than from `createWindow`.
+ */
+export function registerPaneScheme(): void {
+  protocol.registerSchemesAsPrivileged([
+    { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  ])
+}
+
+/**
+ * Serve the pane's own files, and nothing else.
+ *
+ * Every request is resolved inside the renderer directory and refused if it
+ * lands outside it: the scheme is reachable from the pane's own page, so a
+ * path with `..` in it must not be able to read the rest of the disk.
+ * @returns nothing; installs the handler on the `app` scheme.
+ */
+export function servePane(): void {
+  const root = join(__dirname, '..', 'renderer')
+  protocol.handle('app', async (request) => {
+    const { host, pathname } = new URL(request.url)
+    if (host !== 'pane') return new Response('Not found', { status: 404 })
+    const file = join(root, normalize(pathname))
+    if (file !== root && !file.startsWith(root + sep)) return new Response('Forbidden', { status: 403 })
+    return await net.fetch(pathToFileURL(file).toString())
+  })
+}
+
+/**
  * Create the single application window and the views inside it.
  *
  * The window's own page is not the harness: it renders only in the gap
@@ -98,7 +140,7 @@ export function createWindow(paneState: { width: number; open: boolean }): MainW
   })
   window.contentView.addChildView(harness)
   window.contentView.addChildView(pane)
-  void pane.webContents.loadFile(join(__dirname, '..', 'renderer', 'pane.html'))
+  void pane.webContents.loadURL(`${PANE_ORIGIN}/pane.html`)
 
   applyLayout({ window, harness, pane }, paneState)
   window.on('resize', () => applyLayout({ window, harness, pane }, paneState))

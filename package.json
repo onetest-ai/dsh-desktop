@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:renderer && npm run build:pane",
     "typecheck:pane": "tsc -p tsconfig.pane.json",
-    "build:pane": "esbuild src/renderer/pane/main.ts --bundle --outfile=dist/renderer/pane.js --format=iife --platform=browser --target=es2022 --log-level=warning",
+    "build:pane": "esbuild src/renderer/pane/main.ts --bundle --outfile=dist/renderer/pane-bundle.js --format=iife --platform=browser --target=es2022 --loader:.ttf=file --minify --log-level=warning && npm run build:workers",
+    "build:workers": "esbuild node_modules/monaco-editor/esm/vs/editor/editor.worker.js node_modules/monaco-editor/esm/vs/language/typescript/ts.worker.js node_modules/monaco-editor/esm/vs/language/json/json.worker.js node_modules/monaco-editor/esm/vs/language/css/css.worker.js node_modules/monaco-editor/esm/vs/language/html/html.worker.js --bundle --outdir=dist/renderer --entry-names=[name] --format=iife --platform=browser --target=es2022 --minify --log-level=warning",
     "build:renderer": "mkdir -p dist/renderer && cp src/renderer/settings.html src/renderer/settings.css src/renderer/settings.js src/renderer/startup.html src/renderer/startup.js src/renderer/splash.css src/renderer/splash.png src/renderer/shell.html src/renderer/shell.css src/renderer/shell.js src/renderer/pane.html src/renderer/pane.css dist/renderer/",
     "test": "vitest run",
     "start": "npm run build && electron .",
@@ -23,6 +24,8 @@
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0",
     "esbuild": "^0.28.2",
+    "jsdom": "^30.0.1",
+    "monaco-editor": "^0.56.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   },
