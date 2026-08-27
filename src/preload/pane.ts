@@ -23,4 +23,12 @@ contextBridge.exposeInMainWorld('pane', {
   onFileChanged: (listener: (root: string, relative: string) => void) => {
     ipcRenderer.on('pane:file-changed', (_event, root: string, relative: string) => listener(root, relative))
   },
+  onShowWeb: (listener: () => void) => {
+    ipcRenderer.on('pane:show-web', () => listener())
+  },
+  onShowDiff: (listener: (root: string, relative: string, proposed: string) => void) => {
+    ipcRenderer.on('pane:diff', (_event, root: string, relative: string, proposed: string) =>
+      listener(root, relative, proposed),
+    )
+  },
 })

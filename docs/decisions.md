@@ -149,3 +149,47 @@ Rulings from adding the MCP tab, its preset catalog, and its secret store.
 - adoption of `dsh-mcp-mgr` was considered and rejected. It is per-WORKSPACE with union semantics (its own docs: "MCP tools are host-global"), uses a hardcoded `.dsh/dshmm/mcp.json`, flags collisions as conflict with no override, and its downloads fell from 1091 in the month to 107 in the last week with no publish in ten days. Cost if wrong: none; the chosen package is better on every axis we measured.
 - shipped defaults are offered once per generation, recorded in `desktop.json`. A default the user removes stays removed — the marker records that the offer was made, not that the plugin is present. Cost if wrong: adding a future default requires raising the generation, which is a deliberate act.
 - `composePath` is exported and used by the MCP probe as well as the harness child. Applying it only to the harness left the probe spawning from `process.env`, which under a Finder launch is the system PATH alone: probing an `npx` preset failed with `spawn npx ENOENT` while the same server mounted fine once the harness had it. The shell-path cache was present and unread. Cost if wrong: none — every spawner that needs the user's toolchain now composes the same PATH, and the Advanced override still leads it.
+
+## The window is a container of views, not the harness page
+
+The main window used to *be* the harness URL. It now holds three
+`WebContentsView`s — the harness, an editor column, a file tree — positioned
+from the main process, with the window's own page visible only through the
+gaps, where it draws the dividers.
+
+The alternative was a second window for this app's own surfaces. It would have
+left the harness window untouched, but two windows is not what an IDE is: the
+point of the pane is that the conversation and the file it is discussing are
+side by side.
+
+Consequences worth knowing:
+
+- Nothing renders unless the main process places it. `WebContentsView` has no
+  layout of its own, so every resize, every column change, and every tab
+  change goes through `applyLayout`.
+- The window's page cannot see where the views are, so it is *told* where the
+  dividers go on each layout pass.
+- A view that has loaded nothing is a target that never finishes, and an
+  automation client attaching to the window waits for it forever. Every view
+  loads something at creation.
+
+## The pane is served over `app://`, not `file://`
+
+Monaco's language services are web workers, and Chromium refuses to construct
+a Worker from a `file://` page. The pane is therefore served from a privileged
+`app://pane` scheme registered before the app is ready, resolving every
+request inside the renderer directory.
+
+## The view tools are an MCP server this app hosts
+
+The agent reaches the pane through four MCP tools on loopback, rather than
+through a harness plugin. The harness already mounts MCP servers, so this
+needs no plugin, no new package, and no change to the harness — and the entry
+is synthesized per boot rather than written into `mcp.json`, which is the
+user's file and would otherwise carry a stale port whenever the app is not
+running.
+
+Path arguments from a model are the least trusted input in the app. Every one
+is resolved against the projects the harness has opened, and a refusal comes
+back as tool content rather than a protocol error so the model can read it and
+choose differently.

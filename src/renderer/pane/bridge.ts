@@ -18,6 +18,8 @@ declare global {
       writeFile(root: string, relative: string, text: string): Promise<{ ok: true } | { ok: false; reason: string }>
       onOpenFile(listener: (root: string, relative: string) => void): void
       onFileChanged(listener: (root: string, relative: string) => void): void
+      onShowDiff(listener: (root: string, relative: string, proposed: string) => void): void
+      onShowWeb(listener: () => void): void
     }
   }
 }

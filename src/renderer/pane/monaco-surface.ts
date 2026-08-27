@@ -49,8 +49,68 @@ const WORKERS: Record<string, string> = {
  */
 export function mountMonaco(host: HTMLElement, text: string, path: string, dark: boolean): Surface {
   const model = monaco.editor.createModel(text, undefined, monaco.Uri.file(path))
-  const editor = monaco.editor.create(host, {
-    model,
+  const editor = monaco.editor.create(host, { ...options(dark), model })
+  return {
+    text: () => model.getValue(),
+    selection: () => {
+      const range = editor.getSelection()
+      return range === null ? '' : model.getValueInRange(range)
+    },
+    destroy: () => {
+      editor.dispose()
+      // Disposed separately: a model outlives the editor showing it, and
+      // leaking one keeps its whole document and language service alive.
+      model.dispose()
+    },
+  }
+}
+
+/**
+ * Mount a file beside the text an agent proposes for it.
+ *
+ * Read-only on both sides: this is a change to look at before it happens, not
+ * one to edit here — the agent writes the file, or it does not.
+ * @param host - the element to fill.
+ * @param original - the file as it is on disk.
+ * @param proposed - the text the agent proposes.
+ * @param path - the file's path within its project.
+ * @param dark - whether to use the dark theme.
+ * @returns the mounted surface, whose text is the proposed side.
+ */
+export function mountDiff(
+  host: HTMLElement,
+  original: string,
+  proposed: string,
+  path: string,
+  dark: boolean,
+): Surface {
+  // Distinct URIs: two models over one path would be the same model, and the
+  // diff would compare a document with itself.
+  const left = monaco.editor.createModel(original, undefined, monaco.Uri.file(path).with({ scheme: 'ondisk' }))
+  const right = monaco.editor.createModel(proposed, undefined, monaco.Uri.file(path).with({ scheme: 'proposed' }))
+  const editor = monaco.editor.createDiffEditor(host, { ...options(dark), readOnly: true, renderSideBySide: true })
+  editor.setModel({ original: left, modified: right })
+  return {
+    text: () => right.getValue(),
+    selection: () => {
+      const range = editor.getModifiedEditor().getSelection()
+      return range === null ? '' : right.getValueInRange(range)
+    },
+    destroy: () => {
+      editor.dispose()
+      left.dispose()
+      right.dispose()
+    },
+  }
+}
+
+/**
+ * The options both surfaces share.
+ * @param dark - whether to use the dark theme.
+ * @returns the editor options.
+ */
+function options(dark: boolean): monaco.editor.IStandaloneEditorConstructionOptions {
+  return {
     theme: dark ? 'vs-dark' : 'vs',
     automaticLayout: true,
     minimap: { enabled: false },
@@ -58,14 +118,5 @@ export function mountMonaco(host: HTMLElement, text: string, path: string, dark:
     fontSize: 12,
     tabSize: 2,
     renderWhitespace: 'selection',
-  })
-  return {
-    text: () => model.getValue(),
-    destroy: () => {
-      editor.dispose()
-      // Disposed separately: a model outlives the editor showing it, and
-      // leaking one keeps its whole document and language service alive.
-      model.dispose()
-    },
   }
 }

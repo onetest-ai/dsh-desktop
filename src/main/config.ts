@@ -54,9 +54,28 @@ export interface DesktopConfig {
    * config written on a wider display cannot strand the harness here.
    */
   pane?: { editor: { width: number; open: boolean }; files: { width: number; open: boolean } }
+  /**
+   * Whether this app offers the agent its view tools — open a file, open a
+   * page, show a proposed change, read the selection.
+   *
+   * Absent means on: the tools are what make the pane something the agent can
+   * use rather than a viewer the user drives alone.
+   */
+  viewTools?: boolean
+  /** The loopback port those tools are served on. */
+  viewToolsPort?: number
 }
 
 export const DEFAULT_NOTIFY_PORT = 43117
+
+/**
+ * The loopback port the view tools are served on.
+ *
+ * Fixed rather than OS-assigned so the overlay the harness child reads names
+ * the same port across restarts; a taken port is reported and the tools
+ * simply do not come up.
+ */
+export const DEFAULT_VIEW_TOOLS_PORT = 43118
 export const DEFAULT_HOTKEY = 'CommandOrControl+Shift+D'
 
 /** Either the stored settings, or the first-run state where none exist yet. */
@@ -170,6 +189,8 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     ...(record.mcpEnabled === undefined ? {} : { mcpEnabled: record.mcpEnabled }),
     ...(record.mcpClientVersion === undefined ? {} : { mcpClientVersion: record.mcpClientVersion }),
     ...(pane === undefined ? {} : { pane }),
+    ...(typeof record.viewTools === 'boolean' ? { viewTools: record.viewTools } : {}),
+    ...(typeof record.viewToolsPort === 'number' ? { viewToolsPort: record.viewToolsPort } : {}),
   }
 }
 

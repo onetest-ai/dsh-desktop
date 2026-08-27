@@ -4,18 +4,24 @@ import { Editor, type EditorDeps, type Surface } from './editor'
 const FILE = { root: '/p/demo', relative: 'readme.md' }
 
 /** A surface whose buffer is whatever was mounted, until a test changes it. */
-function surface(): Surface & { buffer: string } {
+function surface(): Surface & { buffer: string; selected: string } {
   return {
     buffer: '',
+    selected: '',
     text() {
       return this.buffer
+    },
+    selection() {
+      return this.selected
     },
     destroy: vi.fn(),
   }
 }
 
 /** Deps whose reads succeed, overridable per test. */
-function deps(overrides: Partial<EditorDeps> = {}): EditorDeps & { said: string[]; surface: Surface & { buffer: string } } {
+function deps(
+  overrides: Partial<EditorDeps> = {},
+): EditorDeps & { said: string[]; surface: Surface & { buffer: string; selected: string } } {
   const said: string[] = []
   const mounted = surface()
   return {
@@ -26,6 +32,10 @@ function deps(overrides: Partial<EditorDeps> = {}): EditorDeps & { said: string[
     say: (message: string) => said.push(message),
     mount: (text: string) => {
       mounted.buffer = text
+      return mounted
+    },
+    mountDiff: (_original: string, proposed: string) => {
+      mounted.buffer = proposed
       return mounted
     },
     ...overrides,
@@ -122,5 +132,62 @@ describe('Editor', () => {
     const d = deps()
     await editor(d).reload(FILE)
     expect(d.said).toEqual([])
+  })
+
+  it('reports what the user has selected', async () => {
+    const d = deps()
+    const target = editor(d)
+    await target.open(FILE)
+    d.surface.selected = 'a phrase'
+    expect(target.selection()).toBe('a phrase')
+  })
+
+  it('reports no selection when nothing is open', () => {
+    expect(editor(deps()).selection()).toBe('')
+  })
+
+  it('shows a file beside the text proposed for it', async () => {
+    const d = deps()
+    const target = editor(d)
+    await target.showDiff(FILE, '# proposed')
+    expect(d.surface.text()).toBe('# proposed')
+    expect(d.said.some((message) => message.includes('Proposed change'))).toBe(true)
+  })
+
+  // reason: saving from a diff would write the agent's proposal as though the
+  // user had made it.
+  it('refuses to save from a diff, and says why', async () => {
+    const d = deps()
+    const target = editor(d)
+    await target.showDiff(FILE, '# proposed')
+    await target.save()
+    expect(d.writeFile).not.toHaveBeenCalled()
+    expect(d.said.some((message) => message.includes('proposed change'))).toBe(true)
+  })
+
+  // reason: a diff is not a view of the file as it is, so a change to that
+  // file is not something to fold into it.
+  it('ignores an outside change while a diff is showing', async () => {
+    const d = deps()
+    const target = editor(d)
+    await target.showDiff(FILE, '# proposed')
+    d.said.length = 0
+    await target.reload(FILE)
+    expect(d.said).toEqual([])
+  })
+
+  it('reports why a diff could not be read', async () => {
+    const d = deps({ readFile: vi.fn(async () => ({ ok: false, reason: 'That file is not text.' }) as const) })
+    await editor(d).showDiff(FILE, '# proposed')
+    expect(d.said).toContain('That file is not text.')
+  })
+
+  it('goes back to editing when a file is opened after a diff', async () => {
+    const d = deps()
+    const target = editor(d)
+    await target.showDiff(FILE, '# proposed')
+    await target.open(FILE)
+    await target.save()
+    expect(d.writeFile).toHaveBeenCalled()
   })
 })

@@ -15,6 +15,8 @@ export interface OpenFile {
 export interface Surface {
   /** The current contents of the buffer. */
   text(): string
+  /** What the user has selected, or '' when nothing is. */
+  selection(): string
   /** Release the document and its editor. */
   destroy(): void
 }
@@ -32,6 +34,14 @@ export interface EditorDeps {
    * @returns the mounted surface.
    */
   mount(text: string, name: string): Surface
+  /**
+   * Put a file on screen beside the text proposed for it.
+   * @param original - the file as it is on disk.
+   * @param proposed - the text proposed for it.
+   * @param name - the file's path, which chooses the language.
+   * @returns the mounted surface.
+   */
+  mountDiff(original: string, proposed: string, name: string): Surface
 }
 
 /**
@@ -46,6 +56,8 @@ export class Editor {
   private file: OpenFile | undefined
   /** The text as last read or written, which is what makes "dirty" answerable. */
   private saved = ''
+  /** Whether what is mounted is a diff, which nothing may be saved from. */
+  private comparing = false
 
   constructor(private readonly deps: EditorDeps) {}
 
@@ -72,6 +84,7 @@ export class Editor {
     }
     this.file = file
     this.saved = outcome.text
+    this.comparing = false
     this.surface?.destroy()
     this.surface = this.deps.mount(outcome.text, file.relative)
     this.deps.say(file.relative)
@@ -83,6 +96,12 @@ export class Editor {
    */
   async save(): Promise<void> {
     if (this.file === undefined || this.surface === undefined) return
+    if (this.comparing) {
+      // A diff is a change to look at before it happens. Saving from one
+      // would write the agent's proposal as though the user had made it.
+      this.deps.say('This is a proposed change. Open the file to edit it.')
+      return
+    }
     const text = this.surface.text()
     const outcome = await this.deps.writeFile(this.file.root, this.file.relative, text)
     if (!outcome.ok) {
@@ -91,6 +110,36 @@ export class Editor {
     }
     this.saved = text
     this.deps.say(`Saved ${this.file.relative}`)
+  }
+
+  /**
+   * Show a file beside the text an agent proposes for it.
+   * @param file - the file being proposed against.
+   * @param proposed - the text the agent proposes.
+   * @returns resolution once mounted, or its failure reported.
+   */
+  async showDiff(file: OpenFile, proposed: string): Promise<void> {
+    const outcome = await this.deps.readFile(file.root, file.relative)
+    if (!outcome.ok) {
+      this.deps.say(outcome.reason)
+      return
+    }
+    this.file = file
+    // The proposal is what the buffer holds, so a diff never reads as dirty
+    // and never invites the reload that a dirty buffer refuses.
+    this.saved = proposed
+    this.comparing = true
+    this.surface?.destroy()
+    this.surface = this.deps.mountDiff(outcome.text, proposed, file.relative)
+    this.deps.say(`Proposed change to ${file.relative}`)
+  }
+
+  /**
+   * What the user has selected, or '' when nothing is.
+   * @returns the selected text.
+   */
+  selection(): string {
+    return this.surface?.selection() ?? ''
   }
 
   /**
@@ -106,6 +155,9 @@ export class Editor {
   async reload(file: OpenFile): Promise<void> {
     if (this.file === undefined) return
     if (this.file.root !== file.root || this.file.relative !== file.relative) return
+    // A diff is not a view of the file as it is, so a change to that file is
+    // not something to fold into it.
+    if (this.comparing) return
     if (this.dirty) {
       this.deps.say(`${file.relative} changed on disk. Save to overwrite, or reopen it to discard your edits.`)
       return

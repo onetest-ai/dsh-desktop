@@ -41,6 +41,11 @@ export interface SettingsForm {
    * the portable one and `save` writes `desktop.json`.
    */
   mcpEnabled: boolean
+  /**
+   * Whether the agent may drive this app's own views — open a file, open a
+   * page, show a proposed change, read the selection.
+   */
+  viewTools: boolean
 }
 
 /** Per-field messages for a rejected form; absent keys validated cleanly. */
@@ -285,6 +290,9 @@ export function validateSettings(form: SettingsForm): ValidationResult {
       // already-resolved version for a spec that has not changed.
       plugins: parsedPlugins.ok ? parsedPlugins.entries : [],
       ...(form.mcpEnabled ? { mcpEnabled: true } : {}),
+      // Written only when the form says so: absent means on, so an install
+      // that never touches this switch carries no field for it.
+      ...(form.viewTools === false ? { viewTools: false } : {}),
       ...(pnpmPath === '' ? {} : { pnpmPath }),
       ...(npmPath === '' ? {} : { npmPath }),
       ...(extraPath === '' ? {} : { extraPath }),
@@ -316,10 +324,11 @@ export function formFor(result: ConfigResult): SettingsForm {
     // Off by default: MCP is opt-in, and a fresh install must not reach any
     // third-party server on its own.
     mcpEnabled: false,
+    viewTools: true,
   }
   if (!result.configured) return base
 
-  const { harness, notifyPort, hotkey, pnpmPath, npmPath, extraPath, plugins, mcpEnabled } = result.config
+  const { harness, notifyPort, hotkey, pnpmPath, npmPath, extraPath, plugins, mcpEnabled, viewTools } = result.config
   return {
     ...base,
     kind: harness.kind,
@@ -336,5 +345,6 @@ export function formFor(result: ConfigResult): SettingsForm {
       config: entry.config === undefined ? '' : JSON.stringify(entry.config, undefined, 2),
     })),
     mcpEnabled: mcpEnabled === true,
+    viewTools: viewTools !== false,
   }
 }

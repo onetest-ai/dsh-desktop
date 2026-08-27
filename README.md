@@ -154,6 +154,23 @@ Presets come from `assets/mcp-presets.json`, and `~/.dsh/mcp-presets.json` merge
 
 Details are in [`docs/notes/mcp-servers.md`](docs/notes/mcp-servers.md).
 
+## The side pane
+
+Beside the harness the app keeps two columns of its own: an editor in the middle and a file tree on the right. The tree lists the projects the harness has opened; clicking a file opens it in the editor, which is Monaco — syntax highlighting, find and replace, and the TypeScript and JSON language services. `Cmd+S` saves. A file changed on disk while you are looking at it reloads, unless you have unsaved edits, in which case it says so and leaves your work alone.
+
+Toggle the tree from **View → Toggle File Tree** (`Cmd+Alt+B`), or from the **Files** button at the foot of the harness's own sidebar, which arrives with the `@onetest/dsh-desktop-pane` plugin. The editor column has no toggle: it appears when a file is opened and closes with the `✕` in its tab strip. Both columns remember their width.
+
+The agent can drive these views through four tools, served over MCP on `127.0.0.1` for as long as the app is running:
+
+| Tool | What it does |
+| --- | --- |
+| `view_open_file` | Shows a file in the editor. |
+| `view_open_url` | Loads an `http`/`https` page in the Web tab. |
+| `view_show_diff` | Shows a file beside the text the agent proposes for it, before anything is written. |
+| `view_get_selection` | Reads what you have selected in the editor. |
+
+Every path argument is checked against the projects the harness has opened, and a path outside them is refused with a reason the model can read. Nothing is written to `mcp.json`: the server entry is built per launch, so it cannot linger when the app is not running. Switch the whole thing off on the **MCP** tab.
+
 ## Development
 
 ```bash

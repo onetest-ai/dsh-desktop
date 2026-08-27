@@ -8,6 +8,11 @@ Nothing here has shipped in a downloadable build yet. The `v0.1.0` DMG still sto
 
 ### Added
 
+- **A side pane beside the harness**, laid out like an IDE mirrored: the conversation on the left, an editor in the middle, a file tree on the right, each column draggable and remembered between launches. The editor is Monaco, and it appears when a file is opened rather than sitting empty — it closes from its own control. Files are read and written only inside a project the harness has opened, and only as text under 2MB.
+- **View tools for the agent**, served over MCP on loopback while the app runs: show a file in the editor, open a page in the Web tab, show a change it proposes before making it, and read what you have selected. Nothing is written to `mcp.json` — the entry is synthesized per boot, so it cannot go stale when the app is not running. Switchable off on the MCP tab.
+- **A startup splash** that runs a healthcheck, installs any missing plugin with its output visible, and hands off to the harness — replacing a first launch that reported its own defaults as failures.
+- **`@onetest/dsh-desktop-pane`**, a harness plugin shipped by default, putting the file tree's toggle at the foot of the harness's own sidebar. It renders only inside this app.
+- **Per-project MCP servers are managed in Settings**, not just by hand: the MCP tab lists the projects the harness has opened and edits each one's `<project>/.dsh/mcp.json` with the same presets, paste field, and controls as the global list.
 - **The login shell's `PATH` is resolved and cached**, so tools installed through nvm, Homebrew, or similar are reachable to the agent even though a Finder-launched app inherits only `/usr/bin:/bin:/usr/sbin:/sbin`. Resolution uses an interactive login shell, because version managers initialize in `.zshrc` rather than `.zprofile`; it costs about 2.6 seconds, so the result is cached and refreshed in the background rather than resolved on every launch. `pnpmPath` and `npmPath` still work and are still honoured, but are usually no longer necessary — and unlike them, a resolved PATH self-heals when a version manager upgrade moves the toolchain.
 - **Extra PATH entries** on the Advanced tab, an override for a machine where shell resolution fails.
 

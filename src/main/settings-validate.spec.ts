@@ -396,3 +396,17 @@ describe('extraPath field', () => {
     expect(result.ok && 'extraPath' in result.config).toBe(false)
   })
 })
+
+describe('the view tools switch', () => {
+  // reason: absent means on, so an install that never touches the switch
+  // carries no field for it and gets the tools.
+  it('writes nothing when the tools are left on', () => {
+    const result = validateSettings(form({ viewTools: true }))
+    expect(result.ok && 'viewTools' in result.config).toBe(false)
+  })
+
+  it('writes the refusal when they are switched off', () => {
+    const result = validateSettings(form({ viewTools: false }))
+    expect(result.ok && result.config.viewTools).toBe(false)
+  })
+})

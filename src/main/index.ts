@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadDeclaredPatchRows } from './bundle-patch'
 import { checkBinaries } from './check-binaries'
-import { loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
+import { DEFAULT_VIEW_TOOLS_PORT, loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
 import { ConfigurationError } from './configuration-error'
 import { configPath, PROFILE, resolveDshHome, type HarnessSource } from './harness-source'
 import { createInstallRunner } from './install-process'
@@ -45,6 +45,7 @@ import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, applyLayout, createWindow, i
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
 import { DIVIDER_WIDTH, type Columns } from './layout'
+import { serveViewTools, VIEW_SERVER_NAME, type ViewServer } from './view-mcp'
 import { readTextFile, writeTextFile } from './file-io'
 import type { ServerStatus } from './status'
 
@@ -135,6 +136,83 @@ function storeColumns(): void {
  * a view of this window, not an element of that page; see Task 6.
  */
 let webViewVisible = false
+
+/** This app's own MCP server, serving the view tools; undefined when switched off. */
+let viewServer: ViewServer | undefined
+
+/**
+ * Start the view tools, unless they are switched off.
+ *
+ * Started before the harness boots, since its MCP client is handed the port
+ * as part of the overlay: a server that came up afterwards would be one the
+ * child never learned about.
+ * @param config - the desktop settings this launch is starting from.
+ */
+async function startViewTools(config: DesktopConfig): Promise<void> {
+  if (config.viewTools === false) return
+  try {
+    viewServer = await serveViewTools(config.viewToolsPort ?? DEFAULT_VIEW_TOOLS_PORT, {
+      roots: () => readWorkspaces(DSH_HOME).map((workspace) => workspace.path),
+      openFile: openInPane,
+      openUrl: openUrlInPane,
+      showDiff: showDiffInPane,
+      selection: readPaneSelection,
+    })
+  } catch (error) {
+    // A port already taken costs the user the view tools and nothing else:
+    // the harness boots, and every other tool it has still works.
+    console.warn(`dsh-desktop: the view tools could not start: ${(error as Error).message}`)
+  }
+}
+
+/**
+ * Show a page in the web view, opening the editor column and its Web tab.
+ * @param url - the page to load.
+ */
+function openUrlInPane(url: string): void {
+  if (views === undefined || views.window.isDestroyed()) return
+  if (!columns.editor.open) {
+    setColumn('editor', { open: true })
+    storeColumns()
+  }
+  void views.web.webContents.loadURL(url)
+  views.pane.webContents.send('pane:show-web')
+}
+
+/**
+ * Show a file beside the text an agent proposes for it.
+ * @param root - the project directory.
+ * @param relative - the file's path within it.
+ * @param proposed - the text the agent proposes.
+ */
+function showDiffInPane(root: string, relative: string, proposed: string): void {
+  if (views === undefined || views.window.isDestroyed()) return
+  if (!columns.editor.open) {
+    setColumn('editor', { open: true })
+    storeColumns()
+  }
+  views.pane.webContents.send('pane:diff', root, relative, proposed)
+}
+
+/**
+ * Ask the pane what the user has selected.
+ *
+ * Asked of the page rather than pushed by it: a selection is only interesting
+ * at the moment a tool asks, and mirroring every selection change into main
+ * would be a message per keystroke.
+ * @returns the selected text, or '' when there is none or no pane.
+ */
+async function readPaneSelection(): Promise<string> {
+  if (views === undefined || views.window.isDestroyed()) return ''
+  try {
+    return (await views.pane.webContents.executeJavaScript('window.__paneSelection?.() ?? ""')) as string
+  } catch (error) {
+    // The pane page may not have run its script yet; an empty selection is
+    // the honest answer either way.
+    console.warn(`dsh-desktop: the editor selection could not be read: ${(error as Error).message}`)
+    return ''
+  }
+}
 
 /** Refusal for a root that is not a project the harness has opened. */
 const OUTSIDE_PROJECT = { ok: false as const, reason: 'That file is not inside a project the harness has opened.' }
@@ -266,7 +344,32 @@ function mcpEnv(config: DesktopConfig): Record<string, string> {
  * @returns the configured entries, in file order.
  */
 function configuredMcpServers(): McpServerEntry[] {
-  return readMcpConfig(mcpConfigPath(DSH_HOME))
+  return [...readMcpConfig(mcpConfigPath(DSH_HOME)), ...viewToolsEntry()]
+}
+
+/**
+ * This app's own view tools, as a server entry the harness can mount.
+ *
+ * Synthesized per boot rather than written into `mcp.json`: the port is this
+ * process's, so a file entry would be stale the moment the app is not
+ * running, and `mcp.json` is the user's file — a server they never added has
+ * no business appearing in it.
+ * @returns the entry, or nothing when the tools are switched off or not up.
+ */
+function viewToolsEntry(): McpServerEntry[] {
+  if (viewServer === undefined) return []
+  return [
+    {
+      name: VIEW_SERVER_NAME,
+      disabled: false,
+      transport: 'http',
+      args: [],
+      env: {},
+      url: `http://127.0.0.1:${String(viewServer.port)}/mcp`,
+      headers: {},
+      rest: {},
+    },
+  ]
 }
 
 /**
@@ -1368,6 +1471,10 @@ if (!app.requestSingleInstanceLock()) {
       return
     }
     await runStartupPhases(stored.config)
+    // Before the boot: the harness child is handed this server's port in the
+    // overlay, so one that came up afterwards would be one it never learned
+    // about.
+    await startViewTools(stored.config)
     await enqueue(bootNow)
   })
 

@@ -162,6 +162,7 @@ function collect() {
   for (const name of FIELDS) form[name] = el(name).value
   form.plugins = pluginRows.map((plugin) => ({ spec: plugin.spec, config: plugin.config ?? '' }))
   form.mcpEnabled = el('mcp-enabled').checked
+  form.viewTools = el('view-tools').checked
   return form
 }
 
@@ -1452,6 +1453,7 @@ async function load() {
   renderPluginRows()
 
   el('mcp-enabled').checked = form.mcpEnabled
+  el('view-tools').checked = form.viewTools
   // The servers come from mcp.json through their own channel, not from the
   // form: that file is the portable one, and `save` writes desktop.json.
   mcpServers = await window.settings.readMcpServers()

@@ -1,6 +1,6 @@
 import { PANE_TABS, selectTab, type PaneTab, type TabView } from './tabs.ts'
-import { Editor } from './editor.ts'
-import { mountMonaco } from './monaco-surface.ts'
+import { Editor, type Surface } from './editor.ts'
+import { mountDiff, mountMonaco } from './monaco-surface.ts'
 import './bridge.ts'
 
 /**
@@ -63,12 +63,21 @@ const editor = new Editor({
   say: (message) => {
     el('editor-status').textContent = message
   },
-  mount: (text, name) => {
-    el('editor-empty').hidden = true
-    el('editor-host').hidden = false
-    return mountMonaco(el('editor-host'), text, name, matchMedia('(prefers-color-scheme: dark)').matches)
-  },
+  mount: (text, name) => mountInto((host, dark) => mountMonaco(host, text, name, dark)),
+  mountDiff: (original, proposed, name) =>
+    mountInto((host, dark) => mountDiff(host, original, proposed, name, dark)),
 })
+
+/**
+ * Reveal the editor host and mount something in it.
+ * @param mount - builds the surface once the host is on screen.
+ * @returns the mounted surface.
+ */
+function mountInto(mount: (host: HTMLElement, dark: boolean) => Surface): Surface {
+  el('editor-empty').hidden = true
+  el('editor-host').hidden = false
+  return mount(el('editor-host'), matchMedia('(prefers-color-scheme: dark)').matches)
+}
 
 el('close-editor').addEventListener('click', () => {
   window.pane.closeEditor()
@@ -91,4 +100,17 @@ window.pane.onOpenFile((root, relative) => {
 
 window.pane.onFileChanged((root, relative) => {
   void editor.reload({ root, relative })
+})
+
+window.pane.onShowDiff((root, relative, proposed) => {
+  selectTab('editor', view)
+  void editor.showDiff({ root, relative }, proposed)
+})
+
+// Read by main when a tool asks what the user has selected. A function on the
+// page rather than a channel, because main is the side that asks.
+;(window as unknown as { __paneSelection: () => string }).__paneSelection = () => editor.selection()
+
+window.pane.onShowWeb(() => {
+  selectTab('web', view)
 })
