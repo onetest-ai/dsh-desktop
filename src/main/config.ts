@@ -45,6 +45,15 @@ export interface DesktopConfig {
    * happens to have installed means nothing to another MCP client.
    */
   mcpClientVersion?: string
+  /**
+   * The side pane's last width and whether it was showing.
+   *
+   * Window state rather than settings: written by dragging the divider, not
+   * by the Settings form, and never surfaced there. A stored width is only a
+   * request — `layout` clamps it to what the current window can give, so a
+   * config written on a wider display cannot strand the harness here.
+   */
+  pane?: { width: number; open: boolean }
 }
 
 export const DEFAULT_NOTIFY_PORT = 43117
@@ -144,6 +153,12 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     throw new ConfigurationError(`dsh-desktop: ${filePath} "extraPath" must be a string`)
   }
 
+  // Unlike every check above, a malformed `pane` is dropped rather than
+  // thrown: it is window state this app writes for itself, never something
+  // the user is asked to get right, and refusing to start over a bad pane
+  // width would take away the window that fixes it.
+  const pane = paneState(record.pane)
+
   return {
     harness,
     notifyPort: record.notifyPort ?? DEFAULT_NOTIFY_PORT,
@@ -154,7 +169,20 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     ...(record.plugins === undefined ? {} : { plugins: record.plugins }),
     ...(record.mcpEnabled === undefined ? {} : { mcpEnabled: record.mcpEnabled }),
     ...(record.mcpClientVersion === undefined ? {} : { mcpClientVersion: record.mcpClientVersion }),
+    ...(pane === undefined ? {} : { pane }),
   }
+}
+
+/**
+ * Read the stored pane state, or undefined when there is nothing usable.
+ * @param value - the `pane` member, from a file that may have been hand-edited.
+ * @returns the state, or undefined to fall back to the default.
+ */
+function paneState(value: unknown): { width: number; open: boolean } | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const { width, open } = value as Record<string, unknown>
+  if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) return undefined
+  return { width: Math.round(width), open: open === true }
 }
 
 /**

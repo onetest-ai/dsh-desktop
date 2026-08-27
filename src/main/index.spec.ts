@@ -50,6 +50,7 @@ const fake = vi.hoisted(() => {
     focus: vi.fn(),
     restore: vi.fn(),
     loadURL: vi.fn(),
+    getContentSize: vi.fn(() => [1280, 860]),
     on: vi.fn((name: string, handler: Handler) => {
       windowHandlers.set(name, [...(windowHandlers.get(name) ?? []), handler])
       return window
@@ -67,7 +68,8 @@ const fake = vi.hoisted(() => {
       loadURL: vi.fn(),
     },
   }
-  const views = { window, harness, pane: {} }
+  const pane = { getBounds: vi.fn(() => ({ x: 0, y: 0, width: 420, height: 860 })) }
+  const views = { window, harness, pane }
 
   const app = {
     requestSingleInstanceLock: vi.fn(() => true),
@@ -107,6 +109,15 @@ const fake = vi.hoisted(() => {
 
   const quitEvents: Array<{ preventDefault: () => void; prevented: boolean }> = []
 
+  // Only `on`: `index.ts` registers the divider's send-only channels here,
+  // and `settings-window.ts` — which owns the `handle` channels — is mocked.
+  const ipcHandlers = new Map<string, (event: unknown, ...args: unknown[]) => void>()
+  const ipcMain = {
+    on: vi.fn((channel: string, handler: (event: unknown, ...args: unknown[]) => void) => {
+      ipcHandlers.set(channel, handler)
+    }),
+  }
+
   function emit(name: string, ...args: unknown[]): Promise<unknown[]> {
     return Promise.all((handlers.get(name) ?? []).map((handler) => handler(...args)))
   }
@@ -120,6 +131,13 @@ const fake = vi.hoisted(() => {
     window,
     views,
     harness,
+    ipcMain,
+    /**
+     * Invoke one of the divider's channels, as the window page would.
+     * @param channel - the channel name.
+     * @param args - the payload.
+     */
+    sendIpc: (channel: string, ...args: unknown[]) => ipcHandlers.get(channel)?.({}, ...args),
     globalShortcut,
     shell,
     handlers,
@@ -139,18 +157,22 @@ vi.mock('electron', () => ({
   globalShortcut: fake.globalShortcut,
   shell: fake.shell,
   dialog: { showOpenDialog: vi.fn() },
+  ipcMain: fake.ipcMain,
   Notification: class {
     show(): void {}
   },
 }))
 
 const createWindow = vi.fn(() => fake.views)
+const applyLayout = vi.fn()
+const installMenuMock = vi.fn()
 const showError = vi.fn()
 vi.mock('./window', () => ({
   createWindow: (...args: unknown[]) => createWindow(...(args as [])),
   showError: (...args: unknown[]) => showError(...(args as [])),
+  applyLayout: (...args: unknown[]) => applyLayout(...(args as [])),
   DEFAULT_PANE_WIDTH: 420,
-  installMenu: vi.fn(),
+  installMenu: (...args: unknown[]) => installMenuMock(...(args as [])),
 }))
 
 const setTrayStatus = vi.fn()
@@ -1589,5 +1611,64 @@ describe('startup healthcheck', () => {
     })
     const child = await bootReady()
     expect(child).toBeDefined()
+  })
+})
+
+describe('the side pane', () => {
+  // reason: the divider page reports a window coordinate, not a width — it
+  // has no way to know where the views are. Main owns that arithmetic.
+  it('turns a divider drag into a pane width', async () => {
+    await bootReady()
+    fake.sendIpc('shell:resize-pane', 900)
+    expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ width: 1280 - 900 }))
+  })
+
+  it('nudges the pane by a step for a keyboard user', async () => {
+    await bootReady()
+    fake.sendIpc('shell:nudge-pane', 20)
+    expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ width: 440 }))
+  })
+
+  // reason: a write per pointer move would put a file write behind every
+  // frame of a drag.
+  it('stores nothing while the drag is still running', async () => {
+    await bootReady()
+    writeConfigMock.mockClear()
+    fake.sendIpc('shell:resize-pane', 900)
+    expect(writeConfigMock).not.toHaveBeenCalled()
+  })
+
+  // reason: the drag can ask for a width `layout` refuses. Storing the ask
+  // rather than the outcome would reopen the pane at a size it never had.
+  it('stores the width the layout settled on when the drag ends', async () => {
+    await bootReady()
+    fake.views.pane.getBounds.mockReturnValue({ x: 0, y: 0, width: 314, height: 860 })
+    writeConfigMock.mockClear()
+    fake.sendIpc('shell:resize-pane', 10)
+    fake.sendIpc('shell:commit-pane')
+    expect(writeConfigMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ pane: { width: 314, open: false } }),
+    )
+  })
+
+  it('opens and closes from the View menu, storing the choice each time', async () => {
+    await bootReady()
+    const toggle = installMenuMock.mock.calls[0][1] as () => void
+    writeConfigMock.mockClear()
+    toggle()
+    expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ open: true }))
+    expect(writeConfigMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ pane: expect.objectContaining({ open: true }) }))
+    toggle()
+    expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ open: false }))
+  })
+
+  it('opens at the width the last session stored', async () => {
+    configResult = {
+      configured: true,
+      config: { ...STORED, pane: { width: 360, open: true } },
+    }
+    await bootReady()
+    expect(createWindow).toHaveBeenCalledWith({ width: 360, open: true })
   })
 })

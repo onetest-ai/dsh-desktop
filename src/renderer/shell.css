@@ -1,9 +1,40 @@
-/* The window's own page shows only through the gap the two views leave, so
-   it paints the divider and nothing else. */
+/*
+ * The window's own page renders only in the gap the harness and pane views
+ * leave, so it paints the divider and nothing else. Everywhere else it is
+ * covered, which is why the body colour matters only as the flash before the
+ * views take their bounds.
+ */
 html,
 body {
   margin: 0;
   height: 100%;
   overflow: hidden;
+  background: rgb(28, 28, 30);
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* Fills the gap exactly: `layout` gives the gap DIVIDER_WIDTH, and anything
+   narrower here would leave a strip of bare body beside the grab handle. */
+.divider {
+  width: 100%;
+  height: 100%;
   background: rgb(60, 60, 62);
+  cursor: col-resize;
+}
+
+.divider:hover,
+.divider.dragging {
+  background: rgb(90, 130, 220);
+}
+
+@media (prefers-color-scheme: light) {
+  html,
+  body {
+    background: rgb(240, 240, 242);
+  }
+
+  .divider {
+    background: rgb(210, 210, 214);
+  }
 }

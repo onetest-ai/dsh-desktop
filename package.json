@@ -6,7 +6,7 @@
   "main": "dist/main/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:renderer",
-    "build:renderer": "mkdir -p dist/renderer && cp src/renderer/settings.html src/renderer/settings.css src/renderer/settings.js src/renderer/startup.html src/renderer/startup.js src/renderer/splash.css src/renderer/splash.png src/renderer/shell.html src/renderer/shell.css src/renderer/pane.html src/renderer/pane.css dist/renderer/",
+    "build:renderer": "mkdir -p dist/renderer && cp src/renderer/settings.html src/renderer/settings.css src/renderer/settings.js src/renderer/startup.html src/renderer/startup.js src/renderer/splash.css src/renderer/splash.png src/renderer/shell.html src/renderer/shell.css src/renderer/shell.js src/renderer/pane.html src/renderer/pane.css dist/renderer/",
     "test": "vitest run",
     "start": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",

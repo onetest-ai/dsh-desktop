@@ -152,8 +152,9 @@ export function showError(views: MainWindow, title: string, detail: string): voi
  * both in the File menu (explicitly requested) and the app menu (macOS
  * convention), so `onSettings` is wired to both.
  * @param onSettings - opens the settings window.
+ * @param onTogglePane - shows or hides the side pane.
  */
-export function installMenu(onSettings: () => void): void {
+export function installMenu(onSettings: () => void, onTogglePane: () => void): void {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
@@ -172,6 +173,10 @@ export function installMenu(onSettings: () => void): void {
       {
         label: 'View',
         submenu: [
+          // The only way to open the pane by hand. Alt rather than plain
+          // Cmd+B, which the harness Web UI may want for its own sidebar.
+          { label: 'Toggle Side Pane', accelerator: 'CmdOrCtrl+Alt+B', click: onTogglePane },
+          { type: 'separator' },
           { role: 'reload' },
           { role: 'forceReload' },
           { role: 'toggleDevTools' },

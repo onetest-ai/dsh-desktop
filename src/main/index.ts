@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, Notification, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, shell } from 'electron'
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadDeclaredPatchRows } from './bundle-patch'
@@ -41,7 +41,7 @@ import { createSettingsHandlers } from './settings-ipc'
 import { openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
-import { DEFAULT_PANE_WIDTH, createWindow, installMenu, showError, type MainWindow } from './window'
+import { DEFAULT_PANE_WIDTH, applyLayout, createWindow, installMenu, showError, type MainWindow } from './window'
 import { readWorkspaces } from './workspaces'
 import type { ServerStatus } from './status'
 
@@ -75,8 +75,48 @@ const MAX_ISOLATION_ATTEMPTS = 2
 let window: BrowserWindow | undefined
 /** The window together with its harness and pane views; undefined before it exists. */
 let views: MainWindow | undefined
-/** The pane's width and whether it is showing. Persisted in the next task. */
+/**
+ * The pane's width and whether it is showing.
+ *
+ * Mutable module state rather than a config read per layout pass: it changes
+ * on every pointer move of a divider drag, and only the end of that drag is
+ * written to disk.
+ */
 const paneState = { width: DEFAULT_PANE_WIDTH, open: false }
+
+/**
+ * Move the pane and re-lay the window out.
+ * @param next - the width, open state, or both to apply.
+ */
+function setPane(next: { width?: number; open?: boolean }): void {
+  if (next.width !== undefined) paneState.width = next.width
+  if (next.open !== undefined) paneState.open = next.open
+  if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, paneState)
+}
+
+/** Show or hide the side pane, storing the choice. */
+function togglePane(): void {
+  setPane({ open: !paneState.open })
+  storePane()
+}
+
+/**
+ * Store the pane's current state.
+ *
+ * Called at the end of a drag and when the pane opens or closes, never
+ * during one: a write per pointer move would put a file write behind every
+ * frame. A failed write costs the user their pane width on the next launch
+ * and nothing else, so it is warned about rather than surfaced.
+ */
+function storePane(): void {
+  try {
+    const stored = loadConfig(CONFIG_PATH)
+    if (!stored.configured) return
+    writeConfig(CONFIG_PATH, { ...stored.config, pane: { ...paneState } })
+  } catch (error) {
+    console.warn(`dsh-desktop: the pane size could not be stored: ${(error as Error).message}`)
+  }
+}
 /** The frameless startup splash, open only until the main window appears. */
 let splash: BrowserWindow | undefined
 /**
@@ -1126,9 +1166,33 @@ if (!app.requestSingleInstanceLock()) {
     // Offers each shipped default once, recorded by generation so a default
     // the user removes stays removed.
     ensureDefaultPlugins(DSH_HOME)
-    installMenu(showSettings)
+    installMenu(showSettings, togglePane)
+    try {
+      const stored = loadConfig(CONFIG_PATH)
+      if (stored.configured && stored.config.pane !== undefined) {
+        paneState.width = stored.config.pane.width
+        paneState.open = stored.config.pane.open
+      }
+    } catch {
+      // An unreadable config is reported further down, where it can open
+      // Settings; the pane simply starts at its default until then.
+    }
     views = createWindow(paneState)
     window = views.window
+    // Sent, not invoked: a divider drag reports a coordinate per pointer move
+    // and wants no answer.
+    ipcMain.on('shell:resize-pane', (_event, windowX: number) => {
+      if (views === undefined || views.window.isDestroyed()) return
+      const [width] = views.window.getContentSize()
+      setPane({ width: width - windowX })
+    })
+    ipcMain.on('shell:nudge-pane', (_event, delta: number) => setPane({ width: paneState.width + delta }))
+    ipcMain.on('shell:commit-pane', () => {
+      // The width `layout` settled on, not the one the drag asked for: a
+      // stored width the clamp already refused would reopen at the wrong size.
+      if (views !== undefined && !views.window.isDestroyed()) paneState.width = views.pane.getBounds().width
+      storePane()
+    })
     // The splash covers the wait before the main window has anything to
     // paint; the moment a real page lands there — the harness URL, or the
     // error pane when boot fails — the splash has said everything it can.
