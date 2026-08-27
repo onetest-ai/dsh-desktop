@@ -937,14 +937,46 @@ button:disabled {
 /* Startup surface. Shares the Settings window's tokens deliberately: it is
    the same application speaking, and a second visual language for the boot
    screen would read as a different program. */
+/* `main`'s 172px/96px clears the Settings frame's section header and Save
+   bar. This surface has neither, so inheriting them leaves a band of dead
+   space above the splash and below the progress — only the drag titlebar
+   needs clearing here. */
+main.startup {
+  padding: 58px 32px 32px;
+}
+
 .startup {
   max-width: 560px;
 }
 
+/* The splash carries the status line inside it, at the bottom, rather than
+   below: while the app is starting the image IS the screen, and a caption
+   sitting under it reads as a separate widget. */
+.splash {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1280 / 340;
+  margin-bottom: 18px;
+  border-radius: 12px;
+  overflow: hidden;
+  background-image: url('splash.png');
+  background-size: cover;
+  background-position: center;
+}
+
 .startup-phase {
-  color: var(--label-secondary);
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  margin: 0;
+  padding: 26px 16px 12px;
+  /* The image's lower band is mid-blue with light streaks, so the text needs
+     its own ground rather than relying on the artwork staying dark there. */
+  background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.62));
+  color: rgb(255, 255, 255);
   font: 13px/20px -apple-system, BlinkMacSystemFont, sans-serif;
-  margin: 4px 0 18px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 .findings {

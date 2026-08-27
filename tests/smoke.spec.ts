@@ -122,6 +122,7 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
         startup:
           existsSync(join(dist, 'renderer', 'startup.html')) &&
           existsSync(join(dist, 'renderer', 'startup.js')) &&
+          existsSync(join(dist, 'renderer', 'splash.png')) &&
           existsSync(join(dist, 'preload', 'startup.js')),
       }
     })
