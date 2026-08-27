@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { writeFileAtomic } from './atomic-write'
 import { parseSpec, type PluginEntry } from './plugin-entries'
 
 /**
@@ -87,7 +88,7 @@ export function ensureDefaultPlugins(dshHome: string): boolean {
   config.plugins = [...plugins, ...added]
   config.pluginDefaultsGeneration = DEFAULTS_GENERATION
   try {
-    writeFileSync(file, `${JSON.stringify(config, undefined, 2)}\n`)
+    writeFileAtomic(file, `${JSON.stringify(config, undefined, 2)}\n`)
   } catch {
     // An unwritable config is the user's to fix; the default simply is not
     // added, and the marker is not recorded, so the next launch retries.

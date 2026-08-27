@@ -1,4 +1,6 @@
 import { Tree, type Project, type TreeEntry } from './tree.ts'
+import { fileGlyph } from './file-icon.ts'
+import { icon } from './icons.ts'
 import './bridge.ts'
 import { followHarnessTheme } from './theme.ts'
 
@@ -32,11 +34,22 @@ function drawTree(relative: string, into: HTMLElement): void {
     row.type = 'button'
     row.className = 'row'
 
+    const expanded = tree.open.has(path)
+
     const twisty = document.createElement('span')
     twisty.className = 'twisty'
-    twisty.setAttribute('aria-hidden', 'true')
-    twisty.textContent = entry.directory ? (tree.open.has(path) ? '▾' : '▸') : ''
+    // Only a directory turns: a file's column stays empty so the names below
+    // it still line up.
+    if (entry.directory) twisty.append(icon(expanded ? 'chevronDown' : 'triangleRight', 10))
     row.append(twisty)
+
+    const glyph = document.createElement('span')
+    glyph.className = 'glyph'
+    const named = fileGlyph(entry.name, entry.directory, expanded)
+    // Empty rather than absent when there is no glyph: the span holds the
+    // column so every name in the tree starts at the same x.
+    if (named !== undefined) glyph.append(icon(named, 14))
+    row.append(glyph)
 
     const name = document.createElement('span')
     name.className = 'name'

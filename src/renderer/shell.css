@@ -19,19 +19,31 @@ body {
   display: none !important;
 }
 
-/* Placed by main, which is the only side that knows where the gaps are. Full
-   height, and exactly as wide as the gap its column leaves — anything
-   narrower would show bare body beside the grab handle. */
+/* Placed by main, which is the only side that knows where the gaps are. The
+   strip itself is transparent and only as wide as the gap, so what shows is
+   the 1px seam its `::after` paints — the harness resizes the same way: a 1px
+   column border with a wider invisible strip over it, because a 1px target is
+   not one a pointer can find. */
 .divider {
   position: absolute;
   top: 0;
   height: 100%;
-  background: var(--dsw-alias-border-l2);
+  background: transparent;
   cursor: col-resize;
 }
 
-.divider:hover,
-.divider.dragging {
+.divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 1px;
+  height: 100%;
+  background: var(--dsw-alias-border-l2);
+}
+
+.divider:hover::after,
+.divider.dragging::after {
   background: var(--dsw-alias-brand-primary);
 }
 
@@ -53,27 +65,30 @@ body {
   box-sizing: border-box;
 }
 
+/* The glyphs fill with currentColor, so a button's state is one colour
+   change rather than a second icon. */
 .rail-button {
-  width: 24px;
-  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: none;
   border-radius: 6px;
   background: transparent;
-  font-size: 13px;
-  line-height: 1;
-  opacity: 0.6;
+  color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
 }
 
 .rail-button:hover {
   background: var(--dsw-alias-interactive-bg-hover);
-  opacity: 0.9;
+  color: var(--dsw-alias-label-secondary);
 }
 
 /* A column that is up is marked on its button, so the rail says what the
    window is showing rather than only what it can show. */
 .rail-button[aria-pressed='true'] {
   background: var(--dsw-alias-interactive-bg-hover);
-  opacity: 1;
+  color: var(--dsw-alias-label-primary);
 }

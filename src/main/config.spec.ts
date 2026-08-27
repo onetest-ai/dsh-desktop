@@ -285,3 +285,43 @@ describe('the stored pane state', () => {
     expect(withPane(stored)).toEqual({ editor: { width: 560, open: false }, files: { width: 240, open: false } })
   })
 })
+
+describe('writeConfig and a reader racing it', () => {
+  // reason: this is the failure it exists to prevent. A plain write truncates
+  // the target and then fills it, so a reader in that window gets a partial
+  // file — which `loadConfig` rejects, which opens a Settings window that
+  // looks unconfigured, which quits the app when closed.
+  it('never leaves a state a reader would reject', () => {
+    const file = join(tempDir(), 'desktop.json')
+    const config = {
+      harness: { kind: 'managed' as const, package: '@deepseek-ai/dsh', version: '0.1.0', workspace: '/tmp/ws' },
+      notifyPort: 43117,
+      hotkey: 'CommandOrControl+Shift+D',
+    }
+    writeConfig(file, config)
+    // Rewritten repeatedly, reading back between every write: each read has to
+    // land on one whole config or the other, never on nothing.
+    for (let round = 0; round < 40; round += 1) {
+      writeConfig(file, { ...config, notifyPort: 43117 + round })
+      const result = loadConfig(file)
+      expect(result.configured).toBe(true)
+      expect(result.configured && result.config.harness.kind).toBe('managed')
+    }
+  })
+
+  it('replaces the file rather than appending to it', () => {
+    const file = join(tempDir(), 'desktop.json')
+    writeConfig(file, {
+      harness: { kind: 'local', repo: '/tmp/a' },
+      notifyPort: 1,
+      hotkey: 'CommandOrControl+Shift+D',
+    })
+    writeConfig(file, {
+      harness: { kind: 'local', repo: '/tmp/b' },
+      notifyPort: 2,
+      hotkey: 'CommandOrControl+Shift+D',
+    })
+    const result = loadConfig(file)
+    expect(result.configured && result.config.harness).toEqual({ kind: 'local', repo: '/tmp/b' })
+  })
+})

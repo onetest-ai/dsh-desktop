@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { writeFileAtomic } from './atomic-write'
 import { ConfigurationError } from './configuration-error'
 import type { HarnessSource } from './harness-source'
 import { validSpecShape, type PluginEntry } from './plugin-entries'
@@ -224,6 +225,7 @@ function column(value: unknown): { width: number; open: boolean } | undefined {
  * @param config - settings to store.
  */
 export function writeConfig(filePath: string, config: DesktopConfig): void {
-  mkdirSync(dirname(filePath), { recursive: true })
-  writeFileSync(filePath, `${JSON.stringify(config, undefined, 2)}\n`)
+  // Atomic: this file is rewritten whenever a column moves, and a reader that
+  // caught it half-written would see a broken configuration.
+  writeFileAtomic(filePath, `${JSON.stringify(config, undefined, 2)}\n`)
 }

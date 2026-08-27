@@ -165,7 +165,7 @@ describe('the window\'s views', () => {
     fake.windowInstance.getContentSize.mockReturnValue([1200, 600])
     expect(fake.resizeHandlers).toHaveLength(1)
     fake.resizeHandlers[0]?.()
-    expect(fake.views[0].bounds).toMatchObject({ width: 1200 - 30 - 420 - 6, height: 600 })
+    expect(fake.views[0].bounds).toMatchObject({ width: 1200 - 30 - 420 - 8, height: 600 })
     expect(fake.views[1].bounds).toMatchObject({ width: 420, height: 600 })
   })
 
@@ -178,7 +178,7 @@ describe('the window\'s views', () => {
     applyLayout(views, OPEN, false)
     const sent = (fake.windowInstance.webContents.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)
     expect(sent?.[0]).toBe('shell:places')
-    expect(sent?.[1].editor.width).toBe(6)
+    expect(sent?.[1].editor.width).toBe(8)
     expect(sent?.[1].files.x).toBeGreaterThan(sent?.[1].editor.x)
     expect(sent?.[1].rail).toMatchObject({ x: 1280 - 30, width: 30 })
   })

@@ -335,7 +335,13 @@ const NO_MCP_FORM = false
 function defaultRead(): Promise<unknown> {
   return Promise.resolve({
     configured: true,
-    form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcpEnabled: NO_MCP_FORM },
+    form: {
+      ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+      mcpEnabled: NO_MCP_FORM,
+      // Absent means on, which is what `formFor` reports for a config that
+      // has never touched the switch.
+      viewTools: true,
+    },
     plugins: [],
     mcp: NO_MCP,
   })
@@ -932,13 +938,25 @@ describe('plugins', () => {
       .fn()
       .mockResolvedValueOnce({
         configured: true,
-        form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcpEnabled: NO_MCP_FORM },
+        form: {
+      ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+      mcpEnabled: NO_MCP_FORM,
+      // Absent means on, which is what `formFor` reports for a config that
+      // has never touched the switch.
+      viewTools: true,
+    },
         plugins: [],
         mcp: NO_MCP,
       })
       .mockResolvedValue({
         configured: true,
-        form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcpEnabled: NO_MCP_FORM },
+        form: {
+      ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
+      mcpEnabled: NO_MCP_FORM,
+      // Absent means on, which is what `formFor` reports for a config that
+      // has never touched the switch.
+      viewTools: true,
+    },
         plugins: [{ spec: DECK, package: DECK, pinned: false, version: '0.2.0' }],
         mcp: NO_MCP,
       })
@@ -2115,5 +2133,20 @@ describe('per-project MCP servers', () => {
     void renderer.elements.get('open-project-mcp-file')?.listeners.get('click')?.()
     for (let i = 0; i < 8; i++) await Promise.resolve()
     expect(renderer.openProjectMcpFileCalls).toEqual(['/p/older/.dsh/mcp.json'])
+  })
+})
+
+describe('the view tools switch', () => {
+  // reason: it was declared in the page and validated in main, but the form
+  // never read it — so turning it off saved nothing and it came back on.
+  it('saves the switch as the form shows it', async () => {
+    const save = vi.fn(async () => ({ ok: true }))
+    const renderer = await load(save)
+    const box = renderer.elements.get('view-tools')
+    if (box === undefined) throw new Error('no switch')
+    expect(box.checked).toBe(true)
+    box.checked = false
+    await renderer.save()
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ viewTools: false }))
   })
 })

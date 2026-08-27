@@ -56,8 +56,12 @@ describe('layout', () => {
 
   it('leaves one divider per open column', () => {
     const usable = 1280 - RAIL_WIDTH
-    expect(widths(BOUNDS, columns({ files: { width: 240, open: true } }))).toEqual([usable - 6 - 240, 0, 0, 6, 240, RAIL_WIDTH])
-    expect(widths(BOUNDS, columns({ editor: { width: 520, open: true } }))).toEqual([usable - 6 - 520, 6, 520, 0, 0, RAIL_WIDTH])
+    expect(widths(BOUNDS, columns({ files: { width: 240, open: true } }))).toEqual([
+      usable - DIVIDER_WIDTH - 240, 0, 0, DIVIDER_WIDTH, 240, RAIL_WIDTH,
+    ])
+    expect(widths(BOUNDS, columns({ editor: { width: 520, open: true } }))).toEqual([
+      usable - DIVIDER_WIDTH - 520, DIVIDER_WIDTH, 520, 0, 0, RAIL_WIDTH,
+    ])
   })
 
   it('honours each stored width when the window can afford it', () => {

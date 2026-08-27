@@ -221,12 +221,28 @@ body {
 
 /* Fixed width so names line up whether or not a row has a twisty. */
 .twisty {
+  display: flex;
   flex: none;
+  align-items: center;
+  justify-content: center;
   width: 12px;
   color: var(--dsw-alias-label-tertiary);
-  font-size: 11px;
-  line-height: 1;
-  text-align: center;
+}
+
+/* The file or folder glyph, in the harness's own icon set. Dimmer than the
+   name it labels: the name is what the eye is scanning for. */
+.glyph {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.row:hover .glyph,
+.row[aria-current='true'] .glyph {
+  color: var(--dsw-alias-label-primary);
 }
 
 .name {

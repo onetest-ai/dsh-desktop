@@ -4,8 +4,13 @@
  * A divider is not a view of its own: it is the window's own page showing
  * through the gap the views leave, which is what lets it receive the drag
  * without a `WebContentsView` stacked over either neighbour.
+ *
+ * The gap is the hit target, not the seam. Only 1px of it is painted (see
+ * `shell.css`), matching the harness, which resizes its own columns with a
+ * 1px border under an 8px invisible strip — a 1px target is not one a pointer
+ * can find.
  */
-export const DIVIDER_WIDTH = 6
+export const DIVIDER_WIDTH = 8
 
 /** Below this the harness Web UI's own layout collapses, so the columns stop taking width. */
 export const MIN_HARNESS_WIDTH = 480

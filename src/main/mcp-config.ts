@@ -1,5 +1,6 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { writeFileAtomic } from './atomic-write'
 
 /** Keys this app models; everything else on an entry is preserved in `rest`. */
 const MODELLED_KEYS = new Set(['command', 'args', 'env', 'cwd', 'url', 'headers', 'type', 'transport', 'disabled'])
@@ -150,9 +151,9 @@ function render(entry: McpServerEntry): Record<string, unknown> {
 export function writeMcpConfig(file: string, servers: McpServerEntry[]): void {
   const mcpServers: Record<string, unknown> = {}
   for (const entry of servers) mcpServers[entry.name] = render(entry)
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, `${JSON.stringify({ mcpServers }, undefined, 2)}\n`, { mode: 0o600 })
-  chmodSync(file, 0o600)
+  // Atomic, and owner-only: the harness child reads this file at boot, and a
+  // partial read there costs the user their MCP servers for that run.
+  writeFileAtomic(file, `${JSON.stringify({ mcpServers }, undefined, 2)}\n`, 0o600)
 }
 
 /** A parsed paste, or the reason it was refused. */

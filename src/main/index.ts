@@ -1447,7 +1447,11 @@ if (!app.requestSingleInstanceLock()) {
     try {
       const stored = loadConfig(CONFIG_PATH)
       if (stored.configured && stored.config.pane !== undefined) {
-        columns.editor = { ...stored.config.pane.editor }
+        // The editor's width is restored but never its open state: the column
+        // exists because a file is in it, and nothing is open at launch. A
+        // stored `true` would put an empty editor on screen offering to be
+        // closed.
+        columns.editor = { width: stored.config.pane.editor.width, open: false }
         columns.files = { ...stored.config.pane.files }
       }
     } catch {

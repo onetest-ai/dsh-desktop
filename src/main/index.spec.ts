@@ -1681,7 +1681,7 @@ describe('the side columns', () => {
     fake.sendIpc('shell:resize-column', 'editor', 700)
     expect(applyLayout).toHaveBeenLastCalledWith(
       fake.views,
-      expect.objectContaining({ editor: expect.objectContaining({ width: 1280 - 30 - 700 - 220 - 6 }) }),
+      expect.objectContaining({ editor: expect.objectContaining({ width: 1280 - 30 - 700 - 220 - 8 }) }),
       expect.any(Boolean),
     )
   })
@@ -1841,14 +1841,17 @@ describe('the side columns', () => {
     expect(updateCheckerMock).not.toHaveBeenCalled()
   })
 
-  it('opens at the widths the last session stored', async () => {
+  // reason: the editor column exists because a file is in it, and nothing is
+  // open at launch. A stored `true` would put an empty editor on screen,
+  // offering to be closed.
+  it('opens at the widths the last session stored, with the editor closed', async () => {
     configResult = {
       configured: true,
       config: { ...STORED, pane: { editor: { width: 600, open: true }, files: { width: 300, open: true } } },
     }
     await bootReady()
     expect(createWindow).toHaveBeenCalledWith({
-      editor: { width: 600, open: true },
+      editor: { width: 600, open: false },
       files: { width: 300, open: true },
     })
   })
