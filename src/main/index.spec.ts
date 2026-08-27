@@ -109,11 +109,15 @@ const fake = vi.hoisted(() => {
 
   const quitEvents: Array<{ preventDefault: () => void; prevented: boolean }> = []
 
-  // Only `on`: `index.ts` registers the divider's send-only channels here,
-  // and `settings-window.ts` — which owns the `handle` channels — is mocked.
-  const ipcHandlers = new Map<string, (event: unknown, ...args: unknown[]) => void>()
+  // `index.ts` registers the window's own channels here: the divider's
+  // send-only ones and the pane's reads. `settings-window.ts` owns its own
+  // and is mocked.
+  const ipcHandlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
   const ipcMain = {
-    on: vi.fn((channel: string, handler: (event: unknown, ...args: unknown[]) => void) => {
+    on: vi.fn((channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => {
+      ipcHandlers.set(channel, handler)
+    }),
+    handle: vi.fn((channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => {
       ipcHandlers.set(channel, handler)
     }),
   }
@@ -287,6 +291,12 @@ vi.mock('./startup-window', () => ({
   pushProgress: vi.fn(),
   closeStartup: vi.fn(),
 }))
+
+const readWorkspacesMock = vi.fn((): unknown[] => [])
+vi.mock('./workspaces', () => ({ readWorkspaces: (...args: unknown[]) => readWorkspacesMock(...(args as [])) }))
+
+const readDirectoryMock = vi.fn(() => [] as unknown[])
+vi.mock('./file-tree', () => ({ readDirectory: (...args: unknown[]) => readDirectoryMock(...(args as [])) }))
 
 const preflightMock = vi.fn(() => ({ ok: true }))
 vi.mock('./preflight', () => ({ preflight: (...args: unknown[]) => preflightMock(...(args as [])) }))
@@ -1669,6 +1679,29 @@ describe('the side pane', () => {
     await bootReady()
     fake.sendIpc('harness:toggle-pane')
     expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ open: true }))
+  })
+
+  // reason: the renderer names the root it wants to read. Without this it
+  // could name any directory on the disk, not just a project the user opened.
+  it('lists a directory only inside a project the harness has opened', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/known', title: 'known', file: '/p/known/.dsh/mcp.json', declared: false, servers: [] },
+    ])
+    await bootReady()
+    await fake.sendIpc('pane:list-directory', '/p/known', '')
+    expect(readDirectoryMock).toHaveBeenCalledWith('/p/known', '')
+
+    readDirectoryMock.mockClear()
+    expect(await fake.sendIpc('pane:list-directory', '/etc', '')).toEqual([])
+    expect(readDirectoryMock).not.toHaveBeenCalled()
+  })
+
+  it('offers the pane the projects the harness has opened', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/known', title: 'known', file: '/p/known/.dsh/mcp.json', declared: false, servers: [] },
+    ])
+    await bootReady()
+    expect(await fake.sendIpc('pane:projects')).toEqual([{ path: '/p/known', title: 'known' }])
   })
 
   it('opens at the width the last session stored', async () => {

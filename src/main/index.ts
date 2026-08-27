@@ -43,6 +43,7 @@ import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
 import { DEFAULT_PANE_WIDTH, applyLayout, createWindow, installMenu, showError, type MainWindow } from './window'
 import { readWorkspaces } from './workspaces'
+import { readDirectory } from './file-tree'
 import type { ServerStatus } from './status'
 
 /** The config lives under `$DSH_HOME` (see `configPath`), beside the harness's own state. */
@@ -92,6 +93,19 @@ function setPane(next: { width?: number; open?: boolean }): void {
   if (next.width !== undefined) paneState.width = next.width
   if (next.open !== undefined) paneState.open = next.open
   if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, paneState)
+}
+
+/**
+ * Whether a directory is one of the projects the harness has opened.
+ *
+ * Every path the pane may read is rooted in one of these. The renderer names
+ * the root it wants, so this is what keeps it to a project the user actually
+ * opened rather than anywhere on the disk.
+ * @param root - the directory the renderer named.
+ * @returns whether it is a known project.
+ */
+function knownProject(root: string): boolean {
+  return readWorkspaces(DSH_HOME).some((workspace) => workspace.path === root)
 }
 
 /**
@@ -1198,6 +1212,15 @@ if (!app.requestSingleInstanceLock()) {
     // From the harness page's own button, through the one call its preload
     // exposes.
     ipcMain.on('harness:toggle-pane', togglePane)
+    // The pane's own reads. Both are rooted in a project the harness has
+    // opened: the renderer names a root, and main refuses one that is not on
+    // that list — the same rule the per-project MCP file follows.
+    ipcMain.handle('pane:projects', () =>
+      readWorkspaces(DSH_HOME).map(({ path, title }) => ({ path, title })),
+    )
+    ipcMain.handle('pane:list-directory', (_event, root: string, relative: string) =>
+      knownProject(root) ? readDirectory(root, relative) : [],
+    )
     // The pane's Web tab: the web view is stacked over the pane's own bounds,
     // so only main can raise or drop it.
     ipcMain.on('pane:show-web-view', (_event, visible: boolean) => {

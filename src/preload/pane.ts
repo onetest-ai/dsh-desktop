@@ -10,4 +10,7 @@ import { contextBridge, ipcRenderer } from 'electron'
  */
 contextBridge.exposeInMainWorld('pane', {
   showWebView: (visible: boolean) => ipcRenderer.send('pane:show-web-view', visible),
+  projects: () => ipcRenderer.invoke('pane:projects'),
+  listDirectory: (root: string, relative: string) => ipcRenderer.invoke('pane:list-directory', root, relative),
+  openFile: (root: string, relative: string) => ipcRenderer.send('pane:open-file', root, relative),
 })

@@ -96,3 +96,55 @@ body {
   margin: 0;
   padding: 0;
 }
+
+#project {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 4px 6px;
+  border: 1px solid var(--pane-line);
+  border-radius: 6px;
+  background: var(--pane-bg);
+  color: var(--pane-fg);
+  font: inherit;
+}
+
+/* Nesting is expressed by each level's own padding rather than by one rule
+   per depth: a tree of unknown depth has no fixed set of levels to style. */
+.tree .tree {
+  padding-left: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--pane-hover);
+}
+
+/* Fixed width so names line up whether or not a row has a twisty. */
+.twisty {
+  flex: none;
+  width: 12px;
+  color: var(--pane-dim);
+  font-size: 11px;
+  line-height: 1;
+  text-align: center;
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
