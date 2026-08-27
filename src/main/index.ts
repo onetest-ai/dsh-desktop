@@ -45,7 +45,8 @@ import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, cr
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
 import { DIVIDER_WIDTH, RAIL_WIDTH, type Columns } from './layout'
-import { serveViewTools, VIEW_SERVER_NAME, type ViewServer } from './view-mcp'
+import { serveViewTools, VIEW_SERVER_NAME, type PageText, type ViewServer } from './view-mcp'
+import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { loadableUrl } from './view-tools'
 import { readTextFile, writeTextFile } from './file-io'
 import { harnessTheme, settingsPath } from './harness-theme'
@@ -186,6 +187,8 @@ async function startViewTools(config: DesktopConfig): Promise<void> {
       openUrl: openUrlInPane,
       showDiff: showDiffInPane,
       selection: readPaneSelection,
+      fetchPage: fetchPageText,
+      readPage: readPageText,
     })
   } catch (error) {
     // A port already taken costs the user the view tools and nothing else:
@@ -193,6 +196,68 @@ async function startViewTools(config: DesktopConfig): Promise<void> {
     console.warn(`dsh-desktop: the view tools could not start: ${(error as Error).message}`)
   }
 }
+
+/**
+ * Load a page in the web view and read it back as text.
+ *
+ * The load is watched rather than raced: `loadURL` resolves when the document
+ * is committed, which is before a page that renders itself has anything to
+ * read. A page that never finishes is reported rather than hung on, since the
+ * agent is waiting on this call.
+ * @param url - the page to load.
+ * @returns the page's text, or why it could not be read.
+ */
+async function fetchPageText(url: string): Promise<PageText> {
+  if (views === undefined || views.window.isDestroyed()) return { ok: false, reason: 'The window is not open.' }
+  openUrlInPane(url)
+  const { webContents } = views.web
+  const loaded = await new Promise<boolean>((resolve) => {
+    const done = (ok: boolean): void => {
+      clearTimeout(timer)
+      webContents.off('did-finish-load', onLoad)
+      webContents.off('did-fail-load', onFail)
+      resolve(ok)
+    }
+    const onLoad = (): void => done(true)
+    const onFail = (): void => done(false)
+    const timer = setTimeout(() => done(false), PAGE_LOAD_TIMEOUT_MS)
+    webContents.on('did-finish-load', onLoad)
+    webContents.on('did-fail-load', onFail)
+  })
+  if (!loaded) return { ok: false, reason: `${url} did not finish loading.` }
+  return await readPageText()
+}
+
+/**
+ * Read whatever the web view is showing.
+ * @returns the page's text, or why it could not be read.
+ */
+async function readPageText(): Promise<PageText> {
+  if (views === undefined || views.window.isDestroyed()) return { ok: false, reason: 'The window is not open.' }
+  const { webContents } = views.web
+  if (webContents.getURL().startsWith(PANE_ORIGIN)) {
+    return { ok: false, reason: 'The browser has no page open yet.' }
+  }
+  try {
+    const page = (await webContents.executeJavaScript(pageTextScript(PAGE_TEXT_LIMIT))) as {
+      title: string
+      url: string
+      text: string
+    }
+    return { ok: true, ...page }
+  } catch (error) {
+    return { ok: false, reason: (error as Error).message }
+  }
+}
+
+/**
+ * How long a page gets to finish loading before the agent is told it did not.
+ *
+ * Long enough for a slow page on a slow connection, short enough that a tool
+ * call does not sit there: a page still loading after this is one the agent
+ * should hear about rather than wait on.
+ */
+const PAGE_LOAD_TIMEOUT_MS = 30_000
 
 /**
  * Tell the browser's address bar where the page is and where it can go.

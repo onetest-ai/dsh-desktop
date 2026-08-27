@@ -16,7 +16,23 @@ export interface ViewDeps {
   showDiff(root: string, relative: string, proposed: string): void
   /** What the user has selected in the editor, or '' when nothing is. */
   selection(): Promise<string>
+  /**
+   * Load a page in the web view and return its readable text.
+   * @param url - the page to load.
+   * @returns the page, or why it could not be read.
+   */
+  fetchPage(url: string): Promise<PageText>
+  /**
+   * Read the page the web view is already showing.
+   * @returns the page, or why it could not be read.
+   */
+  readPage(): Promise<PageText>
 }
+
+/** A page as the agent reads it. */
+export type PageText =
+  | { ok: true; url: string; title: string; text: string }
+  | { ok: false; reason: string }
 
 /** A running view-tools server. */
 export interface ViewServer {
@@ -105,6 +121,35 @@ function buildServer(deps: ViewDeps): McpServer {
       if (found === undefined) return refuse(`${path} is not inside a project the user has open.`)
       deps.showDiff(found.root, found.relative, proposed)
       return done(`Showing the proposed change to ${found.relative}.`)
+    },
+  )
+
+  server.registerTool(
+    'browse_page',
+    {
+      title: 'Read a web page in the desktop browser',
+      description:
+        "Open a URL in the desktop app's browser and read the page as text. Use this to read something on the web: it is a real browser with the user's session, so it renders pages that a plain fetch returns empty, and the user watches it load. This does not automate a site — it does not click, type, or fill forms.",
+      inputSchema: { url: z.string().describe('The http or https URL to read.') },
+    },
+    async ({ url }) => {
+      if (!loadableUrl(url)) return refuse(`${url} is not an http or https URL.`)
+      const page = await deps.fetchPage(url)
+      return page.ok ? done(`# ${page.title}\n${page.url}\n\n${page.text}`) : refuse(page.reason)
+    },
+  )
+
+  server.registerTool(
+    'read_open_page',
+    {
+      title: 'Read the page the desktop browser is showing',
+      description:
+        "Read whatever page the desktop app's browser is currently showing as text — including one the user navigated to themselves. Use `browse_page` to open a URL of your own.",
+      inputSchema: {},
+    },
+    async () => {
+      const page = await deps.readPage()
+      return page.ok ? done(`# ${page.title}\n${page.url}\n\n${page.text}`) : refuse(page.reason)
     },
   )
 

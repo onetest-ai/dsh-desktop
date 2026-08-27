@@ -172,8 +172,12 @@ The agent can drive these views through four tools, served over MCP on `127.0.0.
 | --- | --- |
 | `view_open_file` | Shows a file in the editor. |
 | `view_open_url` | Loads an `http`/`https` page in the Web tab. |
+| `browse_page` | Opens a URL **and reads it back as text** — the agent's way to read the web through a real browser rather than a plain fetch. |
+| `read_open_page` | Reads whatever the browser is showing, including a page you navigated to yourself. |
 | `view_show_diff` | Shows a file beside the text the agent proposes for it, before anything is written. |
 | `view_get_selection` | Reads what you have selected in the editor. |
+
+The browser is a **reading** surface, not an automation one: nothing here clicks, types, or fills forms. That is deliberate — it is the agent's way to fetch web content through a browser that renders JavaScript and carries your session, while driving a site remains Playwright's job. The tool descriptions say so, so the model does not reach for the wrong one.
 
 Every path argument is checked against the projects the harness has opened, and a path outside them is refused with a reason the model can read. Nothing is written to `mcp.json`: the server entry is built per launch, so it cannot linger when the app is not running. Switch the whole thing off on the **MCP** tab.
 
