@@ -80,8 +80,14 @@ export function createWindow(paneState: { width: number; open: boolean }): MainW
 
   const harness = new WebContentsView({
     // The harness Web UI is loaded unmodified, so it runs with node
-    // integration off and context isolation on, and gets no preload.
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    // integration off and context isolation on. Its preload exposes exactly
+    // one no-argument call — toggle this app's pane — which is what lets a
+    // harness-side button reach it; see `src/preload/harness.ts`.
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: join(__dirname, '..', 'preload', 'harness.js'),
+    },
   })
   const pane = new WebContentsView({
     webPreferences: {

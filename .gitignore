@@ -5,3 +5,5 @@ release/
 test-results/
 playwright-report/
 .DS_Store
+plugin/node_modules
+plugin/lib

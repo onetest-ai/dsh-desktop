@@ -1187,6 +1187,9 @@ if (!app.requestSingleInstanceLock()) {
       setPane({ width: width - windowX })
     })
     ipcMain.on('shell:nudge-pane', (_event, delta: number) => setPane({ width: paneState.width + delta }))
+    // From the harness page's own button, through the one call its preload
+    // exposes.
+    ipcMain.on('harness:toggle-pane', togglePane)
     ipcMain.on('shell:commit-pane', () => {
       // The width `layout` settled on, not the one the drag asked for: a
       // stored width the clamp already refused would reopen at the wrong size.

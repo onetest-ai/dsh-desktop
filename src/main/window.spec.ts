@@ -106,13 +106,14 @@ describe('the main window drag region', () => {
 })
 
 describe('the window\'s views', () => {
-  // reason: the harness Web UI is foreign content this app loads unmodified.
-  // A preload there would expose this app's channels to it.
-  it('gives the harness view no preload, and the pane one', async () => {
+  // reason: the harness Web UI is loaded unmodified and hosts other packages'
+  // browser halves, so it must not get the pane's preload — its own exposes
+  // one no-argument call and nothing else.
+  it('gives each view its own preload, the harness the minimal one', async () => {
     const { createWindow } = await import('./window')
     createWindow(CLOSED)
     expect(fake.views).toHaveLength(2)
-    expect(fake.views[0].preload).toBeUndefined()
+    expect(fake.views[0].preload).toMatch(/harness\.js$/)
     expect(fake.views[1].preload).toMatch(/pane\.js$/)
   })
 

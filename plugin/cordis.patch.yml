@@ -1,0 +1,7 @@
+# The @onetest/dsh-desktop-pane bundle patch: one row carrying both halves.
+# The node half exists only so the row resolves; everything this package does
+# happens in the browser half, which the same package's `dsh.client`
+# declaration puts on the roster the modules node half scans.
+- insert:
+    - id: desktop-pane
+      name: '@onetest/dsh-desktop-pane'

@@ -30,7 +30,20 @@ export const PROJECT_MCP_BRIDGE = 'dsh-project-mcp-bridge@0.2.1'
  * pins a concrete version on first save, exactly as it does for a plugin the
  * user typed.
  */
-export const DEFAULT_PLUGIN_SPECS: readonly string[] = [PROJECT_MCP_BRIDGE]
+/**
+ * The harness-side controls for this app's own side pane.
+ *
+ * Its browser half puts a button at the sidebar foot that shows and hides the
+ * pane. The pane can also be toggled from the View menu, so an install that
+ * removes this plugin loses the button and nothing else.
+ *
+ * Pinned like every default: it ships from the same repository as this app
+ * and is expected to move with it, which is exactly why an update should be
+ * a deliberate raise rather than whatever `latest` happens to be.
+ */
+export const DESKTOP_PANE = '@onetest/dsh-desktop-pane@0.1.0'
+
+export const DEFAULT_PLUGIN_SPECS: readonly string[] = [PROJECT_MCP_BRIDGE, DESKTOP_PANE]
 
 /**
  * The defaults generation this build ships.
@@ -39,7 +52,7 @@ export const DEFAULT_PLUGIN_SPECS: readonly string[] = [PROJECT_MCP_BRIDGE]
  * removed is never silently reinstated. Adding a plugin to the default set
  * means raising this number.
  */
-export const DEFAULTS_GENERATION = 1
+export const DEFAULTS_GENERATION = 2
 
 /**
  * Add any default plugin this install has not seen yet.

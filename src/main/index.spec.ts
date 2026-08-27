@@ -1663,6 +1663,14 @@ describe('the side pane', () => {
     expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ open: false }))
   })
 
+  // reason: this is the whole point of the preload on the harness view — a
+  // button contributed into the harness UI has no other way to reach the app.
+  it('toggles from the harness page’s own button', async () => {
+    await bootReady()
+    fake.sendIpc('harness:toggle-pane')
+    expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ open: true }))
+  })
+
   it('opens at the width the last session stored', async () => {
     configResult = {
       configured: true,
