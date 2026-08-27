@@ -2,4 +2,22 @@
 <meta charset="utf-8">
 <title>Pane</title>
 <link rel="stylesheet" href="pane.css">
-<main class="pane" id="pane"></main>
+<main class="pane">
+  <nav class="tabs" role="tablist" aria-label="Side pane">
+    <button type="button" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="true" class="tab">Files</button>
+    <button type="button" role="tab" id="tab-editor" aria-controls="panel-editor" aria-selected="false" tabindex="-1" class="tab">Editor</button>
+    <button type="button" role="tab" id="tab-web" aria-controls="panel-web" aria-selected="false" tabindex="-1" class="tab">Web</button>
+  </nav>
+  <section id="panel-files" role="tabpanel" aria-labelledby="tab-files" class="panel">
+    <p class="empty" id="files-empty">No project open.</p>
+    <ul id="file-tree" class="tree"></ul>
+  </section>
+  <section id="panel-editor" role="tabpanel" aria-labelledby="tab-editor" class="panel" hidden>
+    <p class="empty" id="editor-empty">Nothing open. Pick a file, or let the agent open one.</p>
+    <div id="editor-host" class="editor" hidden></div>
+  </section>
+  <section id="panel-web" role="tabpanel" aria-labelledby="tab-web" class="panel" hidden>
+    <p class="empty" id="web-empty">Nothing loaded. The agent can open a page here.</p>
+  </section>
+</main>
+<script src="pane.js"></script>

@@ -94,6 +94,14 @@ function setPane(next: { width?: number; open?: boolean }): void {
   if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, paneState)
 }
 
+/**
+ * Whether the pane's Web tab is the one showing.
+ *
+ * Held here rather than in the pane page because the web view it controls is
+ * a view of this window, not an element of that page; see Task 6.
+ */
+let webViewVisible = false
+
 /** Show or hide the side pane, storing the choice. */
 function togglePane(): void {
   setPane({ open: !paneState.open })
@@ -1190,6 +1198,12 @@ if (!app.requestSingleInstanceLock()) {
     // From the harness page's own button, through the one call its preload
     // exposes.
     ipcMain.on('harness:toggle-pane', togglePane)
+    // The pane's Web tab: the web view is stacked over the pane's own bounds,
+    // so only main can raise or drop it.
+    ipcMain.on('pane:show-web-view', (_event, visible: boolean) => {
+      webViewVisible = visible === true
+      if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, paneState)
+    })
     ipcMain.on('shell:commit-pane', () => {
       // The width `layout` settled on, not the one the drag asked for: a
       // stored width the clamp already refused would reopen at the wrong size.

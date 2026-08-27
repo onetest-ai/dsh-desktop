@@ -1,7 +1,98 @@
+/*
+ * The pane is this app's own surface beside the harness. It carries the
+ * Settings window's visual language rather than the harness's: it is the same
+ * application speaking, and the divider is what marks the boundary.
+ */
+:root {
+  color-scheme: light dark;
+  --pane-bg: rgb(255, 255, 255);
+  --pane-fg: rgb(28, 28, 30);
+  --pane-dim: rgb(120, 120, 128);
+  --pane-line: rgb(224, 224, 228);
+  --pane-active: rgb(0, 96, 223);
+  --pane-hover: rgba(0, 0, 0, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pane-bg: rgb(30, 30, 32);
+    --pane-fg: rgb(236, 236, 240);
+    --pane-dim: rgb(150, 150, 158);
+    --pane-line: rgb(58, 58, 62);
+    --pane-active: rgb(94, 156, 255);
+    --pane-hover: rgba(255, 255, 255, 0.07);
+  }
+}
+
 html,
 body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: rgb(30, 30, 32);
+  background: var(--pane-bg);
+  color: var(--pane-fg);
+  font: 13px/18px -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* The window's title bar is `hiddenInset`, and the pane reaches the top edge
+   of the window: the tab strip clears the traffic lights' band even though
+   they sit over the harness view, because a maximised window puts them
+   nowhere near this column but a narrow one can. */
+.tabs {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid var(--pane-line);
+}
+
+.tab {
+  padding: 5px 10px 7px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--pane-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tab:hover {
+  background: var(--pane-hover);
+}
+
+.tab[aria-selected='true'] {
+  border-bottom-color: var(--pane-active);
+  color: var(--pane-fg);
+}
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+/* `[hidden]` alone loses to any `display` rule a panel picks up, which is how
+   a hidden panel would keep rendering under the visible one. */
+[hidden] {
+  display: none !important;
+}
+
+.empty {
+  margin: 6px 2px;
+  color: var(--pane-dim);
+}
+
+.tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }

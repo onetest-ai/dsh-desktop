@@ -5,7 +5,9 @@
   "description": "Desktop shell for a local DeepSeek Harness checkout",
   "main": "dist/main/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run build:renderer",
+    "build": "tsc -p tsconfig.json && npm run build:renderer && npm run build:pane",
+    "typecheck:pane": "tsc -p tsconfig.pane.json",
+    "build:pane": "esbuild src/renderer/pane/main.ts --bundle --outfile=dist/renderer/pane.js --format=iife --platform=browser --target=es2022 --log-level=warning",
     "build:renderer": "mkdir -p dist/renderer && cp src/renderer/settings.html src/renderer/settings.css src/renderer/settings.js src/renderer/startup.html src/renderer/startup.js src/renderer/splash.css src/renderer/splash.png src/renderer/shell.html src/renderer/shell.css src/renderer/shell.js src/renderer/pane.html src/renderer/pane.css dist/renderer/",
     "test": "vitest run",
     "start": "npm run build && electron .",
@@ -20,6 +22,7 @@
     "@types/node": "^22.0.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   },
