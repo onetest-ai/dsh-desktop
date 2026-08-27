@@ -380,20 +380,22 @@ body {
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* The file or folder glyph, in the harness's own icon set. Dimmer than the
-   name it labels: the name is what the eye is scanning for. */
+/* The file or folder icon. Files use the vendored vscode-icons set, which is
+   colour-coded by type; the project header beside the tree uses the harness's
+   own monochrome glyph, so this rule serves both. */
 .glyph {
   display: flex;
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 14px;
+  width: 16px;
   color: var(--dsw-alias-label-secondary);
 }
 
-.row:hover .glyph,
-.row[aria-current='true'] .glyph {
-  color: var(--dsw-alias-label-primary);
+.file-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .name {

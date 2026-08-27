@@ -2,9 +2,13 @@
  * Glyphs from the harness's own icon set.
  *
  * Extracted from `@deepseek-ai/dsh-client-ui-primitives`'s `src/icons/index.tsx`
- * — the same `ic_ds_*` set the harness draws its own UI with, so a folder in
- * this app's tree is the folder the harness would have drawn. Every glyph
- * fills with `currentColor`, so colour comes from the vendored theme tokens.
+ * — the same `ic_ds_*` set the harness draws its own UI with, so this app's
+ * chrome is drawn in its vocabulary. Every glyph fills with `currentColor`,
+ * so colour comes from the vendored theme tokens.
+ *
+ * Chrome only. File types are drawn from `vendor/vscode-icons` instead: a
+ * tree is read by extension at a glance, and this set is monochrome with no
+ * per-language glyphs in it.
  *
  * Extracted rather than imported: that package exports React components, and
  * these pages are plain HTML with no React in them. See

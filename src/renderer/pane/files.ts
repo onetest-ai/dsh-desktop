@@ -1,5 +1,5 @@
 import { Tree, type Project, type TreeEntry } from './tree.ts'
-import { fileGlyph } from './file-icon.ts'
+import { fileIcon } from './file-icon.ts'
 import { icon } from './icons.ts'
 import './bridge.ts'
 import { followHarnessTheme } from './theme.ts'
@@ -45,10 +45,7 @@ function drawTree(relative: string, into: HTMLElement): void {
 
     const glyph = document.createElement('span')
     glyph.className = 'glyph'
-    const named = fileGlyph(entry.name, entry.directory, expanded)
-    // Empty rather than absent when there is no glyph: the span holds the
-    // column so every name in the tree starts at the same x.
-    if (named !== undefined) glyph.append(icon(named, 14))
+    glyph.append(fileIcon(entry.name, entry.directory, expanded))
     row.append(glyph)
 
     const name = document.createElement('span')

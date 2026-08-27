@@ -1,44 +1,51 @@
-import { GLYPHS } from './icons.ts'
+import { getIconForFile, getIconForFolder, getIconForOpenFolder } from 'vscode-icons-js'
 
-/** Which glyph a file gets, by what the name says it is. */
-export type FileGlyph = keyof typeof GLYPHS
+/** Where the vendored icons are served from. */
+const ICONS = 'icons'
 
-/**
- * Extensions that get the code glyph.
- *
- * Kept to what this editor actually highlights. Everything unlisted takes no
- * glyph at all rather than a guess: a wrong icon is worse than none, because
- * it is read as information about a file the app has not opened.
- */
-const CODE = new Set([
-  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'html', 'htm', 'css', 'scss', 'less', 'py', 'rb', 'go',
-  'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'hpp', 'cs', 'php', 'sh', 'bash', 'zsh', 'fish',
-  'vue', 'svelte', 'graphql',
-])
-
-/** Extensions that carry structured data rather than code or prose. */
-const DATA = new Set(['json', 'jsonc', 'jsonl', 'yml', 'yaml', 'toml', 'xml', 'csv', 'tsv', 'sql', 'ndjson'])
-
-/** Extensions rendered as prose. */
-const DOCUMENT = new Set(['md', 'markdown', 'txt', 'rst', 'adoc', 'log'])
+/** What the tree falls back to for a file type this app did not vendor an icon for. */
+const FALLBACK = 'default_file.svg'
 
 /**
- * The glyph for one entry in the tree, or undefined when none fits.
+ * The icon file for one entry in the tree.
  *
- * By extension, like the editor's language choice, and for the same reason:
- * the name is all that is known before the file is opened. The glyphs are the
- * harness's own, so a folder here is the folder it would have drawn.
+ * The mapping is vscode-icons', so a `.ts` file gets the icon a VS Code user
+ * already reads as TypeScript. Deliberately not the harness's icon set: that
+ * is a monochrome UI vocabulary with no per-language glyphs in it, and a tree
+ * is read by extension at a glance.
  * @param name - the entry's name.
  * @param directory - whether it is a directory.
  * @param open - whether that directory is expanded.
- * @returns the glyph to draw, or undefined to draw none.
+ * @returns the icon's file name.
  */
-export function fileGlyph(name: string, directory: boolean, open = false): FileGlyph | undefined {
-  if (directory) return open ? 'folderOpen' : 'folderClosed'
-  const dot = name.lastIndexOf('.')
-  const extension = dot <= 0 ? '' : name.slice(dot + 1).toLowerCase()
-  if (CODE.has(extension)) return 'code'
-  if (DATA.has(extension)) return 'data'
-  if (DOCUMENT.has(extension)) return 'document'
-  return undefined
+export function iconFileFor(name: string, directory: boolean, open = false): string {
+  if (directory) return open ? getIconForOpenFolder(name) : getIconForFolder(name)
+  return getIconForFile(name) ?? FALLBACK
+}
+
+/**
+ * An `<img>` showing one entry's icon.
+ *
+ * Served as files rather than inlined: the set is a few dozen SVGs, and an
+ * image the page loads by URL is cached once instead of rebuilt per row.
+ *
+ * A file type whose icon was never vendored falls back rather than showing a
+ * broken image — the mapping knows more file types than this app carries
+ * icons for, and that gap is expected to exist.
+ * @param name - the entry's name.
+ * @param directory - whether it is a directory.
+ * @param open - whether that directory is expanded.
+ * @returns the image element.
+ */
+export function fileIcon(name: string, directory: boolean, open = false): HTMLImageElement {
+  const image = document.createElement('img')
+  image.className = 'file-icon'
+  image.width = 16
+  image.height = 16
+  image.alt = ''
+  image.src = `${ICONS}/${iconFileFor(name, directory, open)}`
+  image.addEventListener('error', () => {
+    if (!image.src.endsWith(FALLBACK)) image.src = `${ICONS}/${FALLBACK}`
+  })
+  return image
 }

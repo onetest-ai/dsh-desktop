@@ -1,45 +1,80 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { fileGlyph } from './file-icon'
-import { GLYPHS } from './icons'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileIcon, iconFileFor } from './file-icon'
 
-describe('fileGlyph', () => {
+/** Whether an icon of that name was vendored. */
+const vendored = (icon: string): boolean =>
+  existsSync(join(import.meta.dirname, '..', '..', '..', 'vendor', 'vscode-icons', 'icons', icon))
+
+describe('iconFileFor', () => {
+  it.each([
+    ['index.ts', 'file_type_typescript.svg'],
+    ['notes.md', 'file_type_markdown.svg'],
+    ['main.py', 'file_type_python.svg'],
+    ['style.css', 'file_type_css.svg'],
+    ['package.json', 'file_type_npm.svg'],
+  ])('gives %s the icon a VS Code user already reads', (name, icon) => {
+    expect(iconFileFor(name, false)).toBe(icon)
+  })
+
   it('opens and closes the folder with the directory', () => {
-    expect(fileGlyph('src', true, false)).toBe('folderClosed')
-    expect(fileGlyph('src', true, true)).toBe('folderOpen')
+    expect(iconFileFor('src', true, false)).not.toBe(iconFileFor('src', true, true))
   })
 
-  it.each(['index.ts', 'app.tsx', 'main.py', 'style.css', 'App.vue'])('gives %s the code glyph', (name) => {
-    expect(fileGlyph(name, false)).toBe('code')
-  })
-
-  it.each(['config.yaml', 'package.json', 'data.csv', 'query.sql'])('gives %s the data glyph', (name) => {
-    expect(fileGlyph(name, false)).toBe('data')
-  })
-
-  it.each(['notes.md', 'readme.txt', 'run.log'])('gives %s the document glyph', (name) => {
-    expect(fileGlyph(name, false)).toBe('document')
-  })
-
-  it('matches the extension whatever its case', () => {
-    expect(fileGlyph('README.MD', false)).toBe('document')
-    expect(fileGlyph('Index.TS', false)).toBe('code')
-  })
-
-  // reason: a wrong icon is worse than none, because it is read as
-  // information about a file the app has not opened.
-  it.each(['archive.zip', 'photo.png', 'Makefile', 'noextension', '.env', 'font.woff2'])(
-    'draws no glyph for %s',
-    (name) => {
-      expect(fileGlyph(name, false)).toBeUndefined()
-    },
-  )
-
-  it('only ever names a glyph that exists', () => {
-    for (const name of ['a.ts', 'b.md', 'c.json', 'dir']) {
-      const glyph = fileGlyph(name, name === 'dir')
-      if (glyph !== undefined) expect(GLYPHS).toHaveProperty(glyph)
+  // reason: the mapping knows more file types than this app carries icons for,
+  // and a name it cannot place must still draw something.
+  it('names an icon for anything at all', () => {
+    for (const name of ['weird.qqq', 'noextension', '.hidden', '']) {
+      expect(iconFileFor(name, false)).toMatch(/\.svg$/)
     }
-    expect(GLYPHS).toHaveProperty(fileGlyph('dir', true) ?? '')
-    expect(GLYPHS).toHaveProperty(fileGlyph('dir', true, true) ?? '')
+  })
+
+  // reason: an icon named but never vendored shows as a broken image, which
+  // is worse than the default one.
+  it.each([
+    'index.ts', 'notes.md', 'main.py', 'style.css', 'package.json', 'app.vue', 'Dockerfile',
+    'photo.png', 'archive.zip', 'a.yml', 'a.sh', 'a.sql', 'a.rs', 'a.go',
+  ])('carries the icon it names for %s', (name) => {
+    expect(vendored(iconFileFor(name, false))).toBe(true)
+  })
+
+  it.each(['src', 'docs', 'node_modules', 'tests'])('carries both folder icons for %s', (name) => {
+    expect(vendored(iconFileFor(name, true, false))).toBe(true)
+    expect(vendored(iconFileFor(name, true, true))).toBe(true)
+  })
+
+  // reason: the mapping knows hundreds of directory names and this app
+  // carries the ones a project actually contains; the rest fall back in the
+  // tree rather than being fetched.
+  it('still names an icon for a directory it carries none for', () => {
+    expect(iconFileFor('unlikely-directory-name', true)).toMatch(/\.svg$/)
+  })
+
+  it('carries the fallback it falls back to', () => {
+    expect(vendored('default_file.svg')).toBe(true)
+  })
+})
+
+describe('fileIcon', () => {
+  it('renders an image pointing at the vendored icon', () => {
+    const image = fileIcon('index.ts', false)
+    expect(image.getAttribute('src')).toBe('icons/file_type_typescript.svg')
+    // Decorative: the name beside it is what a screen reader should read.
+    expect(image.alt).toBe('')
+  })
+
+  it('falls back when the icon it named is missing', () => {
+    const image = fileIcon('weird.qqq', false)
+    image.dispatchEvent(new Event('error'))
+    expect(image.getAttribute('src')).toBe('icons/default_file.svg')
+  })
+
+  it('does not loop when the fallback itself is missing', () => {
+    const image = fileIcon('weird.qqq', false)
+    image.dispatchEvent(new Event('error'))
+    image.dispatchEvent(new Event('error'))
+    expect(image.getAttribute('src')).toBe('icons/default_file.svg')
   })
 })
