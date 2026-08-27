@@ -70,7 +70,26 @@ const fake = vi.hoisted(() => {
   }
   const pane = { getBounds: vi.fn(() => ({ x: 0, y: 0, width: 520, height: 860 })), webContents: { send: vi.fn() } }
   const files = { getBounds: vi.fn(() => ({ x: 0, y: 0, width: 220, height: 860 })) }
-  const views = { window, harness, pane, files }
+  // The browser: `index.ts` drives its navigation and listens for where it
+  // ends up.
+  const web = {
+    getBounds: vi.fn(() => ({ x: 0, y: 0, width: 520, height: 860 })),
+    webContents: {
+      on: vi.fn((name: string, handler: Handler) => {
+        windowHandlers.set(`web:${name}`, [...(windowHandlers.get(`web:${name}`) ?? []), handler])
+      }),
+      loadURL: vi.fn(),
+      reload: vi.fn(),
+      getURL: vi.fn(() => 'https://example.com/'),
+      navigationHistory: {
+        canGoBack: vi.fn(() => false),
+        canGoForward: vi.fn(() => false),
+        goBack: vi.fn(),
+        goForward: vi.fn(),
+      },
+    },
+  }
+  const views = { window, harness, pane, files, web }
 
   const app = {
     requestSingleInstanceLock: vi.fn(() => true),
@@ -136,6 +155,7 @@ const fake = vi.hoisted(() => {
     window,
     views,
     harness,
+    web,
     ipcMain,
     /**
      * Invoke one of the divider's channels, as the window page would.
@@ -178,6 +198,7 @@ vi.mock('./window', () => ({
   applyLayout: (...args: unknown[]) => applyLayout(...(args as [])),
   registerPaneScheme: vi.fn(),
   servePane: vi.fn(),
+  PANE_ORIGIN: 'app://pane',
   DEFAULT_EDITOR_WIDTH: 520,
   DEFAULT_FILES_WIDTH: 220,
   installMenu: (...args: unknown[]) => installMenuMock(...(args as [])),
@@ -1743,6 +1764,41 @@ describe('the side columns', () => {
       expect.any(Boolean),
     )
     expect(writeConfigMock).toHaveBeenCalled()
+  })
+
+  // reason: the address bar is a page in this app; the browser it drives is a
+  // view of the window. Only main can carry one to the other.
+  it('loads what the address bar asks for, and refuses what it should not', async () => {
+    await bootReady()
+    fake.sendIpc('pane:navigate', 'https://example.com')
+    expect(fake.web.webContents.loadURL).toHaveBeenCalledWith('https://example.com')
+
+    fake.web.webContents.loadURL.mockClear()
+    fake.sendIpc('pane:navigate', 'file:///etc/passwd')
+    expect(fake.web.webContents.loadURL).not.toHaveBeenCalled()
+  })
+
+  // reason: the page navigates on its own — a link, a redirect — and a bar
+  // that only updated when asked would show the last address typed.
+  it('reports where the browser went, whoever took it there', async () => {
+    await bootReady()
+    fake.views.pane.webContents.send.mockClear()
+    await fake.emitWindow('web:did-navigate')
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith('pane:web-state', {
+      url: 'https://example.com/',
+      canGoBack: false,
+      canGoForward: false,
+    })
+  })
+
+  // reason: the empty page is this app's own, and its app:// URL is an
+  // address the user can neither use nor go back to.
+  it('shows no address for its own empty page', async () => {
+    await bootReady()
+    fake.web.webContents.getURL.mockReturnValue('app://pane/web.html')
+    fake.views.pane.webContents.send.mockClear()
+    await fake.emitWindow('web:did-navigate')
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith('pane:web-state', expect.objectContaining({ url: '' }))
   })
 
   it('opens at the widths the last session stored', async () => {
