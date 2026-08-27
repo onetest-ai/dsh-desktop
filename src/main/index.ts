@@ -33,7 +33,7 @@ import { preflight } from './preflight'
 import { attributeBootFailure, runtimeFilePaths, writeRuntimeFiles, type AttributionRow } from './runtime-files'
 import { readCachedShellPath, resolveShellPath, runShell, shellPathCachePath, writeCachedShellPath } from './shell-path'
 import type { InstallDeps } from './runtime-install'
-import { dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
+import { composePath, dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
 import { createSettingsHandlers } from './settings-ipc'
 import { openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
@@ -156,6 +156,17 @@ function mcpEnv(config: DesktopConfig): Record<string, string> {
  */
 function configuredMcpServers(): McpServerEntry[] {
   return readMcpConfig(mcpConfigPath(DSH_HOME))
+}
+
+/**
+ * The PATH a probed MCP server should be started with: the same composition
+ * the harness child receives.
+ * @returns the composed PATH.
+ */
+function probePath(): string {
+  const stored = loadConfig(CONFIG_PATH)
+  const extraPath = stored.configured ? stored.config.extraPath : undefined
+  return composePath(process.env.PATH ?? '', extraPath, cachedShellPath())
 }
 
 /**
@@ -328,7 +339,12 @@ const settingsHandlers = createSettingsHandlers({
   writeMcpServers: (servers) => writeMcpConfig(mcpConfigPath(DSH_HOME), servers),
   openMcpConfigFile: () => openConfigFile(mcpConfigPath(DSH_HOME), existsSync, (path) => shell.openPath(path)),
   readMcpPresets: () => loadPresets(shippedPresetsPath(), userPresetsPath(DSH_HOME)),
-  probeMcpServer: (target, onLine) => probes.probe(target, onLine),
+  probeMcpServer: (target, onLine) =>
+    // The probe spawns the server's command directly from this process,
+    // which under a Finder launch has only the system PATH — `npx` and
+    // friends live nowhere in it. It needs exactly the PATH the harness
+    // child is given, or a server that works once mounted fails to probe.
+    probes.probe({ ...target, env: { PATH: probePath(), ...target.env } }, onLine),
   restartHarness: () => restart(),
 })
 

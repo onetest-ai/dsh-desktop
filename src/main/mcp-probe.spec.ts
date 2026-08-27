@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createMcpProber, probeTail, type ProbeTarget } from './mcp-probe'
 
@@ -88,5 +90,33 @@ describe('probeTail', () => {
 
   it('keeps everything when there is less than the limit', () => {
     expect(probeTail(['a'], 5)).toBe('a')
+  })
+})
+
+describe('the PATH a probe runs with', () => {
+  it('finds a command that exists only on the PATH it is given, not on this process one', async () => {
+    // The regression this pins: a Finder-launched app has only the system
+    // PATH, so probing `npx` failed with "spawn npx ENOENT" while the same
+    // server worked once the harness mounted it — the harness child gets the
+    // resolved shell PATH and the probe did not.
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-probe-path-'))
+    const shim = join(dir, 'only-here')
+    writeFileSync(shim, `#!/bin/sh\nexec ${process.execPath} "${FIXTURE}" ok 0\n`)
+    chmodSync(shim, 0o755)
+
+    const madeWithPath = await prober().probe(
+      { command: 'only-here', args: [], env: { PATH: `${dir}:/usr/bin:/bin` } },
+      () => {},
+    )
+    expect(madeWithPath).toEqual({ ok: true, tools: ['alpha', 'beta'] })
+  })
+
+  it('fails the way the bug did when that PATH does not carry the command', async () => {
+    const result = await prober().probe(
+      { command: 'only-here', args: [], env: { PATH: '/usr/bin:/bin' } },
+      () => {},
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toContain('only-here')
   })
 })

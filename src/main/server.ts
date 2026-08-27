@@ -152,12 +152,17 @@ export function dshWebCommand(
  * Duplicates are dropped, keeping each entry's first occurrence, so a
  * resolved PATH that already contains the inherited directories does not
  * produce a `PATH` several kilobytes long.
+ *
+ * Exported because the harness child is not the only process that needs it:
+ * anything this app spawns to reach the user's toolchain — probing a
+ * candidate MCP server, for instance — inherits the same Finder-minimal
+ * PATH and fails the same way without it.
  * @param inherited - the PATH the child would otherwise get.
  * @param extraPath - the user's manual override, if set.
  * @param shellPath - the resolved login-shell PATH, if established.
  * @returns the composed PATH.
  */
-function composePath(inherited: string, extraPath: string | undefined, shellPath: string | undefined): string {
+export function composePath(inherited: string, extraPath: string | undefined, shellPath: string | undefined): string {
   const seen = new Set<string>()
   const entries: string[] = []
   for (const source of [extraPath, shellPath, inherited]) {

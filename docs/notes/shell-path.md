@@ -44,6 +44,12 @@ The override leads because it exists for the case where resolution got it wrong.
 
 A call with nothing to prepend returns the spec untouched rather than a rebuilt one. Deduplication alone changes an ambient PATH that already contains duplicates, and without that guard a caller asking for no change got a materialized environment.
 
+## Everything this app spawns needs it, not just the harness
+
+The composition was first applied only to the harness child, and the gap showed up immediately: probing a candidate MCP server spawns its command from the Electron main process, which under a Finder launch has only the system PATH. `npx` is not there, so a preset that mounts perfectly well once the harness has it failed to probe with `spawn npx ENOENT` — the shell-path cache existed and simply was not read.
+
+`composePath` is exported for that reason. Any process this app starts to reach the user's toolchain gets the same PATH the harness child does: the manual override, then the resolved login-shell PATH, then what was inherited.
+
 ## What did not change
 
 `pnpmPath` and `npmPath` still work and are still honoured. They are now usually unnecessary — the resolved PATH finds the launcher on its own — but removing them is a separate decision with its own migration, and an override that has been correct for a user should not stop being correct because a better mechanism arrived.
