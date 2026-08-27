@@ -1,37 +1,21 @@
 /*
- * The pane is this app's own surface beside the harness. It carries the
- * Settings window's visual language rather than the harness's: it is the same
- * application speaking, and the divider is what marks the boundary.
+ * This app's own surfaces, drawn with the harness's own tokens.
+ *
+ * Every colour here is a `--dsw-alias-*` variable from the vendored token
+ * sheets (see vendor/dsh-theme/README.md), so the pane is not a near-match of
+ * the UI beside it — it is the same palette, under the same names. Nothing in
+ * this file defines a colour of its own.
  */
-:root {
-  color-scheme: light dark;
-  --pane-bg: rgb(255, 255, 255);
-  --pane-fg: rgb(28, 28, 30);
-  --pane-dim: rgb(120, 120, 128);
-  --pane-line: rgb(224, 224, 228);
-  --pane-active: rgb(0, 96, 223);
-  --pane-hover: rgba(0, 0, 0, 0.05);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --pane-bg: rgb(30, 30, 32);
-    --pane-fg: rgb(236, 236, 240);
-    --pane-dim: rgb(150, 150, 158);
-    --pane-line: rgb(58, 58, 62);
-    --pane-active: rgb(94, 156, 255);
-    --pane-hover: rgba(255, 255, 255, 0.07);
-  }
-}
-
 html,
 body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: var(--pane-bg);
-  color: var(--pane-fg);
-  font: 13px/18px -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-family);
+  font-size: 13px;
+  line-height: 18px;
   -webkit-user-select: none;
   cursor: default;
 }
@@ -42,35 +26,74 @@ body {
   height: 100%;
 }
 
-/* The window's title bar is `hiddenInset`, and the pane reaches the top edge
-   of the window: the tab strip clears the traffic lights' band even though
-   they sit over the harness view, because a maximised window puts them
-   nowhere near this column but a narrow one can. */
-.tabs {
+/* The strip the tabs and the files column's picker share, so both columns
+   line their content up at the same height. */
+.tabs,
+.column-head {
   display: flex;
   flex: none;
+  align-items: center;
   gap: 2px;
-  padding: 8px 8px 0;
-  border-bottom: 1px solid var(--pane-line);
+  height: 35px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  box-sizing: border-box;
 }
 
 .tab {
-  padding: 5px 10px 7px;
+  align-self: stretch;
+  padding: 0 10px;
   border: none;
   border-bottom: 2px solid transparent;
   background: transparent;
-  color: var(--pane-dim);
+  color: var(--dsw-alias-label-secondary);
   font: inherit;
   cursor: pointer;
 }
 
 .tab:hover {
-  background: var(--pane-hover);
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .tab[aria-selected='true'] {
-  border-bottom-color: var(--pane-active);
-  color: var(--pane-fg);
+  border-bottom-color: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-label-primary);
+}
+
+.tab-spacer {
+  flex: 1;
+}
+
+/* Closes the column, not a document: with nothing open the column has no
+   reason to take width from the conversation beside it. */
+.tab-close,
+.chrome {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chrome {
+  font-size: 14px;
+}
+
+.tab-close:hover,
+.chrome:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.chrome:disabled {
+  color: var(--dsw-alias-label-tertiary);
+  cursor: default;
 }
 
 .panel {
@@ -88,65 +111,7 @@ body {
 
 .empty {
   margin: 6px 2px;
-  color: var(--pane-dim);
-}
-
-.tree {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-#project {
-  width: 100%;
-  margin-bottom: 8px;
-  padding: 4px 6px;
-  border: 1px solid var(--pane-line);
-  border-radius: 6px;
-  background: var(--pane-bg);
-  color: var(--pane-fg);
-  font: inherit;
-}
-
-/* Nesting is expressed by each level's own padding rather than by one rule
-   per depth: a tree of unknown depth has no fixed set of levels to style. */
-.tree .tree {
-  padding-left: 12px;
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  width: 100%;
-  padding: 2px 4px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.row:hover {
-  background: var(--pane-hover);
-}
-
-/* Fixed width so names line up whether or not a row has a twisty. */
-.twisty {
-  flex: none;
-  width: 12px;
-  color: var(--pane-dim);
-  font-size: 11px;
-  line-height: 1;
-  text-align: center;
-}
-
-.name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
 }
 
 /* The editor panel is the one that does not scroll itself: Monaco owns its
@@ -167,54 +132,13 @@ body {
   flex: none;
   margin: 0;
   padding: 4px 10px;
-  border-top: 1px solid var(--pane-line);
-  color: var(--pane-dim);
+  border-top: 1px solid var(--dsw-alias-border-l2);
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
   font-size: 11px;
   line-height: 16px;
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* Monaco ships its own font-face for control characters; without a size the
-   host collapses before `automaticLayout` measures it. */
-.monaco-editor {
-  position: absolute;
-}
-
-/* The files column has no tabs, so its picker takes the strip's place and
-   lines its bottom edge up with the editor column's. */
-.column-head {
-  flex: none;
-  padding: 8px 8px 7px;
-  border-bottom: 1px solid var(--pane-line);
-}
-
-.column-head #project {
-  margin-bottom: 0;
-}
-
-.tab-spacer {
-  flex: 1;
-}
-
-/* Closes the column, not a document: with nothing open the column has no
-   reason to take width from the conversation beside it. */
-.tab-close {
-  align-self: center;
-  padding: 2px 6px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--pane-dim);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.tab-close:hover {
-  background: var(--pane-hover);
-  color: var(--pane-fg);
 }
 
 /* The web panel holds only the address bar: the page is a view stacked below
@@ -230,43 +154,83 @@ body {
   gap: 4px;
   height: 34px;
   padding: 0 6px;
-  border-bottom: 1px solid var(--pane-line);
-}
-
-.chrome {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--pane-dim);
-  font: inherit;
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.chrome:hover:not(:disabled) {
-  background: var(--pane-hover);
-  color: var(--pane-fg);
-}
-
-.chrome:disabled {
-  opacity: 0.35;
-  cursor: default;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  box-sizing: border-box;
 }
 
 #web-url {
   flex: 1;
   min-width: 0;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid var(--pane-line);
-  border-radius: 11px;
-  background: var(--pane-bg);
-  color: var(--pane-fg);
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
   font: inherit;
   font-size: 12px;
+}
+
+#web-url:focus {
+  border-color: var(--dsw-alias-brand-primary);
+  outline: none;
+}
+
+#project {
+  width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Nesting is expressed by each level's own padding rather than by one rule
+   per depth: a tree of unknown depth has no fixed set of levels to style. */
+.tree .tree {
+  padding-left: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Fixed width so names line up whether or not a row has a twisty. */
+.twisty {
+  flex: none;
+  width: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 1;
+  text-align: center;
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

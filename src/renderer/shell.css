@@ -1,17 +1,22 @@
 /*
- * The window's own page renders only in the gap the harness and pane views
- * leave, so it paints the divider and nothing else. Everywhere else it is
- * covered, which is why the body colour matters only as the flash before the
- * views take their bounds.
+ * The window's own page renders only in the gaps the views leave — the
+ * dividers between the columns, and the rail at the right edge. Every colour
+ * is a `--dsw-alias-*` token from the vendored harness sheets, so the chrome
+ * around the harness matches the harness.
  */
 html,
 body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: rgb(28, 28, 30);
+  background: var(--dsw-alias-bg-base);
+  font-family: var(--dsw-font-family);
   -webkit-user-select: none;
   cursor: default;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 /* Placed by main, which is the only side that knows where the gaps are. Full
@@ -21,32 +26,16 @@ body {
   position: absolute;
   top: 0;
   height: 100%;
-  background: rgb(60, 60, 62);
+  background: var(--dsw-alias-border-l2);
   cursor: col-resize;
-}
-
-[hidden] {
-  display: none !important;
 }
 
 .divider:hover,
 .divider.dragging {
-  background: rgb(90, 130, 220);
+  background: var(--dsw-alias-brand-primary);
 }
 
-@media (prefers-color-scheme: light) {
-  html,
-  body {
-    background: rgb(240, 240, 242);
-  }
-
-  .divider {
-    background: rgb(210, 210, 214);
-  }
-}
-
-/* Placed by main, like the dividers: the strip the views leave at the right
-   edge of the window. */
+/* The strip the views leave at the right edge. */
 .rail {
   position: absolute;
   top: 0;
@@ -59,8 +48,8 @@ body {
      bar puts over the top-left — the rail is at the other edge, but a
      maximised window is not the only shape this takes. */
   padding-top: 34px;
-  background: rgb(36, 36, 38);
-  border-left: 1px solid rgb(60, 60, 62);
+  border-left: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-2);
   box-sizing: border-box;
 }
 
@@ -73,33 +62,18 @@ body {
   background: transparent;
   font-size: 13px;
   line-height: 1;
-  opacity: 0.55;
+  opacity: 0.6;
   cursor: pointer;
 }
 
 .rail-button:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--dsw-alias-interactive-bg-hover);
   opacity: 0.9;
 }
 
 /* A column that is up is marked on its button, so the rail says what the
    window is showing rather than only what it can show. */
 .rail-button[aria-pressed='true'] {
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--dsw-alias-interactive-bg-hover);
   opacity: 1;
-}
-
-@media (prefers-color-scheme: light) {
-  .rail {
-    background: rgb(236, 236, 238);
-    border-left-color: rgb(210, 210, 214);
-  }
-
-  .rail-button:hover {
-    background: rgba(0, 0, 0, 0.08);
-  }
-
-  .rail-button[aria-pressed='true'] {
-    background: rgba(0, 0, 0, 0.13);
-  }
 }

@@ -3,6 +3,10 @@ import { Editor, type Surface } from './editor.ts'
 import { normalizeAddress } from './address.ts'
 import { mountDiff, mountMonaco } from './monaco-surface.ts'
 import './bridge.ts'
+import { followSystemTheme } from './theme.ts'
+
+/** Whether the window is in dark mode, applied to this page as it loads. */
+const dark = followSystemTheme()
 
 /**
  * One element by id.

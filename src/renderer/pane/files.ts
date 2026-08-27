@@ -1,5 +1,10 @@
 import { Tree, type Project, type TreeEntry } from './tree.ts'
 import './bridge.ts'
+import { followSystemTheme } from './theme.ts'
+
+// Applies the harness's dark-mode attribute to this page; the tree draws in
+// tokens, so nothing here needs the answer.
+followSystemTheme()
 
 /**
  * One element by id.

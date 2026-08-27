@@ -1,6 +1,17 @@
-// The dividers, and nothing else: this page is only ever visible in the gaps
+// The dividers and the rail: this page is only ever visible in the gaps
 // between the views. It reports drags to main, which owns the layout — the
 // page has no way to know where the views are.
+
+// The harness keys its tokens off this attribute; see vendor/dsh-theme.
+const dark = matchMedia('(prefers-color-scheme: dark)')
+const applyTheme = (on) => {
+  if (on) document.body.setAttribute('data-ds-dark-theme', '')
+  else document.body.removeAttribute('data-ds-dark-theme')
+}
+applyTheme(dark.matches)
+dark.addEventListener('change', (event) => {
+  applyTheme(event.matches)
+})
 let dragging
 
 /**
