@@ -41,7 +41,7 @@ import { createSettingsHandlers } from './settings-ipc'
 import { openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
-import { createWindow, installMenu, showError } from './window'
+import { DEFAULT_PANE_WIDTH, createWindow, installMenu, showError, type MainWindow } from './window'
 import { readWorkspaces } from './workspaces'
 import type { ServerStatus } from './status'
 
@@ -73,6 +73,10 @@ const CHECK_BINARY_TIMEOUT_MS = 10_000
 const MAX_ISOLATION_ATTEMPTS = 2
 
 let window: BrowserWindow | undefined
+/** The window together with its harness and pane views; undefined before it exists. */
+let views: MainWindow | undefined
+/** The pane's width and whether it is showing. Persisted in the next task. */
+const paneState = { width: DEFAULT_PANE_WIDTH, open: false }
 /** The frameless startup splash, open only until the main window appears. */
 let splash: BrowserWindow | undefined
 /**
@@ -618,7 +622,7 @@ function setStatus(next: ServerStatus, note?: string): void {
  */
 function fail(title: string, detail: string): void {
   setStatus('failed')
-  if (window !== undefined && !window.isDestroyed()) showError(window, title, detail)
+  if (views !== undefined && !views.window.isDestroyed()) showError(views, title, detail)
 }
 
 /**
@@ -717,7 +721,7 @@ async function bootNow(): Promise<void> {
     recordDisabledPlugins(attempt.omitted, [])
     recordClientLinkWarnings(attempt.clientWarnings)
     setStatus('running', attempt.hooksNote)
-    if (window !== undefined && !window.isDestroyed()) void window.loadURL(attempt.handle.url)
+    if (views !== undefined && !views.window.isDestroyed()) void views.harness.webContents.loadURL(attempt.handle.url)
     return
   }
 
@@ -802,7 +806,7 @@ async function bootNow(): Promise<void> {
           .filter((note): note is string => note !== undefined && note !== '')
           .join('; '),
       )
-      if (window !== undefined && !window.isDestroyed()) void window.loadURL(retry.handle.url)
+      if (views !== undefined && !views.window.isDestroyed()) void views.harness.webContents.loadURL(retry.handle.url)
       return
     }
 
@@ -1123,14 +1127,20 @@ if (!app.requestSingleInstanceLock()) {
     // the user removes stays removed.
     ensureDefaultPlugins(DSH_HOME)
     installMenu(showSettings)
-    window = createWindow()
+    views = createWindow(paneState)
+    window = views.window
     // The splash covers the wait before the main window has anything to
     // paint; the moment a real page lands there — the harness URL, or the
     // error pane when boot fails — the splash has said everything it can.
-    window.webContents.on('did-finish-load', () => {
+    views.harness.webContents.on('did-finish-load', () => {
       windowHasContent = true
       closeStartup(splash)
       splash = undefined
+      // The window is created hidden and no longer shows itself on
+      // `ready-to-show`: that event belongs to the window's own page, which
+      // is just the divider and loads immediately, so waiting on it would put
+      // an empty frame on screen before the harness had anything.
+      if (window !== undefined && !window.isDestroyed() && !window.isVisible()) window.show()
       // A deep link, an `activate`, or the hotkey may have asked for the
       // window while it was still empty; that ask is honoured now rather than
       // dropped, which is what raises the window for a cold-start dsh:// link.
@@ -1148,6 +1158,7 @@ if (!app.requestSingleInstanceLock()) {
     })
     window.on('closed', () => {
       window = undefined
+      views = undefined
     })
     tray = createTray({
       toggleWindow,

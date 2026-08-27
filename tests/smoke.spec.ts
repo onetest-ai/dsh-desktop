@@ -118,6 +118,28 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
     // Asked of the main process rather than of Playwright's page handle: the
     // splash is destroyed, and what matters is that no window is left holding
     // it, not how the driver reports that page.
+    // reason: the window is created hidden and no longer shows itself on
+    // `ready-to-show` — that event belongs to the divider page, which loads
+    // immediately. Only the harness view finishing a load may reveal it.
+    await expect
+      .poll(
+        async () =>
+          await app.evaluate(({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows().some((each) => each.getContentSize()[0] > 800 && each.isVisible()),
+          ),
+        { timeout: 30_000 },
+      )
+      .toBe(true)
+
+    // The pane starts closed, so the harness view has the whole window: its
+    // width is the window's own, not a fraction of it.
+    const paneClosed = await app.evaluate(({ BrowserWindow }) => {
+      const [main] = BrowserWindow.getAllWindows().filter((each) => each.getContentSize()[0] > 800)
+      const [width] = main.getContentSize()
+      return main.contentView.children.map((child) => child.getBounds().width === width)
+    })
+    expect(paneClosed).toEqual([true, false])
+
     await expect
       .poll(
         async () =>
@@ -168,6 +190,9 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
           existsSync(join(dist, 'renderer', 'startup.html')) &&
           existsSync(join(dist, 'renderer', 'startup.js')) &&
           existsSync(join(dist, 'renderer', 'splash.css')) &&
+          existsSync(join(dist, 'renderer', 'shell.html')) &&
+          existsSync(join(dist, 'renderer', 'pane.html')) &&
+          existsSync(join(dist, 'preload', 'pane.js')) &&
           existsSync(join(dist, 'renderer', 'splash.png')) &&
           existsSync(join(dist, 'preload', 'startup.js')),
       }

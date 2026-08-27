@@ -54,14 +54,20 @@ const fake = vi.hoisted(() => {
       windowHandlers.set(name, [...(windowHandlers.get(name) ?? []), handler])
       return window
     }),
-    // Only what index.ts subscribes to: the splash is closed when a real page
-    // finishes loading here.
+  }
+
+  // The window's two views. Only what index.ts touches: it loads the harness
+  // URL and the error pane into one, and closes the splash when either
+  // finishes loading.
+  const harness = {
     webContents: {
       on: vi.fn((name: string, handler: Handler) => {
-        windowHandlers.set(`webContents:${name}`, [...(windowHandlers.get(`webContents:${name}`) ?? []), handler])
+        windowHandlers.set(`harness:${name}`, [...(windowHandlers.get(`harness:${name}`) ?? []), handler])
       }),
+      loadURL: vi.fn(),
     },
   }
+  const views = { window, harness, pane: {} }
 
   const app = {
     requestSingleInstanceLock: vi.fn(() => true),
@@ -112,6 +118,8 @@ const fake = vi.hoisted(() => {
   return {
     app,
     window,
+    views,
+    harness,
     globalShortcut,
     shell,
     handlers,
@@ -136,11 +144,12 @@ vi.mock('electron', () => ({
   },
 }))
 
-const createWindow = vi.fn(() => fake.window)
+const createWindow = vi.fn(() => fake.views)
 const showError = vi.fn()
 vi.mock('./window', () => ({
   createWindow: (...args: unknown[]) => createWindow(...(args as [])),
   showError: (...args: unknown[]) => showError(...(args as [])),
+  DEFAULT_PANE_WIDTH: 420,
   installMenu: vi.fn(),
 }))
 
@@ -426,7 +435,7 @@ async function bootReady(): Promise<FakeChild> {
   await settle()
   // The harness URL loading in the window is what the real app reports here,
   // and what closes the splash and un-gates `revealWindow`.
-  await fake.emitWindow('webContents:did-finish-load')
+  await fake.emitWindow('harness:did-finish-load')
   await settle()
   return children[0]
 }
@@ -503,7 +512,7 @@ describe('boot', () => {
   it('loads the harness URL once the child reports ready, marking no plugin disabled', async () => {
     const child = await bootReady()
     expect(child.options.timeoutMs).toBeGreaterThan(0)
-    expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:5000')
+    expect(fake.harness.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:5000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running')
     // A healthy boot marks nothing disabled — the map a later-opened Settings
     // window would read is empty, not merely unset.
@@ -608,7 +617,7 @@ describe('boot', () => {
 
     await bootReady()
 
-    expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:5000')
+    expect(fake.harness.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:5000')
     expect(capturedSettingsDeps?.disabledPlugins()).toEqual({ '@deepseek-ai/dsh-hooks-claude-code': 'not installed yet' })
     expect(setTrayStatus).toHaveBeenLastCalledWith(
       'running',
@@ -623,7 +632,7 @@ describe('boot', () => {
     children[0].failToStart('no URL')
     await settle()
     expect(children[0].stop).toHaveBeenCalled()
-    expect(showError).toHaveBeenCalledWith(fake.window, 'The harness failed to start', expect.stringContaining('no URL'))
+    expect(showError).toHaveBeenCalledWith(fake.views, 'The harness failed to start', expect.stringContaining('no URL'))
     // A correctly configured harness that simply never became ready is not a
     // configuration mistake: reopening Settings here would be noise over a
     // problem it cannot fix.
@@ -634,7 +643,7 @@ describe('boot', () => {
     const child = await bootReady()
     child.exit(9, 'stderr tail')
     await settle()
-    expect(showError).toHaveBeenCalledWith(fake.window, 'The harness exited (code 9)', 'stderr tail')
+    expect(showError).toHaveBeenCalledWith(fake.views, 'The harness exited (code 9)', 'stderr tail')
     expect(setTrayStatus).toHaveBeenLastCalledWith('failed')
     expect(openSettingsMock).not.toHaveBeenCalled()
   })
@@ -647,7 +656,7 @@ describe('configuration-class boot failures', () => {
     // launch and a one-shot stub would be consumed by the first.
     preflightMock.mockReturnValue({ ok: false, message: 'checkout missing' })
     await readyHandler()
-    expect(showError).toHaveBeenCalledWith(fake.window, 'The harness checkout is not ready', 'checkout missing')
+    expect(showError).toHaveBeenCalledWith(fake.views, 'The harness checkout is not ready', 'checkout missing')
     expect(openSettingsMock).toHaveBeenCalled()
     expect(startServer).not.toHaveBeenCalled()
   })
@@ -666,7 +675,7 @@ describe('configuration-class boot failures', () => {
     })
     await readyHandler()
     expect(showError).toHaveBeenCalledWith(
-      fake.window,
+      fake.views,
       'The harness failed to start',
       expect.stringContaining('npm is not on PATH'),
     )
@@ -741,7 +750,7 @@ describe('plugin-caused boot failures', () => {
       expect.any(Function),
       expect.any(Function),
     )
-    expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
+    expect(fake.harness.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining(`${DECK} disabled`))
     expect(showError).not.toHaveBeenCalled()
     expect(openSettingsMock).not.toHaveBeenCalled()
@@ -780,7 +789,7 @@ describe('plugin-caused boot failures', () => {
       expect.any(Function),
       expect.any(Function),
     )
-    expect(fake.window.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
+    expect(fake.harness.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('disabled'))
     expect(capturedSettingsDeps?.disabledPlugins()).toEqual({
       [DECK]: expect.stringContaining('unrelated assertion'),
@@ -799,7 +808,7 @@ describe('plugin-caused boot failures', () => {
     await settle()
 
     expect(startServer).toHaveBeenCalledTimes(1)
-    expect(showError).toHaveBeenCalledWith(fake.window, 'The harness failed to start', expect.stringContaining('no URL'))
+    expect(showError).toHaveBeenCalledWith(fake.views, 'The harness failed to start', expect.stringContaining('no URL'))
     expect(openSettingsMock).not.toHaveBeenCalled()
   })
 
@@ -834,7 +843,7 @@ describe('plugin-caused boot failures', () => {
 
     // 1 primary + MAX_ISOLATION_ATTEMPTS (2) retries = 3 total, never 4.
     expect(startServer).toHaveBeenCalledTimes(3)
-    expect(showError).toHaveBeenCalledWith(fake.window, 'The harness failed to start', expect.stringContaining(THIRD_ENTRY))
+    expect(showError).toHaveBeenCalledWith(fake.views, 'The harness failed to start', expect.stringContaining(THIRD_ENTRY))
     // Non-vacuity: raising the loop's attempt bound (or removing it) makes
     // this fail because a fourth `startServer` call follows, isolating the
     // third plugin too instead of giving up after the bound.
@@ -988,7 +997,7 @@ describe('deep links', () => {
     await vi.waitFor(() => expect(children.length).toBe(1))
     children[0].ready()
     await settle()
-    await fake.emitWindow('webContents:did-finish-load')
+    await fake.emitWindow('harness:did-finish-load')
     await settle()
 
     expect(fake.window.show).toHaveBeenCalled()
@@ -1007,7 +1016,7 @@ describe('deep links', () => {
 
     children[0].ready()
     await settle()
-    await fake.emitWindow('webContents:did-finish-load')
+    await fake.emitWindow('harness:did-finish-load')
     await settle()
     expect(fake.window.show).toHaveBeenCalled()
   })
@@ -1123,7 +1132,7 @@ describe('an unreadable config', () => {
     unreadable()
     await readyHandler()
     expect(showError).toHaveBeenCalledWith(
-      fake.window,
+      fake.views,
       'Configuration problem',
       expect.stringContaining('cannot read'),
     )

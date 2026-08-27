@@ -1,6 +1,7 @@
-import { app, BrowserWindow, Menu, shell } from 'electron'
+import { app, BrowserWindow, Menu, WebContentsView, shell } from 'electron'
 import { join } from 'node:path'
 import { errorPage } from './error-page'
+import { layout } from './layout'
 
 /**
  * CSS injected into the main window's `webContents` to make the top edge
@@ -36,30 +37,68 @@ button, a, input, textarea, select, [role="button"], [contenteditable="true"], [
 }
 `
 
+/** The window and the views it holds. */
+export interface MainWindow {
+  window: BrowserWindow
+  /** Holds the harness Web UI, and the error pane when a boot fails. */
+  harness: WebContentsView
+  /** Holds this app's own file, editor, and web views. */
+  pane: WebContentsView
+}
+
+/** How wide the pane opens the first time, before the user has sized it. */
+export const DEFAULT_PANE_WIDTH = 420
+
 /**
- * Create the single application window.
- * The renderer loads the harness UI unmodified, so it runs with node
- * integration off and context isolation on.
- * @returns the created window.
+ * Create the single application window and the views inside it.
+ *
+ * The window's own page is not the harness: it renders only in the gap
+ * between the two views, where it draws the divider. The harness and the
+ * pane are `WebContentsView`s positioned from here, so the harness Web UI
+ * keeps a whole page to itself — and so foreign content in the pane never
+ * shares a process with it.
+ *
+ * The window is not shown here. It stays hidden until something has finished
+ * loading in the harness view, since an unloaded window paints white; see
+ * `index.ts`'s `did-finish-load` handler.
+ * @param paneState - the pane's stored width and whether it starts open.
+ * @returns the window and its two views.
  */
-export function createWindow(): BrowserWindow {
+export function createWindow(paneState: { width: number; open: boolean }): MainWindow {
   const window = new BrowserWindow({
     width: 1280,
     height: 860,
     show: false,
     titleBarStyle: 'hiddenInset',
-    // No preload: this window only ever holds harness pages and the error
-    // pane, and the startup surface has a window of its own.
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: join(__dirname, '..', 'preload', 'shell.js'),
     },
   })
+  void window.loadFile(join(__dirname, '..', 'renderer', 'shell.html'))
 
-  window.once('ready-to-show', () => window.show())
+  const harness = new WebContentsView({
+    // The harness Web UI is loaded unmodified, so it runs with node
+    // integration off and context isolation on, and gets no preload.
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  })
+  const pane = new WebContentsView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: join(__dirname, '..', 'preload', 'pane.js'),
+    },
+  })
+  window.contentView.addChildView(harness)
+  window.contentView.addChildView(pane)
+  void pane.webContents.loadFile(join(__dirname, '..', 'renderer', 'pane.html'))
+
+  applyLayout({ window, harness, pane }, paneState)
+  window.on('resize', () => applyLayout({ window, harness, pane }, paneState))
 
   // Anything targeting a new window is an external link; hand it to the browser.
-  window.webContents.setWindowOpenHandler(({ url }) => {
+  harness.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)
     return { action: 'deny' }
   })
@@ -69,22 +108,41 @@ export function createWindow(): BrowserWindow {
   // Re-run on every `dom-ready` (the harness URL and, on failure, the error
   // page loaded by `showError`) since a fresh document has no memory of a
   // prior `insertCSS` call.
-  window.webContents.on('dom-ready', () => {
-    void window.webContents.insertCSS(DRAG_REGION_CSS)
+  harness.webContents.on('dom-ready', () => {
+    void harness.webContents.insertCSS(DRAG_REGION_CSS)
   })
 
-  return window
+  return { window, harness, pane }
 }
 
 /**
- * Replace the window contents with a failure pane.
- * @param window - the application window.
+ * Size the views to the window's current content area.
+ *
+ * Called on every resize and on every pane change: `WebContentsView` has no
+ * layout of its own, so nothing moves unless this does it.
+ * @param views - the window and its views.
+ * @param paneState - the pane's width and whether it is showing.
+ */
+export function applyLayout(views: MainWindow, paneState: { width: number; open: boolean }): void {
+  if (views.window.isDestroyed()) return
+  const [width, height] = views.window.getContentSize()
+  const places = layout({ width, height }, paneState)
+  views.harness.setBounds(places.harness)
+  views.pane.setBounds(places.pane)
+  // A closed pane is given no bounds to render in rather than being detached:
+  // it keeps whatever it was showing, so reopening costs no reload.
+  views.pane.setVisible(paneState.open)
+}
+
+/**
+ * Replace the harness view's contents with a failure pane.
+ * @param views - the window and its views.
  * @param title - short failure summary.
  * @param detail - remedy text or captured stderr.
  */
-export function showError(window: BrowserWindow, title: string, detail: string): void {
-  void window.loadURL(errorPage(title, detail))
-  if (!window.isVisible()) window.show()
+export function showError(views: MainWindow, title: string, detail: string): void {
+  void views.harness.webContents.loadURL(errorPage(title, detail))
+  if (!views.window.isVisible()) views.window.show()
 }
 
 /**

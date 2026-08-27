@@ -1,0 +1,9 @@
+/* The window's own page shows only through the gap the two views leave, so
+   it paints the divider and nothing else. */
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: rgb(60, 60, 62);
+}
