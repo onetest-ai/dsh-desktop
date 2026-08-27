@@ -1,46 +1,32 @@
-/* Tokens mirrored from the harness's own design platform
- * (packages/client/ui-theme/src/styles/design-platform.css) so this window
- * reads as part of the same app. The harness switches theme via a body
- * attribute it controls; this window follows the system instead, since it
- * runs before any harness is necessarily up. */
+/*
+ * This window's palette, expressed in the harness's own tokens (vendored; see
+ * vendor/dsh-theme/README.md) rather than mirrored by hand. Every rule below
+ * keeps using these names, so the mapping lives in one place.
+ *
+ * The theme is not read from the system: the harness follows its own
+ * Appearance setting, and a Settings window that followed the machine would
+ * be light beside a dark harness. Main resolves which applies and pushes it;
+ * see `followHarnessTheme`.
+ */
 :root {
-  --bg: rgb(255, 255, 255);
-  --surface: rgb(235, 238, 242);
-  --surface-hover: rgb(225, 229, 238);
-  --input-fill: rgb(255, 255, 255);
-  --label: rgb(15, 17, 21);
-  --label-secondary: rgb(97, 102, 107);
-  --border: rgba(0, 0, 0, 0.1);
-  --border-strong: rgba(0, 0, 0, 0.16);
-  --accent: rgb(65, 118, 230);
-  --primary-fill: rgb(15, 17, 21);
-  --primary-text: rgb(255, 255, 255);
-  --danger: rgb(199, 58, 58);
-  --ok: rgb(38, 128, 74);
+  --bg: var(--dsw-alias-bg-base);
+  --surface: var(--dsw-alias-markdown-inline-code);
+  --surface-hover: var(--dsw-alias-interactive-bg-hover-solid);
+  --input-fill: var(--dsw-alias-bg-layer-3);
+  --label: var(--dsw-alias-label-primary);
+  --label-secondary: var(--dsw-alias-label-secondary);
+  --border: var(--dsw-alias-border-l2);
+  --border-strong: var(--dsw-alias-border-l3);
+  --accent: var(--dsw-alias-state-business-primary);
+  --primary-fill: var(--dsw-alias-button-primary-fill);
+  --primary-text: var(--dsw-alias-label-primary-inverted);
+  --danger: var(--dsw-alias-state-error-primary);
+  --ok: var(--dsw-alias-state-success-primary);
   /* A third status tone for "this needs a setup step", distinct from both
      --danger (a genuine failure) and --ok (working correctly) — an
-     unconfigured plugin is neither. Amber reads as "action needed", not
-     "broken", in both color schemes. */
-  --setup: rgb(150, 96, 12);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: rgb(21, 21, 23);
-    --surface: rgb(44, 44, 46);
-    --surface-hover: rgb(53, 54, 56);
-    --input-fill: rgb(53, 54, 56);
-    --label: rgb(249, 250, 251);
-    --label-secondary: rgb(207, 211, 214);
-    --border: rgba(255, 255, 255, 0.12);
-    --border-strong: rgba(255, 255, 255, 0.2);
-    --accent: rgb(86, 134, 254);
-    --primary-fill: rgb(249, 250, 251);
-    --primary-text: rgb(15, 17, 21);
-    --danger: rgb(255, 138, 138);
-    --ok: rgb(126, 214, 160);
-    --setup: rgb(224, 168, 62);
-  }
+     unconfigured plugin is neither. The harness's own warn label reads as
+     "action needed" rather than "broken", in both themes. */
+  --setup: var(--dsw-alias-state-warn-label);
 }
 
 /* Author styles beat the UA sheet, so a grid/flex rule would otherwise

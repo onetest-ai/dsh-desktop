@@ -55,6 +55,10 @@ contextBridge.exposeInMainWorld('settings', {
   saveMcpServers: (servers: unknown) => ipcRenderer.invoke('settings:save-mcp-servers', servers),
   pasteMcpBlock: (text: string) => ipcRenderer.invoke('settings:paste-mcp-block', text),
   openMcpConfigFile: () => ipcRenderer.invoke('settings:open-mcp-config-file'),
+  askTheme: () => ipcRenderer.send('theme:ask'),
+  onTheme: (listener: (dark: boolean) => void) => {
+    ipcRenderer.on('theme', (_event, dark: boolean) => listener(dark))
+  },
   readWorkspaces: () => ipcRenderer.invoke('settings:read-workspaces'),
   openProjectMcpFile: (file: string) => ipcRenderer.invoke('settings:open-project-mcp-file', file),
   saveProjectMcpServers: (file: string, servers: unknown) =>

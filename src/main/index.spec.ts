@@ -255,6 +255,7 @@ const writeConfigMock = vi.fn()
 vi.mock('./config', () => ({
   loadConfig: (...args: unknown[]) => loadConfigMock(...(args as [])),
   writeConfig: (...args: unknown[]) => writeConfigMock(...(args as [])),
+  DEFAULT_VIEW_TOOLS_PORT: 43118,
 }))
 
 /** `createSettingsHandlers` has its own tests; here it only needs to exist. */
@@ -293,6 +294,9 @@ const openSettingsMock = vi.fn((_handlers: unknown, onClosed: () => void) => {
 })
 vi.mock('./settings-window', () => ({
   openSettings: (...args: unknown[]) => openSettingsMock(...(args as [unknown, () => void])),
+  // The settings window is told the theme like every other page of this
+  // app's; no window is open in these tests.
+  settingsContents: () => undefined,
 }))
 
 /** Invoke the settings window's close callback, as the real window does on `closed`. */
@@ -338,6 +342,14 @@ vi.mock('./startup-window', () => ({
   closeStartup: vi.fn(),
 }))
 
+// The real one binds a loopback port; `view-mcp.spec.ts` covers it against a
+// real server. Here it only has to resolve, or the awaited boot never runs.
+const serveViewToolsMock = vi.fn(async () => ({ port: 43118, close: async () => {} }))
+vi.mock('./view-mcp', () => ({
+  serveViewTools: (...args: unknown[]) => serveViewToolsMock(...(args as [])),
+  VIEW_SERVER_NAME: 'desktop-views',
+}))
+
 const harnessThemeMock = vi.fn((): string => 'system')
 vi.mock('./harness-theme', () => ({
   harnessTheme: (...args: unknown[]) => harnessThemeMock(...(args as [])),
@@ -345,7 +357,10 @@ vi.mock('./harness-theme', () => ({
 }))
 
 const readWorkspacesMock = vi.fn((): unknown[] => [])
-vi.mock('./workspaces', () => ({ readWorkspaces: (...args: unknown[]) => readWorkspacesMock(...(args as [])) }))
+vi.mock('./workspaces', () => ({
+  readWorkspaces: (...args: unknown[]) => readWorkspacesMock(...(args as [])),
+  workspacesPath: (home: string) => `${home}/storages/workspace.json`,
+}))
 
 const readDirectoryMock = vi.fn(() => [] as unknown[])
 vi.mock('./file-tree', () => ({ readDirectory: (...args: unknown[]) => readDirectoryMock(...(args as [])) }))
@@ -1477,9 +1492,21 @@ describe('MCP servers at boot', () => {
     expect(pluginStatusMock.mock.calls.some((call) => (call[2] as { spec: string }).spec === MCP_CLIENT)).toBe(false)
   })
 
-  it('does not resolve it when every server is disabled', async () => {
+  // reason: this app's own view tools are themselves a server on that client,
+  // so one is active even when every configured server is off.
+  it('still resolves it for the view tools when every configured server is disabled', async () => {
     withServers({ tavily: { type: 'http', url: 'https://mcp.tavily.com/mcp/', disabled: true } })
     withSwitch(true)
+    await bootReady()
+    expect(pluginStatusMock.mock.calls.some((call) => (call[2] as { spec: string }).spec === MCP_CLIENT)).toBe(true)
+  })
+
+  // reason: the view tools are MCP tools. The master switch turns off the
+  // client that serves them, and saying otherwise would make "no server is
+  // contacted" untrue.
+  it('resolves nothing when the master switch is off, view tools included', async () => {
+    withServers({ tavily: { type: 'http', url: 'https://mcp.tavily.com/mcp/' } })
+    withSwitch(false)
     await bootReady()
     expect(pluginStatusMock.mock.calls.some((call) => (call[2] as { spec: string }).spec === MCP_CLIENT)).toBe(false)
   })
@@ -1492,7 +1519,8 @@ describe('MCP servers at boot', () => {
     withSwitch(true)
     await bootReady()
     const rows = declaredPatchResolver()({ package: MCP_CLIENT, packageDir: '/tmp/mcp' }) as { id: string; name: string }[]
-    expect(rows.map((row) => row.id)).toEqual(['mcp-tavily', 'mcp-playwright'])
+    // This app's own view tools ride the same client, so they are a row too.
+    expect(rows.map((row) => row.id)).toEqual(['mcp-tavily', 'mcp-playwright', 'mcp-desktop-views'])
     expect(new Set(rows.map((row) => row.name))).toEqual(new Set([MCP_CLIENT]))
   })
 

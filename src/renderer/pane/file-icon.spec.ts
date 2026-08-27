@@ -3,6 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileIcon, iconFileFor } from './file-icon'
+// Each generated module exports one named table; the names differ per file.
+import { FileNamesToIcon } from 'vscode-icons-js/dist/generated/FileNamesToIcon.js'
+import { FileExtensions1ToIcon } from 'vscode-icons-js/dist/generated/FileExtensions1ToIcon.js'
+import { FileExtensions2ToIcon } from 'vscode-icons-js/dist/generated/FileExtensions2ToIcon.js'
+import { LanguagesToIcon } from 'vscode-icons-js/dist/generated/LanguagesToIcon.js'
+import { FolderNamesToIcon } from 'vscode-icons-js/dist/generated/FolderNamesToIcon.js'
 
 /** Whether an icon of that name was vendored. */
 const vendored = (icon: string): boolean =>
@@ -29,6 +35,32 @@ describe('iconFileFor', () => {
     for (const name of ['weird.qqq', 'noextension', '.hidden', '']) {
       expect(iconFileFor(name, false)).toMatch(/\.svg$/)
     }
+  })
+
+  // reason: the point of vendoring the whole set is that the mapping and the
+  // icons agree. A name the mapping produces with no icon behind it is a
+  // fallback the user sees as a wrong icon.
+  it('carries an icon for every name the mapping can produce', () => {
+    const named = new Set<string>()
+    for (const table of [FileNamesToIcon, FileExtensions1ToIcon, FileExtensions2ToIcon, LanguagesToIcon]) {
+      for (const value of Object.values(table)) if (typeof value === 'string') named.add(value)
+    }
+    // Folders name both a closed and an opened icon.
+    for (const value of Object.values(FolderNamesToIcon)) {
+      if (typeof value !== 'string') continue
+      named.add(value)
+      named.add(value.replace(/\.svg$/, '_opened.svg'))
+    }
+    const missing = [...named].filter((icon) => !vendored(icon)).sort()
+    // The mapping package and the icon set are versioned separately, and
+    // these three are names the older mapping still produces for icons the
+    // newer set renamed or dropped. They fall back, which is what the
+    // fallback is for — but the list must not quietly grow, which is what
+    // this pins.
+    expect(missing).toEqual(['file_type_light_zeit.svg', 'file_type_makefile.svg', 'file_type_webp.svg'])
+    // A guard against the tables being read wrongly and the check passing on
+    // an empty set.
+    expect(named.size).toBeGreaterThan(500)
   })
 
   // reason: an icon named but never vendored shows as a broken image, which

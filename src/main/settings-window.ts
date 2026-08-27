@@ -12,6 +12,18 @@ function isOpen(): boolean {
 }
 
 /**
+ * The settings window's page, when one is open.
+ *
+ * Exposed so main can push it what every one of this app's own pages needs —
+ * the theme the harness is set to — without holding a second reference to the
+ * window this module owns.
+ * @returns its `webContents`, or undefined when no settings window is open.
+ */
+export function settingsContents(): WebContents | undefined {
+  return isOpen() && settingsWindow !== undefined ? settingsWindow.webContents : undefined
+}
+
+/**
  * Push one value back over a receive-only channel to the renderer that started
  * the operation, tolerating one that has since closed.
  *

@@ -1572,4 +1572,13 @@ window.settings.onPluginUpdateAvailable((pkg, latest) => {
   renderPluginRows()
 })
 
+// The harness owns the light/dark choice and main resolves it; this window
+// follows rather than reading the system, which would be light beside a dark
+// harness. The attribute is what the vendored token sheets key on.
+window.settings.onTheme((dark) => {
+  if (dark) document.body.setAttribute('data-ds-dark-theme', '')
+  else document.body.removeAttribute('data-ds-dark-theme')
+})
+window.settings.askTheme()
+
 void load()

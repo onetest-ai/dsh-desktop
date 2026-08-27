@@ -38,7 +38,7 @@ import { readCachedShellPath, resolveShellPath, runShell, shellPathCachePath, wr
 import type { InstallDeps } from './runtime-install'
 import { composePath, dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
 import { createSettingsHandlers } from './settings-ipc'
-import { openSettings } from './settings-window'
+import { settingsContents, openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
 import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, createWindow, installMenu, registerPaneScheme, servePane, showError, type MainWindow } from './window'
@@ -360,7 +360,13 @@ function pushTheme(): void {
   // page that has not declared `color-scheme` is told light however the OS is
   // set. `nativeTheme` is the machine's own answer.
   const dark = preference === 'dark' || (preference === 'system' && nativeTheme.shouldUseDarkColors)
-  for (const target of [views.window.webContents, views.pane.webContents, views.files.webContents]) {
+  const settings = settingsContents()
+  for (const target of [
+    views.window.webContents,
+    views.pane.webContents,
+    views.files.webContents,
+    ...(settings === undefined ? [] : [settings]),
+  ]) {
     target.send('theme', dark)
   }
 }
@@ -531,6 +537,10 @@ function configuredMcpServers(): McpServerEntry[] {
  * @returns the entry, or nothing when the tools are switched off or not up.
  */
 function viewToolsEntry(): McpServerEntry[] {
+  // These are MCP tools, served to the harness's MCP client — so the master
+  // switch governs them as it governs every other server. Their own switch
+  // decides whether they are offered at all; that one decides whether
+  // anything is.
   if (viewServer === undefined) return []
   return [
     {

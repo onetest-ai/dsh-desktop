@@ -128,6 +128,7 @@ interface FakeElement {
   append(child: FakeElement): void
   addEventListener(name: string, handler: (event?: unknown) => unknown): void
   setAttribute(name: string, value: string): void
+  removeAttribute(name: string): void
   getAttribute(name: string): string | null
   attributes: Map<string, string>
   listeners: Map<string, (event?: unknown) => unknown>
@@ -182,6 +183,7 @@ function element(id: string): FakeElement {
     addEventListener: (name: string, handler: (event?: unknown) => unknown) => listeners.set(name, handler),
     attributes,
     setAttribute: (name: string, value: string) => attributes.set(name, value),
+    removeAttribute: (name: string) => attributes.delete(name),
     getAttribute: (name: string) => attributes.get(name) ?? null,
     focused: false,
     focus() {
@@ -395,7 +397,10 @@ async function load(
   })
 
   let createdCount = 0
+  // The page's `<body>`, which carries the harness's dark-theme attribute.
+  const body = element('__body')
   const document = {
+    body,
     getElementById: (id: string) => elements.get(id) ?? null,
     createElement: (tagName: string) => {
       createdCount += 1
@@ -414,6 +419,7 @@ async function load(
   }
 
   let progressListener: ((line: string) => void) | undefined
+  let themeListener: ((dark: boolean) => void) | undefined
   let updateListener: ((latest: string) => void) | undefined
   let pluginUpdateListener: ((pkg: string, latest: string) => void) | undefined
   const acceptPluginUpdateCalls: Array<[string, string]> = []
@@ -487,6 +493,11 @@ async function load(
       return { ok: true, servers: mcpServerStore }
     }),
     openMcpConfigFile: vi.fn(async () => ({ ok: true }) as const),
+    // The window follows the harness's theme, pushed by main.
+    askTheme: vi.fn(),
+    onTheme: vi.fn((listener: (dark: boolean) => void) => {
+      themeListener = listener
+    }),
     readWorkspaces: vi.fn(async () => initialWorkspaces ?? []),
     saveProjectMcpServers: vi.fn(async (file: string, servers: Record<string, unknown>[]) => {
       saveProjectMcpServersCalls.push([file, servers])
@@ -591,6 +602,8 @@ async function load(
 
   return {
     elements,
+    body,
+    settings,
     save: async () => {
       await elements.get('save')?.listeners.get('click')?.()
     },
@@ -663,6 +676,11 @@ async function load(
     mcpPresetNote: () => elements.get('mcp-preset-note')?.textContent,
     saveMcpServersCalls,
     pasteMcpBlockCalls,
+    /**
+     * Push a theme, as main does when the harness's Appearance changes.
+     * @param dark - whether dark now applies.
+     */
+    pushTheme: (dark: boolean) => themeListener?.(dark),
     openProjectMcpFileCalls,
     saveProjectMcpServersCalls,
     pasteProjectMcpBlockCalls,
@@ -2148,5 +2166,22 @@ describe('the view tools switch', () => {
     box.checked = false
     await renderer.save()
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ viewTools: false }))
+  })
+})
+
+describe('the window and the harness theme', () => {
+  // reason: the harness follows its own Appearance setting, so a window that
+  // read the system would be light beside a dark harness.
+  it('applies the theme main pushes, and takes it away again', async () => {
+    const renderer = await load(async () => ({ ok: true }))
+    renderer.pushTheme(true)
+    expect(renderer.body.attributes.get('data-ds-dark-theme')).toBe('')
+    renderer.pushTheme(false)
+    expect(renderer.body.attributes.get('data-ds-dark-theme')).toBeUndefined()
+  })
+
+  it('asks for the theme as it loads, since main cannot know when it is ready', async () => {
+    const renderer = await load(async () => ({ ok: true }))
+    expect(renderer.settings.askTheme).toHaveBeenCalled()
   })
 })

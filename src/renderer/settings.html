@@ -1,6 +1,9 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>Settings</title>
+<!-- The harness's own tokens, vendored; see vendor/dsh-theme/README.md. -->
+<link rel="stylesheet" href="theme/base.css">
+<link rel="stylesheet" href="theme/design-platform.css">
 <link rel="stylesheet" href="settings.css">
 <div class="titlebar" aria-hidden="true"></div>
 <header class="chrome">
@@ -97,7 +100,7 @@
     <p class="group-label" id="view-tools-label">This app's own views</p>
     <section class="group group-flat" aria-labelledby="view-tools-label">
       <label class="mcp-master"><input type="checkbox" id="view-tools"> Let the agent open files and pages in the side pane</label>
-      <p class="hint">Adds four tools the agent can call: show a file in the editor, open a page in the Web tab, show a change it proposes before making it, and read what you have selected. Served on this machine only, and only while the app is running — nothing is written to <code>mcp.json</code>.</p>
+      <p class="hint">Adds four tools the agent can call: show a file in the editor, open a page in the Web tab, show a change it proposes before making it, and read what you have selected. Served on this machine only, and only while the app is running — nothing is written to <code>mcp.json</code>. They reach the agent over MCP, so <strong>Connect to MCP servers</strong> above must be on.</p>
     </section>
 
     <p class="group-label" id="mcp-add-label">Add a server</p>
