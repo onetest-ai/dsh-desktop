@@ -9,6 +9,10 @@ import { contextBridge, ipcRenderer } from 'electron'
  * the two toggles are the same channels the harness page's own buttons use.
  */
 contextBridge.exposeInMainWorld('shell', {
+  askTheme: () => ipcRenderer.send('theme:ask'),
+  onTheme: (listener: (preference: string) => void) => {
+    ipcRenderer.on('theme', (_event, preference: string) => listener(preference))
+  },
   resizeColumn: (column: string, windowX: number) => ipcRenderer.send('shell:resize-column', column, windowX),
   nudgeColumn: (column: string, delta: number) => ipcRenderer.send('shell:nudge-column', column, delta),
   commitColumns: () => ipcRenderer.send('shell:commit-columns'),

@@ -9,6 +9,10 @@ import { contextBridge, ipcRenderer } from 'electron'
  * main roots each one in a project the harness has opened.
  */
 contextBridge.exposeInMainWorld('pane', {
+  askTheme: () => ipcRenderer.send('theme:ask'),
+  onTheme: (listener: (preference: string) => void) => {
+    ipcRenderer.on('theme', (_event, preference: string) => listener(preference))
+  },
   showWebView: (visible: boolean) => ipcRenderer.send('pane:show-web-view', visible),
   projects: () => ipcRenderer.invoke('pane:projects'),
   listDirectory: (root: string, relative: string) => ipcRenderer.invoke('pane:list-directory', root, relative),

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, shell } from 'electron'
-import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, rmSync, watch, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 import { loadDeclaredPatchRows } from './bundle-patch'
 import { checkBinaries } from './check-binaries'
@@ -48,6 +48,7 @@ import { DIVIDER_WIDTH, RAIL_WIDTH, type Columns } from './layout'
 import { serveViewTools, VIEW_SERVER_NAME, type ViewServer } from './view-mcp'
 import { loadableUrl } from './view-tools'
 import { readTextFile, writeTextFile } from './file-io'
+import { harnessTheme, settingsPath } from './harness-theme'
 import type { ServerStatus } from './status'
 
 /** The config lives under `$DSH_HOME` (see `configPath`), beside the harness's own state. */
@@ -159,6 +160,9 @@ function storeColumns(): void {
  */
 let webViewVisible = false
 
+/** Watches the harness's settings document for a theme change; closed on quit. */
+let themeWatcher: FSWatcher | undefined
+
 /** This app's own MCP server, serving the view tools; undefined when switched off. */
 let viewServer: ViewServer | undefined
 
@@ -253,6 +257,41 @@ async function readPaneSelection(): Promise<string> {
     // the honest answer either way.
     console.warn(`dsh-desktop: the editor selection could not be read: ${(error as Error).message}`)
     return ''
+  }
+}
+
+/**
+ * Tell this app's own pages which theme to draw in.
+ *
+ * The harness owns the setting — its Appearance row writes it — so every
+ * surface here follows that document rather than offering a second control
+ * for the same thing. `system` is passed through as such: only the page knows
+ * what the OS is currently showing.
+ */
+function pushTheme(): void {
+  if (views === undefined || views.window.isDestroyed()) return
+  const preference = harnessTheme(DSH_HOME)
+  for (const target of [views.window.webContents, views.pane.webContents, views.files.webContents]) {
+    target.send('theme', preference)
+  }
+}
+
+/**
+ * Follow the harness's theme for as long as the app runs.
+ *
+ * Watched rather than read once: the setting changes in the harness's own UI,
+ * and a pane that only matched at launch would drift the moment someone used
+ * that control.
+ */
+function watchTheme(): void {
+  try {
+    themeWatcher = watch(settingsPath(DSH_HOME), { persistent: false }, () => {
+      pushTheme()
+    })
+  } catch (error) {
+    // No settings document yet, or a home this app may not watch: the pages
+    // keep whatever they were given, which is the harness's default.
+    console.warn(`dsh-desktop: the harness theme could not be followed: ${(error as Error).message}`)
   }
 }
 
@@ -1261,6 +1300,8 @@ async function shutdown(): Promise<void> {
   // startup has to take it down itself.
   closeStartup(splash)
   splash = undefined
+  themeWatcher?.close()
+  themeWatcher = undefined
   // The install child is reaped first and unconditionally: it is in neither
   // the lifecycle chain nor `child`, so nothing below would ever find it, and
   // an unreaped `npm` keeps writing into $DSH_HOME after Electron is gone.
@@ -1472,6 +1513,13 @@ if (!app.requestSingleInstanceLock()) {
       webViewVisible = visible === true
       if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, columns, webViewVisible)
     })
+    // Each page asks for the theme as it loads: main cannot know when a page
+    // is ready to be told, and a page that missed the push would draw in the
+    // wrong one until something else changed.
+    ipcMain.on('theme:ask', () => {
+      pushTheme()
+    })
+    watchTheme()
     // The splash covers the wait before the main window has anything to
     // paint; the moment a real page lands there — the harness URL, or the
     // error pane when boot fails — the splash has said everything it can.

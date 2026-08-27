@@ -1,12 +1,15 @@
 import { PANE_TABS, selectTab, type PaneTab, type TabView } from './tabs.ts'
 import { Editor } from './editor.ts'
 import { normalizeAddress } from './address.ts'
-import { monacoDocuments } from './monaco-surface.ts'
+import { monacoDocuments, setEditorTheme } from './monaco-surface.ts'
 import './bridge.ts'
-import { followSystemTheme } from './theme.ts'
+import { followHarnessTheme } from './theme.ts'
 
-/** Whether the window is in dark mode, applied to this page as it loads. */
-const dark = followSystemTheme()
+/**
+ * Whether dark is in effect, applied to this page as it loads and kept in
+ * step with the harness's own Appearance setting afterwards.
+ */
+const dark = followHarnessTheme(setEditorTheme)
 
 /**
  * One element by id.

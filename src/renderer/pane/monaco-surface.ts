@@ -35,6 +35,18 @@ const WORKERS: Record<string, string> = {
   getWorker: (_workerId: string, label: string) => new Worker(`${ORIGIN}/${WORKERS[label] ?? 'editor.worker.js'}`),
 }
 
+/**
+ * Switch every open editor to the other theme.
+ *
+ * Monaco's themes are process-wide, so this is one call rather than one per
+ * document — and it must be called, since an editor created in one theme does
+ * not follow a change on its own.
+ * @param dark - whether dark is now in effect.
+ */
+export function setEditorTheme(dark: boolean): void {
+  monaco.editor.setTheme(dark ? 'vs-dark' : 'vs')
+}
+
 /** The options every editor here shares. */
 function options(dark: boolean): monaco.editor.IStandaloneEditorConstructionOptions {
   return {

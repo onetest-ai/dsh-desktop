@@ -25,6 +25,8 @@ declare global {
       webForward(): void
       webReload(): void
       onWebState(listener: (state: { url: string; canGoBack: boolean; canGoForward: boolean }) => void): void
+      askTheme(): void
+      onTheme(listener: (preference: string) => void): void
     }
   }
 }
