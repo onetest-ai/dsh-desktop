@@ -74,6 +74,15 @@ const MAX_ISOLATION_ATTEMPTS = 2
 let window: BrowserWindow | undefined
 /** The frameless startup splash, open only until the main window appears. */
 let splash: BrowserWindow | undefined
+/**
+ * Whether a page has ever finished loading in the main window.
+ *
+ * A window that has loaded nothing paints white, so this gates every reveal:
+ * see `revealWindow`.
+ */
+let windowHasContent = false
+/** Whether a reveal arrived before the window had content, to be replayed once it does. */
+let revealPending = false
 let quitting = false
 let tray: TrayController | undefined
 let notifier: NotifyServer | undefined
@@ -600,8 +609,22 @@ function failConfiguration(title: string, detail: string): void {
   showSettings()
 }
 
-/** Bring the window to the front. */
+/**
+ * Bring the window to the front, unless it would come up empty.
+ *
+ * macOS fires `activate` as the app launches, and the tray, the hotkey, and a
+ * cold-start deep link all reach here too — every one of them before the
+ * harness URL has painted anything. Showing the window then puts a blank
+ * white frame behind the splash, so the reveal waits for content and raises
+ * the splash instead, that being the window the user is meant to be looking
+ * at while the startup sequence runs.
+ */
 function revealWindow(): void {
+  if (!windowHasContent) {
+    revealPending = true
+    if (splash !== undefined && !splash.isDestroyed()) splash.focus()
+    return
+  }
   if (window === undefined || window.isDestroyed()) return
   window.show()
   window.focus()
@@ -1075,8 +1098,16 @@ if (!app.requestSingleInstanceLock()) {
     // paint; the moment a real page lands there — the harness URL, or the
     // error pane when boot fails — the splash has said everything it can.
     window.webContents.on('did-finish-load', () => {
+      windowHasContent = true
       closeStartup(splash)
       splash = undefined
+      // A deep link, an `activate`, or the hotkey may have asked for the
+      // window while it was still empty; that ask is honoured now rather than
+      // dropped, which is what raises the window for a cold-start dsh:// link.
+      if (revealPending) {
+        revealPending = false
+        revealWindow()
+      }
     })
     window.on('close', (event) => {
       // Closing the window leaves the app running in the tray; only a quit,

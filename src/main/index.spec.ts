@@ -424,6 +424,10 @@ async function bootReady(): Promise<FakeChild> {
   await vi.waitFor(() => expect(children.length).toBe(1))
   children[0].ready()
   await settle()
+  // The harness URL loading in the window is what the real app reports here,
+  // and what closes the splash and un-gates `revealWindow`.
+  await fake.emitWindow('webContents:did-finish-load')
+  await settle()
   return children[0]
 }
 
@@ -984,9 +988,28 @@ describe('deep links', () => {
     await vi.waitFor(() => expect(children.length).toBe(1))
     children[0].ready()
     await settle()
+    await fake.emitWindow('webContents:did-finish-load')
+    await settle()
 
     expect(fake.window.show).toHaveBeenCalled()
     expect(fake.window.focus).toHaveBeenCalled()
+  })
+
+  // reason: macOS fires `activate` as the app launches, long before the
+  // harness URL has painted. Revealing then puts an empty white window behind
+  // the splash — which is what the app did until the reveal was gated.
+  it('keeps the empty window hidden while the splash is up, and reveals it once it has content', async () => {
+    await loadIndex()
+    fake.ready()
+    await vi.waitFor(() => expect(children.length).toBe(1))
+    await fake.emit('activate')
+    expect(fake.window.show).not.toHaveBeenCalled()
+
+    children[0].ready()
+    await settle()
+    await fake.emitWindow('webContents:did-finish-load')
+    await settle()
+    expect(fake.window.show).toHaveBeenCalled()
   })
 
   it('raises the window for a link that arrives while it is up', async () => {
