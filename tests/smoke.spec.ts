@@ -116,9 +116,16 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
       return {
         preload: existsSync(join(dist, 'preload', 'settings.js')),
         renderer: existsSync(join(dist, 'renderer', 'settings.html')),
+        // The startup surface is copied by its own step in build:renderer,
+        // and a renderer file missing from that step produces no compile
+        // error — the failure class this whole assertion exists for.
+        startup:
+          existsSync(join(dist, 'renderer', 'startup.html')) &&
+          existsSync(join(dist, 'renderer', 'startup.js')) &&
+          existsSync(join(dist, 'preload', 'startup.js')),
       }
     })
-    expect(shipped).toEqual({ preload: true, renderer: true })
+    expect(shipped).toEqual({ preload: true, renderer: true, startup: true })
   } finally {
     // Every assertion above sits between launch and close, and one of them —
     // the app.asar path check — is written to fail on a future Electron or

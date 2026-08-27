@@ -933,3 +933,79 @@ button:disabled {
   max-height: 160px;
   overflow-y: auto;
 }
+
+/* Startup surface. Shares the Settings window's tokens deliberately: it is
+   the same application speaking, and a second visual language for the boot
+   screen would read as a different program. */
+.startup {
+  max-width: 560px;
+}
+
+.startup-phase {
+  color: var(--label-secondary);
+  font: 13px/20px -apple-system, BlinkMacSystemFont, sans-serif;
+  margin: 4px 0 18px;
+}
+
+.findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.finding {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 6px;
+  background: var(--surface);
+  font: 13px/18px -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.finding-title {
+  color: var(--label);
+}
+
+.finding-state {
+  color: var(--label-secondary);
+  font-size: 12px;
+}
+
+/* A finding's own colour carries its severity, so the row reads without its
+   text: repairable is the setup tone, never the failure one. */
+.finding-repairable {
+  border-color: var(--setup);
+}
+
+.finding-repairable .finding-state {
+  color: var(--setup);
+}
+
+.finding-blocked {
+  border-color: var(--danger);
+}
+
+.finding-blocked .finding-state {
+  color: var(--danger);
+}
+
+.finding-detail {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  color: var(--label-secondary);
+  font-size: 12px;
+}
+
+.startup-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+#startup-progress {
+  max-height: 220px;
+  overflow-y: auto;
+}

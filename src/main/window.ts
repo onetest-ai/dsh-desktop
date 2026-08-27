@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, shell } from 'electron'
+import { join } from 'node:path'
 import { errorPage } from './error-page'
 
 /**
@@ -47,7 +48,15 @@ export function createWindow(): BrowserWindow {
     height: 860,
     show: false,
     titleBarStyle: 'hiddenInset',
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      // The startup surface loads into this window before the harness URL
+      // replaces it, so its preload lives here. It exposes only two calls —
+      // open Settings, start anyway — and main ignores both once the harness
+      // has booted, so the harness page inherits nothing that can act.
+      preload: join(__dirname, '..', 'preload', 'startup.js'),
+    },
   })
 
   window.once('ready-to-show', () => window.show())
