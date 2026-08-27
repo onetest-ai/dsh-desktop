@@ -1491,6 +1491,11 @@ if (!app.requestSingleInstanceLock()) {
       toggleColumn('files')
     })
     ipcMain.on('harness:toggle-web', toggleWeb)
+    // A link in a rendered file goes where the user's links go, not into a
+    // view of this app. Checked here because the URL comes from a file.
+    ipcMain.on('pane:open-external', (_event, url: string) => {
+      if (loadableUrl(url)) void shell.openExternal(url)
+    })
     ipcMain.on('pane:close-editor', () => {
       setColumn('editor', { open: false })
       storeColumns()

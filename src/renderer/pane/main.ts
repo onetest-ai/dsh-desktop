@@ -1,6 +1,7 @@
 import { PANE_TABS, selectTab, type PaneTab, type TabView } from './tabs.ts'
 import { Editor } from './editor.ts'
 import { normalizeAddress } from './address.ts'
+import { isMarkdown, openMarkdownLink, renderMarkdown } from './markdown.ts'
 import { monacoDocuments, setEditorTheme } from './monaco-surface.ts'
 import './bridge.ts'
 import { followHarnessTheme } from './theme.ts'
@@ -69,7 +70,7 @@ const editor = new Editor({
   readFile: (root, relative) => window.pane.readFile(root, relative),
   writeFile: (root, relative, text) => window.pane.writeFile(root, relative, text),
   say: (message) => {
-    el('editor-status').textContent = message
+    el('status-text').textContent = message
   },
   render: renderFileTabs,
   closeColumn: () => {
@@ -133,7 +134,69 @@ function renderFileTabs(): void {
     })
     button.append(close)
   }
+  renderPreview()
 }
+
+/**
+ * Which open files are being shown rendered rather than as source.
+ *
+ * Per file, not one flag for the pane: someone reading a report and editing a
+ * spec wants each tab to stay as they left it.
+ */
+const rendered = new Set<string>()
+
+/** The key a tab is remembered by, unique across projects. */
+function keyOf(file: { root: string; relative: string }): string {
+  return `${file.root}\u0000${file.relative}`
+}
+
+/**
+ * Show the current tab as source or rendered, and set the toggle to match.
+ *
+ * Re-read from the document every time rather than cached: the buffer is
+ * what the user has, edits included, and a preview of stale text would be a
+ * preview of a file that does not exist.
+ */
+function renderPreview(): void {
+  const file = editor.current
+  const tab = editor.openTabs.find((each) => file !== undefined && each.file.relative === file.relative && each.file.root === file.root)
+  const toggle = el('toggle-preview') as HTMLButtonElement
+  const preview = el('preview')
+
+  if (file === undefined || tab === undefined || !isMarkdown(file.relative)) {
+    toggle.hidden = true
+    preview.hidden = true
+    preview.textContent = ''
+    el('editor-host').hidden = editor.openTabs.length === 0
+    return
+  }
+  toggle.hidden = false
+  const showing = rendered.has(keyOf(file))
+  toggle.textContent = showing ? 'Source' : 'Preview'
+  toggle.setAttribute('aria-pressed', String(showing))
+  preview.hidden = !showing
+  el('editor-host').hidden = showing
+  // Sanitized in `renderMarkdown`; this is the only place the result reaches
+  // the DOM.
+  preview.innerHTML = showing ? renderMarkdown(tab.document.text()) : ''
+}
+
+el('toggle-preview').addEventListener('click', () => {
+  const file = editor.current
+  if (file === undefined) return
+  const key = keyOf(file)
+  if (rendered.has(key)) rendered.delete(key)
+  else rendered.add(key)
+  renderPreview()
+})
+
+// A preview is not a browser: a link opens where the user's links open.
+el('preview').addEventListener('click', (event) => {
+  const url = openMarkdownLink(event.target as Element | null)
+  if (url === undefined) return
+  event.preventDefault()
+  window.pane.openExternal(url)
+})
 
 el('close-editor').addEventListener('click', () => {
   window.pane.closeEditor()

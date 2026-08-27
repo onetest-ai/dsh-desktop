@@ -20,7 +20,13 @@
     <div class="file-tabs" id="file-tabs" role="tablist" aria-label="Open files" hidden></div>
     <p class="empty" id="editor-empty">Nothing open. Pick a file from the tree, or let the agent open one.</p>
     <div id="editor-host" class="editor" hidden></div>
-    <p class="status" id="editor-status" role="status"></p>
+    <!-- Rendered markdown, shown instead of the editor for the tabs that
+         have a preview. -->
+    <article id="preview" class="preview" hidden></article>
+    <p class="status" id="editor-status" role="status">
+      <span id="status-text"></span>
+      <button type="button" id="toggle-preview" class="status-toggle" hidden>Preview</button>
+    </p>
   </section>
   <!-- Only the chrome: the page itself is a view of its own, stacked over
        this panel by main, below this bar. -->
