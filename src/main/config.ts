@@ -46,14 +46,14 @@ export interface DesktopConfig {
    */
   mcpClientVersion?: string
   /**
-   * The side pane's last width and whether it was showing.
+   * Each side column's last width and whether it was showing.
    *
-   * Window state rather than settings: written by dragging the divider, not
-   * by the Settings form, and never surfaced there. A stored width is only a
+   * Window state rather than settings: written by dragging a divider, not by
+   * the Settings form, and never surfaced there. A stored width is only a
    * request — `layout` clamps it to what the current window can give, so a
    * config written on a wider display cannot strand the harness here.
    */
-  pane?: { width: number; open: boolean }
+  pane?: { editor: { width: number; open: boolean }; files: { width: number; open: boolean } }
 }
 
 export const DEFAULT_NOTIFY_PORT = 43117
@@ -178,7 +178,19 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
  * @param value - the `pane` member, from a file that may have been hand-edited.
  * @returns the state, or undefined to fall back to the default.
  */
-function paneState(value: unknown): { width: number; open: boolean } | undefined {
+function paneState(value: unknown): DesktopConfig['pane'] {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const { editor, files } = value as Record<string, unknown>
+  const both = [column(editor), column(files)]
+  return both[0] === undefined || both[1] === undefined ? undefined : { editor: both[0], files: both[1] }
+}
+
+/**
+ * Read one column's stored state, or undefined when it is not usable.
+ * @param value - one member of the `pane` block.
+ * @returns the column's width and open flag, or undefined.
+ */
+function column(value: unknown): { width: number; open: boolean } | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
   const { width, open } = value as Record<string, unknown>
   if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) return undefined

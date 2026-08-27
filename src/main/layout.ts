@@ -1,17 +1,18 @@
 /**
- * How wide the gap between the harness and the pane is.
+ * How wide the gap beside each column is.
  *
- * The divider is not a view of its own: it is the window's own page showing
- * through the gap the two views leave, which is what lets it receive the
- * drag without a third `WebContentsView` stacked over either one.
+ * A divider is not a view of its own: it is the window's own page showing
+ * through the gap the views leave, which is what lets it receive the drag
+ * without a `WebContentsView` stacked over either neighbour.
  */
 export const DIVIDER_WIDTH = 6
 
-/** Below this the harness Web UI's own layout collapses, so the pane stops taking width. */
+/** Below this the harness Web UI's own layout collapses, so the columns stop taking width. */
 export const MIN_HARNESS_WIDTH = 480
 
-/** Below this the pane shows a file tree too narrow to read. */
-export const MIN_PANE_WIDTH = 240
+/** Below these a column shows nothing worth reading. */
+export const MIN_EDITOR_WIDTH = 320
+export const MIN_FILES_WIDTH = 180
 
 /** A view's bounds, in the window's coordinates. */
 export interface Rect {
@@ -21,47 +22,85 @@ export interface Rect {
   height: number
 }
 
-/** Where each of the window's parts goes. */
+/** One resizable column's stored state. */
+export interface ColumnState {
+  width: number
+  open: boolean
+}
+
+/** The two columns this app puts beside the harness. */
+export interface Columns {
+  editor: ColumnState
+  files: ColumnState
+}
+
+/** Where each of the window's parts goes, left to right. */
 export interface Layout {
   harness: Rect
-  /** Zero-width when the pane is closed, so the harness has the whole window. */
-  pane: Rect
-  /** The gap the window's own page draws the divider in; zero-width when closed. */
-  divider: Rect
+  /** The gap before the editor column; zero-width when that column is closed. */
+  editorDivider: Rect
+  editor: Rect
+  /** The gap before the files column; zero-width when that column is closed. */
+  filesDivider: Rect
+  files: Rect
 }
 
 /**
- * Place the harness, the pane, and the divider gap inside the window.
+ * Place the harness, the editor column, the file tree, and the gaps between
+ * them.
  *
- * Pure arithmetic, deliberately free of any Electron import: this is the one
- * part of the split that is worth testing exhaustively, and it should not
- * need a window to test.
+ * The order is the mirror of an IDE's: the conversation on the left, what it
+ * is working on in the middle, the tree on the right.
  *
- * The requested pane width is honoured only as far as both minimums allow. A
- * window too small to satisfy either one gives the harness whatever is left
- * rather than a negative width, which `setBounds` would reject.
+ * Pure arithmetic, deliberately free of any Electron import: this is the part
+ * of the split worth testing exhaustively, and it should not need a window to
+ * test. A requested width is honoured only as far as the minimums allow —
+ * when the window cannot give every column what it asks for, the columns
+ * shrink together rather than one of them disappearing.
  * @param bounds - the window's content size.
- * @param pane - the pane's stored width and whether it is showing.
- * @returns bounds for all three parts, together covering the window exactly.
+ * @param columns - each column's stored width and whether it is showing.
+ * @returns bounds for all five parts, together covering the window exactly.
  */
-export function layout(bounds: { width: number; height: number }, pane: { width: number; open: boolean }): Layout {
+export function layout(bounds: { width: number; height: number }, columns: Columns): Layout {
   const full = { y: 0, height: bounds.height }
-  if (!pane.open) {
-    return {
-      harness: { x: 0, width: bounds.width, ...full },
-      pane: { x: bounds.width, width: 0, ...full },
-      divider: { x: bounds.width, width: 0, ...full },
-    }
-  }
+  const open = [
+    { key: 'editor' as const, state: columns.editor, min: MIN_EDITOR_WIDTH },
+    { key: 'files' as const, state: columns.files, min: MIN_FILES_WIDTH },
+  ].filter((column) => column.state.open)
 
-  const available = Math.max(0, bounds.width - DIVIDER_WIDTH)
-  const widest = Math.max(0, available - MIN_HARNESS_WIDTH)
-  const paneWidth = Math.min(Math.max(pane.width, Math.min(MIN_PANE_WIDTH, available)), Math.max(widest, 0))
-  const harnessWidth = available - paneWidth
+  const gaps = open.length * DIVIDER_WIDTH
+  const available = Math.max(0, bounds.width - gaps)
+  const wanted = open.map((column) => Math.max(column.state.width, column.min))
+  const total = wanted.reduce((sum, width) => sum + width, 0)
+  const spare = Math.max(0, available - MIN_HARNESS_WIDTH)
+
+  // Scaled together rather than trimmed one at a time: taking it all from the
+  // last column would collapse the tree the moment the window narrowed, while
+  // both are still readable at a share of what they asked for.
+  const scale = total > spare && total > 0 ? spare / total : 1
+  const widths = wanted.map((width) => Math.floor(width * scale))
+  const used = widths.reduce((sum, width) => sum + width, 0)
+
+  let x = available - used
+  const harness = { x: 0, width: x, ...full }
+  const places: Record<string, Rect> = {
+    editor: { x: bounds.width, width: 0, ...full },
+    files: { x: bounds.width, width: 0, ...full },
+    editorDivider: { x: bounds.width, width: 0, ...full },
+    filesDivider: { x: bounds.width, width: 0, ...full },
+  }
+  open.forEach((column, index) => {
+    places[`${column.key}Divider`] = { x, width: DIVIDER_WIDTH, ...full }
+    x += DIVIDER_WIDTH
+    places[column.key] = { x, width: widths[index], ...full }
+    x += widths[index]
+  })
 
   return {
-    harness: { x: 0, width: harnessWidth, ...full },
-    divider: { x: harnessWidth, width: DIVIDER_WIDTH, ...full },
-    pane: { x: harnessWidth + DIVIDER_WIDTH, width: paneWidth, ...full },
+    harness,
+    editorDivider: places.editorDivider,
+    editor: places.editor,
+    filesDivider: places.filesDivider,
+    files: places.files,
   }
 }

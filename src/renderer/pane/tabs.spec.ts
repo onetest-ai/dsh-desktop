@@ -15,8 +15,8 @@ function view(): TabView & { calls: string[] } {
 describe('selectTab', () => {
   it('marks the tab current and reveals its panel', () => {
     const target = view()
-    selectTab('files', target)
-    expect(target.calls).toEqual(['select:files', 'reveal:files', 'web:false'])
+    selectTab('editor', target)
+    expect(target.calls).toEqual(['select:editor', 'reveal:editor', 'web:false'])
   })
 
   // reason: the web view is a WebContentsView stacked over the pane, not an

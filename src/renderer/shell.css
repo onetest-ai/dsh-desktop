@@ -14,13 +14,19 @@ body {
   cursor: default;
 }
 
-/* Fills the gap exactly: `layout` gives the gap DIVIDER_WIDTH, and anything
-   narrower here would leave a strip of bare body beside the grab handle. */
+/* Placed by main, which is the only side that knows where the gaps are. Full
+   height, and exactly as wide as the gap its column leaves — anything
+   narrower would show bare body beside the grab handle. */
 .divider {
-  width: 100%;
+  position: absolute;
+  top: 0;
   height: 100%;
   background: rgb(60, 60, 62);
   cursor: col-resize;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 .divider:hover,

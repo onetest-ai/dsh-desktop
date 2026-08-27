@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('pane', {
   projects: () => ipcRenderer.invoke('pane:projects'),
   listDirectory: (root: string, relative: string) => ipcRenderer.invoke('pane:list-directory', root, relative),
   openFile: (root: string, relative: string) => ipcRenderer.send('pane:open-file', root, relative),
+  closeEditor: () => ipcRenderer.send('pane:close-editor'),
   readFile: (root: string, relative: string) => ipcRenderer.invoke('pane:read-file', root, relative),
   writeFile: (root: string, relative: string, text: string) =>
     ipcRenderer.invoke('pane:write-file', root, relative, text),

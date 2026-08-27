@@ -41,9 +41,10 @@ import { createSettingsHandlers } from './settings-ipc'
 import { openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
-import { DEFAULT_PANE_WIDTH, applyLayout, createWindow, installMenu, registerPaneScheme, servePane, showError, type MainWindow } from './window'
+import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, applyLayout, createWindow, installMenu, registerPaneScheme, servePane, showError, type MainWindow } from './window'
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
+import { DIVIDER_WIDTH, type Columns } from './layout'
 import { readTextFile, writeTextFile } from './file-io'
 import type { ServerStatus } from './status'
 
@@ -78,43 +79,65 @@ let window: BrowserWindow | undefined
 /** The window together with its harness and pane views; undefined before it exists. */
 let views: MainWindow | undefined
 /**
- * The pane's width and whether it is showing.
+ * Each column's width and whether it is showing.
  *
  * Mutable module state rather than a config read per layout pass: it changes
  * on every pointer move of a divider drag, and only the end of that drag is
  * written to disk.
  */
-const paneState = { width: DEFAULT_PANE_WIDTH, open: false }
+const columns: Columns = {
+  editor: { width: DEFAULT_EDITOR_WIDTH, open: false },
+  files: { width: DEFAULT_FILES_WIDTH, open: false },
+}
 
 /**
- * Move the pane and re-lay the window out.
+ * Move a column and re-lay the window out.
+ * @param key - which column to change.
  * @param next - the width, open state, or both to apply.
  */
-function setPane(next: { width?: number; open?: boolean }): void {
-  if (next.width !== undefined) paneState.width = next.width
-  if (next.open !== undefined) paneState.open = next.open
-  if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, paneState)
+function setColumn(key: keyof Columns, next: { width?: number; open?: boolean }): void {
+  if (next.width !== undefined) columns[key].width = next.width
+  if (next.open !== undefined) columns[key].open = next.open
+  if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, columns, webViewVisible)
 }
+
+/** Show or hide one column, storing the choice. */
+function toggleColumn(key: keyof Columns): void {
+  setColumn(key, { open: !columns[key].open })
+  storeColumns()
+}
+
+/**
+ * Store the columns' current state.
+ *
+ * Called at the end of a drag and when a column opens or closes, never during
+ * one: a write per pointer move would put a file write behind every frame. A
+ * failed write costs the user their column widths on the next launch and
+ * nothing else, so it is warned about rather than surfaced.
+ */
+function storeColumns(): void {
+  try {
+    const stored = loadConfig(CONFIG_PATH)
+    if (!stored.configured) return
+    writeConfig(CONFIG_PATH, {
+      ...stored.config,
+      pane: { editor: { ...columns.editor }, files: { ...columns.files } },
+    })
+  } catch (error) {
+    console.warn(`dsh-desktop: the column sizes could not be stored: ${(error as Error).message}`)
+  }
+}
+
+/**
+ * Whether the pane's Web tab is the one showing.
+ *
+ * Held here rather than in the pane page because the web view it controls is
+ * a view of this window, not an element of that page; see Task 6.
+ */
+let webViewVisible = false
 
 /** Refusal for a root that is not a project the harness has opened. */
 const OUTSIDE_PROJECT = { ok: false as const, reason: 'That file is not inside a project the harness has opened.' }
-
-/**
- * Show a file in the pane's editor, opening the pane if it is closed.
- *
- * Opening the pane is deliberate: a call that loaded a file into a hidden
- * surface would look like nothing happened.
- * @param root - the project directory.
- * @param relative - the file's path within it.
- */
-function openInPane(root: string, relative: string): void {
-  if (views === undefined || views.window.isDestroyed()) return
-  if (!paneState.open) {
-    setPane({ open: true })
-    storePane()
-  }
-  views.pane.webContents.send('pane:open', root, relative)
-}
 
 /**
  * Whether a directory is one of the projects the harness has opened.
@@ -130,36 +153,22 @@ function knownProject(root: string): boolean {
 }
 
 /**
- * Whether the pane's Web tab is the one showing.
+ * Show a file in the editor column, opening it if it is closed.
  *
- * Held here rather than in the pane page because the web view it controls is
- * a view of this window, not an element of that page; see Task 6.
+ * Opening the column is deliberate: a call that loaded a file into a hidden
+ * surface would look like nothing happened.
+ * @param root - the project directory.
+ * @param relative - the file's path within it.
  */
-let webViewVisible = false
-
-/** Show or hide the side pane, storing the choice. */
-function togglePane(): void {
-  setPane({ open: !paneState.open })
-  storePane()
-}
-
-/**
- * Store the pane's current state.
- *
- * Called at the end of a drag and when the pane opens or closes, never
- * during one: a write per pointer move would put a file write behind every
- * frame. A failed write costs the user their pane width on the next launch
- * and nothing else, so it is warned about rather than surfaced.
- */
-function storePane(): void {
-  try {
-    const stored = loadConfig(CONFIG_PATH)
-    if (!stored.configured) return
-    writeConfig(CONFIG_PATH, { ...stored.config, pane: { ...paneState } })
-  } catch (error) {
-    console.warn(`dsh-desktop: the pane size could not be stored: ${(error as Error).message}`)
+function openInPane(root: string, relative: string): void {
+  if (views === undefined || views.window.isDestroyed()) return
+  if (!columns.editor.open) {
+    setColumn('editor', { open: true })
+    storeColumns()
   }
+  views.pane.webContents.send('pane:open', root, relative)
 }
+
 /** The frameless startup splash, open only until the main window appears. */
 let splash: BrowserWindow | undefined
 /**
@@ -1214,30 +1223,55 @@ if (!app.requestSingleInstanceLock()) {
     // Offers each shipped default once, recorded by generation so a default
     // the user removes stays removed.
     ensureDefaultPlugins(DSH_HOME)
-    installMenu(showSettings, togglePane)
+    installMenu(showSettings, () => {
+      toggleColumn('files')
+    })
     try {
       const stored = loadConfig(CONFIG_PATH)
       if (stored.configured && stored.config.pane !== undefined) {
-        paneState.width = stored.config.pane.width
-        paneState.open = stored.config.pane.open
+        columns.editor = { ...stored.config.pane.editor }
+        columns.files = { ...stored.config.pane.files }
       }
     } catch {
       // An unreadable config is reported further down, where it can open
-      // Settings; the pane simply starts at its default until then.
+      // Settings; the columns simply start at their defaults until then.
     }
-    views = createWindow(paneState)
+    views = createWindow(columns)
     window = views.window
     // Sent, not invoked: a divider drag reports a coordinate per pointer move
-    // and wants no answer.
-    ipcMain.on('shell:resize-pane', (_event, windowX: number) => {
+    // and wants no answer. Which divider is dragging comes with it, since the
+    // page draws one per open column.
+    ipcMain.on('shell:resize-column', (_event, key: keyof Columns, windowX: number) => {
       if (views === undefined || views.window.isDestroyed()) return
       const [width] = views.window.getContentSize()
-      setPane({ width: width - windowX })
+      // Each column is measured from the window's right edge, past whatever
+      // columns sit outside it: dragging the editor's divider must not move
+      // the tree.
+      const outside = key === 'editor' && columns.files.open ? views.files.getBounds().width + DIVIDER_WIDTH : 0
+      setColumn(key, { width: width - windowX - outside })
     })
-    ipcMain.on('shell:nudge-pane', (_event, delta: number) => setPane({ width: paneState.width + delta }))
-    // From the harness page's own button, through the one call its preload
-    // exposes.
-    ipcMain.on('harness:toggle-pane', togglePane)
+    ipcMain.on('shell:nudge-column', (_event, key: keyof Columns, delta: number) => {
+      setColumn(key, { width: columns[key].width + delta })
+    })
+    ipcMain.on('shell:commit-columns', () => {
+      // The widths `layout` settled on, not the ones the drag asked for: a
+      // stored width the clamp already refused would reopen at the wrong size.
+      if (views !== undefined && !views.window.isDestroyed()) {
+        if (columns.editor.open) columns.editor.width = views.pane.getBounds().width
+        if (columns.files.open) columns.files.width = views.files.getBounds().width
+      }
+      storeColumns()
+    })
+    // The button in the harness sidebar owns the tree, not the editor: the
+    // editor is not something to open empty. It appears when a file goes into
+    // it and closes when the user is done with that file.
+    ipcMain.on('harness:toggle-pane', () => {
+      toggleColumn('files')
+    })
+    ipcMain.on('pane:close-editor', () => {
+      setColumn('editor', { open: false })
+      storeColumns()
+    })
     // The pane's own reads. Both are rooted in a project the harness has
     // opened: the renderer names a root, and main refuses one that is not on
     // that list — the same rule the per-project MCP file follows.
@@ -1262,13 +1296,7 @@ if (!app.requestSingleInstanceLock()) {
     // so only main can raise or drop it.
     ipcMain.on('pane:show-web-view', (_event, visible: boolean) => {
       webViewVisible = visible === true
-      if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, paneState)
-    })
-    ipcMain.on('shell:commit-pane', () => {
-      // The width `layout` settled on, not the one the drag asked for: a
-      // stored width the clamp already refused would reopen at the wrong size.
-      if (views !== undefined && !views.window.isDestroyed()) paneState.width = views.pane.getBounds().width
-      storePane()
+      if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, columns, webViewVisible)
     })
     // The splash covers the wait before the main window has anything to
     // paint; the moment a real page lands there — the harness URL, or the

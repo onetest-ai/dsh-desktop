@@ -138,7 +138,9 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
       const [width] = main.getContentSize()
       return main.contentView.children.map((child) => child.getBounds().width === width)
     })
-    expect(paneClosed).toEqual([true, false])
+    // Harness, editor, files, web: only the harness has the window's width,
+    // because the columns start closed.
+    expect(paneClosed).toEqual([true, false, false, false])
 
     await expect
       .poll(
@@ -193,6 +195,8 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
           existsSync(join(dist, 'renderer', 'shell.html')) &&
           existsSync(join(dist, 'renderer', 'pane.html')) &&
           existsSync(join(dist, 'renderer', 'pane-bundle.js')) &&
+          existsSync(join(dist, 'renderer', 'files.html')) &&
+          existsSync(join(dist, 'renderer', 'files-bundle.js')) &&
           existsSync(join(dist, 'renderer', 'ts.worker.js')) &&
           existsSync(join(dist, 'preload', 'pane.js')) &&
           existsSync(join(dist, 'renderer', 'splash.png')) &&

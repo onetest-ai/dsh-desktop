@@ -181,3 +181,38 @@ body {
 .monaco-editor {
   position: absolute;
 }
+
+/* The files column has no tabs, so its picker takes the strip's place and
+   lines its bottom edge up with the editor column's. */
+.column-head {
+  flex: none;
+  padding: 8px 8px 7px;
+  border-bottom: 1px solid var(--pane-line);
+}
+
+.column-head #project {
+  margin-bottom: 0;
+}
+
+.tab-spacer {
+  flex: 1;
+}
+
+/* Closes the column, not a document: with nothing open the column has no
+   reason to take width from the conversation beside it. */
+.tab-close {
+  align-self: center;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--pane-dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tab-close:hover {
+  background: var(--pane-hover);
+  color: var(--pane-fg);
+}

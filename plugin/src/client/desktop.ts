@@ -1,6 +1,6 @@
 /** The single call the desktop app's preload exposes on the harness page. */
 export interface DesktopBridge {
-  /** Show the side pane, or hide it when it is already showing. */
+  /** Show the desktop app's file tree, or hide it when it is already showing. */
   togglePane(): void
 }
 

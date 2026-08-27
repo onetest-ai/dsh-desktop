@@ -1,28 +1,24 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>Pane</title>
+<title>Editor</title>
 <link rel="stylesheet" href="pane.css">
 <!-- The editor's own styles, emitted beside its bundle. Loaded after the
      pane's so the editor keeps its layout inside the panel it fills. -->
 <link rel="stylesheet" href="pane-bundle.css">
 <main class="pane">
-  <nav class="tabs" role="tablist" aria-label="Side pane">
-    <button type="button" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="true" class="tab">Files</button>
-    <button type="button" role="tab" id="tab-editor" aria-controls="panel-editor" aria-selected="false" tabindex="-1" class="tab">Editor</button>
+  <nav class="tabs" role="tablist" aria-label="Editor column">
+    <button type="button" role="tab" id="tab-editor" aria-controls="panel-editor" aria-selected="true" class="tab">Editor</button>
     <button type="button" role="tab" id="tab-web" aria-controls="panel-web" aria-selected="false" tabindex="-1" class="tab">Web</button>
+    <span class="tab-spacer"></span>
+    <button type="button" id="close-editor" class="tab-close" aria-label="Close the editor" title="Close">✕</button>
   </nav>
-  <section id="panel-files" role="tabpanel" aria-labelledby="tab-files" class="panel">
-    <select id="project" aria-label="Project"></select>
-    <p class="empty" id="files-empty">No project open.</p>
-    <ul id="file-tree" class="tree"></ul>
-  </section>
-  <section id="panel-editor" role="tabpanel" aria-labelledby="tab-editor" class="panel" hidden>
-    <p class="empty" id="editor-empty">Nothing open. Pick a file, or let the agent open one.</p>
+  <section id="panel-editor" role="tabpanel" aria-labelledby="tab-editor" class="panel">
+    <p class="empty" id="editor-empty">Nothing open. Pick a file from the tree, or let the agent open one.</p>
     <div id="editor-host" class="editor" hidden></div>
     <p class="status" id="editor-status" role="status"></p>
   </section>
-  <section id="panel-web" role="tabpanel" aria-labelledby="tab-web" class="panel" hidden>
-    <p class="empty" id="web-empty">Nothing loaded. The agent can open a page here.</p>
-  </section>
+  <!-- Empty by design: the Web tab's contents are a view of their own,
+       stacked over this panel by main. -->
+  <section id="panel-web" role="tabpanel" aria-labelledby="tab-web" class="panel"></section>
 </main>
 <script src="pane-bundle.js"></script>

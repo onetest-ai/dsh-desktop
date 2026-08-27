@@ -2,7 +2,7 @@ import { app, BrowserWindow, Menu, WebContentsView, net, protocol, shell } from 
 import { pathToFileURL } from 'node:url'
 import { join, normalize, sep } from 'node:path'
 import { errorPage } from './error-page'
-import { layout } from './layout'
+import { layout, type Columns } from './layout'
 
 /**
  * CSS injected into the main window's `webContents` to make the top edge
@@ -43,12 +43,30 @@ export interface MainWindow {
   window: BrowserWindow
   /** Holds the harness Web UI, and the error pane when a boot fails. */
   harness: WebContentsView
-  /** Holds this app's own file, editor, and web views. */
+  /** Holds this app's editor, in the middle column. */
   pane: WebContentsView
+  /** Holds the file tree, in the right-hand column. */
+  files: WebContentsView
+  /**
+   * Holds whatever page the Web tab is showing.
+   *
+   * A view of its own rather than a frame in the pane's page: a foreign page
+   * gets its own process this way, and nothing it does can reach the pane's
+   * preload.
+   */
+  web: WebContentsView
 }
 
-/** How wide the pane opens the first time, before the user has sized it. */
-export const DEFAULT_PANE_WIDTH = 420
+/**
+ * How wide each column opens the first time, before the user has sized it.
+ *
+ * Chosen so all three fit at the window's own opening size without the
+ * clamp: 1280 less the harness's 480 minimum and the two dividers leaves 788,
+ * and these come to 740 — so a first open shows the editor and the tree at
+ * the widths they asked for rather than at whatever was left over.
+ */
+export const DEFAULT_EDITOR_WIDTH = 520
+export const DEFAULT_FILES_WIDTH = 220
 
 /**
  * Where the pane is served from.
@@ -103,10 +121,10 @@ export function servePane(): void {
  * The window is not shown here. It stays hidden until something has finished
  * loading in the harness view, since an unloaded window paints white; see
  * `index.ts`'s `did-finish-load` handler.
- * @param paneState - the pane's stored width and whether it starts open.
- * @returns the window and its two views.
+ * @param columns - each column's stored width and whether it starts open.
+ * @returns the window and its views.
  */
-export function createWindow(paneState: { width: number; open: boolean }): MainWindow {
+export function createWindow(columns: Columns): MainWindow {
   const window = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -138,12 +156,40 @@ export function createWindow(paneState: { width: number; open: boolean }): MainW
       preload: join(__dirname, '..', 'preload', 'pane.js'),
     },
   })
+  const files = new WebContentsView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: join(__dirname, '..', 'preload', 'pane.js'),
+    },
+  })
+  const web = new WebContentsView({
+    // Whatever the Web tab loads is foreign: no preload, no node, isolated —
+    // and stacked over the pane rather than inside its document.
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  })
   window.contentView.addChildView(harness)
   window.contentView.addChildView(pane)
+  window.contentView.addChildView(files)
+  // Added last so it stacks over the editor column it covers.
+  window.contentView.addChildView(web)
   void pane.webContents.loadURL(`${PANE_ORIGIN}/pane.html`)
+  void files.webContents.loadURL(`${PANE_ORIGIN}/files.html`)
+  // Loaded up front rather than left on its initial blank document: an
+  // unloaded view is a target that never finishes, and an automation client
+  // attaching to this window waits for it.
+  void web.webContents.loadURL(`${PANE_ORIGIN}/web.html`)
 
-  applyLayout({ window, harness, pane }, paneState)
-  window.on('resize', () => applyLayout({ window, harness, pane }, paneState))
+  // A page that opens a new window gets the system browser, exactly as the
+  // harness view does: this app has one place to put a page, and it is here.
+  web.webContents.setWindowOpenHandler(({ url }) => {
+    void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+
+  const views = { window, harness, pane, files, web }
+  applyLayout(views, columns, false)
+  window.on('resize', () => applyLayout(views, lastColumns, webShowing))
 
   // Anything targeting a new window is an external link; hand it to the browser.
   harness.webContents.setWindowOpenHandler(({ url }) => {
@@ -160,27 +206,70 @@ export function createWindow(paneState: { width: number; open: boolean }): MainW
     void harness.webContents.insertCSS(DRAG_REGION_CSS)
   })
 
-  return { window, harness, pane }
+  return views
+}
+
+/**
+ * What the views were last laid out with.
+ *
+ * Held here so a resize can put them back the way they were: `resize` carries
+ * no state of its own, and reading it from a renderer would mean asking a
+ * page where a view belongs.
+ */
+let webShowing = false
+let lastColumns: Columns = {
+  editor: { width: DEFAULT_EDITOR_WIDTH, open: false },
+  files: { width: DEFAULT_FILES_WIDTH, open: false },
 }
 
 /**
  * Size the views to the window's current content area.
  *
- * Called on every resize and on every pane change: `WebContentsView` has no
+ * Called on every resize and on every column change: `WebContentsView` has no
  * layout of its own, so nothing moves unless this does it.
  * @param views - the window and its views.
- * @param paneState - the pane's width and whether it is showing.
+ * @param columns - each column's width and whether it is showing.
+ * @param webVisible - whether the Web tab is the one selected.
  */
-export function applyLayout(views: MainWindow, paneState: { width: number; open: boolean }): void {
+export function applyLayout(views: MainWindow, columns: Columns, webVisible: boolean): void {
   if (views.window.isDestroyed()) return
+  webShowing = webVisible
+  lastColumns = columns
   const [width, height] = views.window.getContentSize()
-  const places = layout({ width, height }, paneState)
+  const places = layout({ width, height }, columns)
   views.harness.setBounds(places.harness)
-  views.pane.setBounds(places.pane)
-  // A closed pane is given no bounds to render in rather than being detached:
+  views.pane.setBounds(places.editor)
+  views.files.setBounds(places.files)
+  // The web view covers the editor column's panel area, minus its tab strip,
+  // so the tabs stay reachable while a page is showing.
+  views.web.setBounds({
+    x: places.editor.x,
+    y: places.editor.y + TAB_STRIP_HEIGHT,
+    width: places.editor.width,
+    height: Math.max(0, places.editor.height - TAB_STRIP_HEIGHT),
+  })
+  // A hidden view is given no bounds to render in rather than being detached:
   // it keeps whatever it was showing, so reopening costs no reload.
-  views.pane.setVisible(paneState.open)
+  views.pane.setVisible(columns.editor.open)
+  views.files.setVisible(columns.files.open)
+  views.web.setVisible(columns.editor.open && webVisible)
+  // The window's own page draws the dividers but cannot see where the views
+  // are, so it is told: each divider is placed over its own gap, and a
+  // closed column's is given no width to be grabbed by.
+  views.window.webContents.send('shell:dividers', {
+    editor: places.editorDivider,
+    files: places.filesDivider,
+  })
 }
+
+/**
+ * How much of the editor column the tab strip occupies.
+ *
+ * Mirrors `pane.css`: 8px of padding, an 18px line, and 7px of padding under
+ * it, plus the strip's own border. The web view is placed under it rather
+ * than over it, so the tabs stay clickable while a page is loaded.
+ */
+const TAB_STRIP_HEIGHT = 35
 
 /**
  * Replace the harness view's contents with a failure pane.
@@ -200,7 +289,7 @@ export function showError(views: MainWindow, title: string, detail: string): voi
  * both in the File menu (explicitly requested) and the app menu (macOS
  * convention), so `onSettings` is wired to both.
  * @param onSettings - opens the settings window.
- * @param onTogglePane - shows or hides the side pane.
+ * @param onTogglePane - shows or hides the file tree.
  */
 export function installMenu(onSettings: () => void, onTogglePane: () => void): void {
   Menu.setApplicationMenu(
@@ -221,9 +310,9 @@ export function installMenu(onSettings: () => void, onTogglePane: () => void): v
       {
         label: 'View',
         submenu: [
-          // The only way to open the pane by hand. Alt rather than plain
+          // The only way to open the tree by hand. Alt rather than plain
           // Cmd+B, which the harness Web UI may want for its own sidebar.
-          { label: 'Toggle Side Pane', accelerator: 'CmdOrCtrl+Alt+B', click: onTogglePane },
+          { label: 'Toggle File Tree', accelerator: 'CmdOrCtrl+Alt+B', click: onTogglePane },
           { type: 'separator' },
           { role: 'reload' },
           { role: 'forceReload' },

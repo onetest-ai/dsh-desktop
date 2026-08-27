@@ -1,8 +1,13 @@
-/** Which surface the pane is showing. */
-export type PaneTab = 'files' | 'editor' | 'web'
+/**
+ * Which surface the editor column is showing.
+ *
+ * The file tree is not among them: it is a column of its own, beside this
+ * one, the way an IDE keeps its explorer.
+ */
+export type PaneTab = 'editor' | 'web'
 
 /** Every tab, in the order they appear. */
-export const PANE_TABS: readonly PaneTab[] = ['files', 'editor', 'web']
+export const PANE_TABS: readonly PaneTab[] = ['editor', 'web']
 
 /** What the pane's DOM needs to change when the tab changes. */
 export interface TabView {

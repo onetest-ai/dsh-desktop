@@ -8,9 +8,9 @@ export interface PaneButtonProps {
 }
 
 /**
- * The sidebar's toggle for the desktop app's side pane.
+ * The sidebar's toggle for the desktop app's file tree.
  *
- * Renders nothing outside that app: the pane belongs to the Electron shell,
+ * Renders nothing outside that app: the tree belongs to the Electron shell,
  * and in a plain browser there is none to toggle. The bridge's presence is
  * the test, so no version or user-agent sniffing is involved.
  * @param props - the sidebar's width state.
@@ -23,12 +23,12 @@ export function PaneButton({ wide }: PaneButtonProps) {
     <button
       type="button"
       style={wide ? WIDE : RAIL}
-      title="Show or hide the side pane"
-      aria-label="Toggle the side pane"
+      title="Show or hide the file tree"
+      aria-label="Toggle the file tree"
       onClick={() => { bridge.togglePane() }}
     >
       <span aria-hidden="true" style={GLYPH}>▐</span>
-      {wide ? <span>Side pane</span> : null}
+      {wide ? <span>Files</span> : null}
     </button>
   )
 }

@@ -68,8 +68,9 @@ const fake = vi.hoisted(() => {
       loadURL: vi.fn(),
     },
   }
-  const pane = { getBounds: vi.fn(() => ({ x: 0, y: 0, width: 420, height: 860 })) }
-  const views = { window, harness, pane }
+  const pane = { getBounds: vi.fn(() => ({ x: 0, y: 0, width: 520, height: 860 })), webContents: { send: vi.fn() } }
+  const files = { getBounds: vi.fn(() => ({ x: 0, y: 0, width: 220, height: 860 })) }
+  const views = { window, harness, pane, files }
 
   const app = {
     requestSingleInstanceLock: vi.fn(() => true),
@@ -177,7 +178,8 @@ vi.mock('./window', () => ({
   applyLayout: (...args: unknown[]) => applyLayout(...(args as [])),
   registerPaneScheme: vi.fn(),
   servePane: vi.fn(),
-  DEFAULT_PANE_WIDTH: 420,
+  DEFAULT_EDITOR_WIDTH: 520,
+  DEFAULT_FILES_WIDTH: 220,
   installMenu: (...args: unknown[]) => installMenuMock(...(args as [])),
 }))
 
@@ -1626,19 +1628,42 @@ describe('startup healthcheck', () => {
   })
 })
 
-describe('the side pane', () => {
+describe('the side columns', () => {
   // reason: the divider page reports a window coordinate, not a width — it
   // has no way to know where the views are. Main owns that arithmetic.
-  it('turns a divider drag into a pane width', async () => {
+  it('turns a divider drag into that column’s width', async () => {
     await bootReady()
-    fake.sendIpc('shell:resize-pane', 900)
-    expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ width: 1280 - 900 }))
+    fake.sendIpc('shell:resize-column', 'files', 1040)
+    expect(applyLayout).toHaveBeenLastCalledWith(
+      fake.views,
+      expect.objectContaining({ files: expect.objectContaining({ width: 1280 - 1040 }) }),
+      expect.any(Boolean),
+    )
   })
 
-  it('nudges the pane by a step for a keyboard user', async () => {
+  // reason: the editor's divider sits inside the tree, so its width is
+  // measured past whatever columns lie outside it — otherwise dragging the
+  // editor would move the tree too.
+  it('measures the editor past the tree beside it', async () => {
     await bootReady()
-    fake.sendIpc('shell:nudge-pane', 20)
-    expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ width: 440 }))
+    fake.sendIpc('pane:open-file', '/p/known', 'readme.md')
+    fake.sendIpc('harness:toggle-pane')
+    fake.sendIpc('shell:resize-column', 'editor', 700)
+    expect(applyLayout).toHaveBeenLastCalledWith(
+      fake.views,
+      expect.objectContaining({ editor: expect.objectContaining({ width: 1280 - 700 - 220 - 6 }) }),
+      expect.any(Boolean),
+    )
+  })
+
+  it('nudges a column by a step for a keyboard user', async () => {
+    await bootReady()
+    fake.sendIpc('shell:nudge-column', 'files', 20)
+    expect(applyLayout).toHaveBeenLastCalledWith(
+      fake.views,
+      expect.objectContaining({ files: expect.objectContaining({ width: 240 }) }),
+      expect.any(Boolean),
+    )
   })
 
   // reason: a write per pointer move would put a file write behind every
@@ -1646,41 +1671,90 @@ describe('the side pane', () => {
   it('stores nothing while the drag is still running', async () => {
     await bootReady()
     writeConfigMock.mockClear()
-    fake.sendIpc('shell:resize-pane', 900)
+    fake.sendIpc('shell:resize-column', 'files', 900)
     expect(writeConfigMock).not.toHaveBeenCalled()
   })
 
-  // reason: the drag can ask for a width `layout` refuses. Storing the ask
-  // rather than the outcome would reopen the pane at a size it never had.
-  it('stores the width the layout settled on when the drag ends', async () => {
+  // reason: a drag can ask for a width `layout` refuses. Storing the ask
+  // rather than the outcome would reopen the column at a size it never had.
+  it('stores the widths the layout settled on when the drag ends', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/known', title: 'known', file: '/p/known/.dsh/mcp.json', declared: false, servers: [] },
+    ])
     await bootReady()
-    fake.views.pane.getBounds.mockReturnValue({ x: 0, y: 0, width: 314, height: 860 })
+    fake.sendIpc('pane:open-file', '/p/known', 'readme.md')
+    fake.sendIpc('harness:toggle-pane')
     writeConfigMock.mockClear()
-    fake.sendIpc('shell:resize-pane', 10)
-    fake.sendIpc('shell:commit-pane')
+    fake.sendIpc('shell:resize-column', 'files', 10)
+    fake.sendIpc('shell:commit-columns')
     expect(writeConfigMock).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ pane: { width: 314, open: false } }),
+      expect.objectContaining({
+        pane: { editor: { width: 520, open: true }, files: { width: 220, open: true } },
+      }),
     )
   })
 
-  it('opens and closes from the View menu, storing the choice each time', async () => {
+  // reason: the editor is not something to open empty — it appears when a
+  // file goes into it. The tree is the column a user opens by hand.
+  it('opens the tree from the View menu, leaving the editor closed', async () => {
     await bootReady()
     const toggle = installMenuMock.mock.calls[0][1] as () => void
     writeConfigMock.mockClear()
     toggle()
-    expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ open: true }))
-    expect(writeConfigMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ pane: expect.objectContaining({ open: true }) }))
+    expect(applyLayout).toHaveBeenLastCalledWith(
+      fake.views,
+      { editor: expect.objectContaining({ open: false }), files: expect.objectContaining({ open: true }) },
+      expect.any(Boolean),
+    )
     toggle()
-    expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ open: false }))
+    expect(applyLayout).toHaveBeenLastCalledWith(
+      fake.views,
+      expect.objectContaining({ files: expect.objectContaining({ open: false }) }),
+      expect.any(Boolean),
+    )
   })
 
   // reason: this is the whole point of the preload on the harness view — a
   // button contributed into the harness UI has no other way to reach the app.
-  it('toggles from the harness page’s own button', async () => {
+  it('opens the tree from the harness page’s own button', async () => {
     await bootReady()
     fake.sendIpc('harness:toggle-pane')
-    expect(applyLayout).toHaveBeenLastCalledWith(fake.views, expect.objectContaining({ open: true }))
+    expect(applyLayout).toHaveBeenLastCalledWith(
+      fake.views,
+      expect.objectContaining({ files: expect.objectContaining({ open: true }) }),
+      expect.any(Boolean),
+    )
+  })
+
+  // reason: with nothing open the editor has no reason to take width from the
+  // conversation beside it.
+  it('closes the editor column when the pane asks, and remembers it', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/known', title: 'known', file: '/p/known/.dsh/mcp.json', declared: false, servers: [] },
+    ])
+    await bootReady()
+    fake.sendIpc('pane:open-file', '/p/known', 'readme.md')
+    writeConfigMock.mockClear()
+    fake.sendIpc('pane:close-editor')
+    expect(applyLayout).toHaveBeenLastCalledWith(
+      fake.views,
+      expect.objectContaining({ editor: expect.objectContaining({ open: false }) }),
+      expect.any(Boolean),
+    )
+    expect(writeConfigMock).toHaveBeenCalled()
+  })
+
+  it('opens at the widths the last session stored', async () => {
+    configResult = {
+      configured: true,
+      config: { ...STORED, pane: { editor: { width: 600, open: true }, files: { width: 300, open: true } } },
+    }
+    await bootReady()
+    expect(createWindow).toHaveBeenCalledWith({
+      editor: { width: 600, open: true },
+      files: { width: 300, open: true },
+    })
   })
 
   // reason: the renderer names the root it wants to read. Without this it
@@ -1706,12 +1780,19 @@ describe('the side pane', () => {
     expect(await fake.sendIpc('pane:projects')).toEqual([{ path: '/p/known', title: 'known' }])
   })
 
-  it('opens at the width the last session stored', async () => {
-    configResult = {
-      configured: true,
-      config: { ...STORED, pane: { width: 360, open: true } },
-    }
+  // reason: a file loaded into a hidden column would look like nothing
+  // happened.
+  it('opens the editor column when a file is opened into it', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/known', title: 'known', file: '/p/known/.dsh/mcp.json', declared: false, servers: [] },
+    ])
     await bootReady()
-    expect(createWindow).toHaveBeenCalledWith({ width: 360, open: true })
+    fake.sendIpc('pane:open-file', '/p/known', 'readme.md')
+    expect(applyLayout).toHaveBeenLastCalledWith(
+      fake.views,
+      expect.objectContaining({ editor: expect.objectContaining({ open: true }) }),
+      expect.any(Boolean),
+    )
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith('pane:open', '/p/known', 'readme.md')
   })
 })

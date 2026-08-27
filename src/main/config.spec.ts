@@ -252,14 +252,15 @@ describe('extraPath', () => {
 
 describe('the stored pane state', () => {
   /** The stored config that results from a `desktop.json` with this `pane`. */
-  const withPane = (pane: unknown): { width: number; open: boolean } | undefined => {
+  const withPane = (pane: unknown): unknown => {
     const file = writeConfigFile(JSON.stringify({ harness: { kind: 'local', repo: '/tmp/harness' }, pane }))
     const result = loadConfig(file)
     return result.configured ? result.config.pane : undefined
   }
 
-  it('keeps a usable width and open flag', () => {
-    expect(withPane({ width: 380, open: true })).toEqual({ width: 380, open: true })
+  it('keeps a usable width and open flag for each column', () => {
+    const stored = { editor: { width: 560, open: true }, files: { width: 240, open: false } }
+    expect(withPane(stored)).toEqual(stored)
   })
 
   // reason: this is window state the app writes for itself. Refusing to start
@@ -268,14 +269,19 @@ describe('the stored pane state', () => {
     ['a missing block', undefined],
     ['a non-object', 7],
     ['an array', []],
-    ['a width that is not a number', { width: 'wide', open: true }],
-    ['a negative width', { width: -10, open: true }],
-    ['an infinite width', { width: Number.POSITIVE_INFINITY, open: true }],
+    ['one column missing', { editor: { width: 560, open: true } }],
+    ['a width that is not a number', { editor: { width: 'wide', open: true }, files: { width: 240, open: true } }],
+    ['a negative width', { editor: { width: -10, open: true }, files: { width: 240, open: true } }],
+    [
+      'an infinite width',
+      { editor: { width: Number.POSITIVE_INFINITY, open: true }, files: { width: 240, open: true } },
+    ],
   ])('drops %s rather than throwing', (_case, pane) => {
     expect(withPane(pane)).toBeUndefined()
   })
 
   it('treats anything but true as closed', () => {
-    expect(withPane({ width: 380, open: 'yes' })).toEqual({ width: 380, open: false })
+    const stored = { editor: { width: 560, open: 'yes' }, files: { width: 240, open: 1 } }
+    expect(withPane(stored)).toEqual({ editor: { width: 560, open: false }, files: { width: 240, open: false } })
   })
 })
