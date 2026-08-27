@@ -44,3 +44,62 @@ body {
     background: rgb(210, 210, 214);
   }
 }
+
+/* Placed by main, like the dividers: the strip the views leave at the right
+   edge of the window. */
+.rail {
+  position: absolute;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  /* Clears the traffic lights' band, which the window's `hiddenInset` title
+     bar puts over the top-left — the rail is at the other edge, but a
+     maximised window is not the only shape this takes. */
+  padding-top: 34px;
+  background: rgb(36, 36, 38);
+  border-left: 1px solid rgb(60, 60, 62);
+  box-sizing: border-box;
+}
+
+.rail-button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+.rail-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  opacity: 0.9;
+}
+
+/* A column that is up is marked on its button, so the rail says what the
+   window is showing rather than only what it can show. */
+.rail-button[aria-pressed='true'] {
+  background: rgba(255, 255, 255, 0.16);
+  opacity: 1;
+}
+
+@media (prefers-color-scheme: light) {
+  .rail {
+    background: rgb(236, 236, 238);
+    border-left-color: rgb(210, 210, 214);
+  }
+
+  .rail-button:hover {
+    background: rgba(0, 0, 0, 0.08);
+  }
+
+  .rail-button[aria-pressed='true'] {
+    background: rgba(0, 0, 0, 0.13);
+  }
+}

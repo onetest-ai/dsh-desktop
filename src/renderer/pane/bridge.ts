@@ -20,6 +20,11 @@ declare global {
       onFileChanged(listener: (root: string, relative: string) => void): void
       onShowDiff(listener: (root: string, relative: string, proposed: string) => void): void
       onShowWeb(listener: () => void): void
+      navigate(url: string): void
+      webBack(): void
+      webForward(): void
+      webReload(): void
+      onWebState(listener: (state: { url: string; canGoBack: boolean; canGoForward: boolean }) => void): void
     }
   }
 }

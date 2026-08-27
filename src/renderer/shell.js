@@ -19,7 +19,7 @@ function report(column, event) {
 // Main sends these on every layout pass. Without them both dividers would
 // fill the page and the one drawn last would take every pointer event,
 // including the other column's.
-window.shell.onDividers((places) => {
+window.shell.onPlaces((places) => {
   for (const divider of document.querySelectorAll('.divider')) {
     const place = places[divider.dataset.column]
     divider.style.left = `${place.x}px`
@@ -28,6 +28,18 @@ window.shell.onDividers((places) => {
     // of the tab order, where a separator that resizes nothing is noise.
     divider.hidden = place.width === 0
   }
+  const rail = document.getElementById('rail')
+  rail.style.left = `${places.rail.x}px`
+  rail.style.width = `${places.rail.width}px`
+  document.getElementById('rail-files').setAttribute('aria-pressed', String(places.open.files))
+  document.getElementById('rail-web').setAttribute('aria-pressed', String(places.open.web))
+})
+
+document.getElementById('rail-files').addEventListener('click', () => {
+  window.shell.toggleFiles()
+})
+document.getElementById('rail-web').addEventListener('click', () => {
+  window.shell.toggleWeb()
 })
 
 for (const divider of document.querySelectorAll('.divider')) {

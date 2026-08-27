@@ -2,8 +2,14 @@
 <meta charset="utf-8">
 <title>Shell</title>
 <link rel="stylesheet" href="shell.css">
-<!-- One per resizable column. Each is only ever visible in the gap its own
-     column leaves, so both can sit here whether or not that column is open. -->
+<!-- One divider per resizable column. Each is only ever visible in the gap
+     its own column leaves, so both can sit here whether or not it is open. -->
 <div class="divider" id="divider-editor" data-column="editor" role="separator" aria-orientation="vertical" aria-label="Resize the editor" tabindex="0"></div>
 <div class="divider" id="divider-files" data-column="files" role="separator" aria-orientation="vertical" aria-label="Resize the file tree" tabindex="0"></div>
+<!-- The strip at the right edge: the only chrome of this app's own that is
+     visible when every column is closed. -->
+<nav class="rail" id="rail" aria-label="Side panels">
+  <button type="button" id="rail-files" class="rail-button" aria-pressed="false" aria-label="File tree" title="File tree (⌘⌥B)">🗂</button>
+  <button type="button" id="rail-web" class="rail-button" aria-pressed="false" aria-label="Browser" title="Browser (⌘⌥W)">🌐</button>
+</nav>
 <script src="shell.js"></script>

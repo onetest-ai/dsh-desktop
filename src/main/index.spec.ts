@@ -1636,7 +1636,7 @@ describe('the side columns', () => {
     fake.sendIpc('shell:resize-column', 'files', 1040)
     expect(applyLayout).toHaveBeenLastCalledWith(
       fake.views,
-      expect.objectContaining({ files: expect.objectContaining({ width: 1280 - 1040 }) }),
+      expect.objectContaining({ files: expect.objectContaining({ width: 1280 - 30 - 1040 }) }),
       expect.any(Boolean),
     )
   })
@@ -1647,11 +1647,11 @@ describe('the side columns', () => {
   it('measures the editor past the tree beside it', async () => {
     await bootReady()
     fake.sendIpc('pane:open-file', '/p/known', 'readme.md')
-    fake.sendIpc('harness:toggle-pane')
+    fake.sendIpc('harness:toggle-files')
     fake.sendIpc('shell:resize-column', 'editor', 700)
     expect(applyLayout).toHaveBeenLastCalledWith(
       fake.views,
-      expect.objectContaining({ editor: expect.objectContaining({ width: 1280 - 700 - 220 - 6 }) }),
+      expect.objectContaining({ editor: expect.objectContaining({ width: 1280 - 30 - 700 - 220 - 6 }) }),
       expect.any(Boolean),
     )
   })
@@ -1683,7 +1683,7 @@ describe('the side columns', () => {
     ])
     await bootReady()
     fake.sendIpc('pane:open-file', '/p/known', 'readme.md')
-    fake.sendIpc('harness:toggle-pane')
+    fake.sendIpc('harness:toggle-files')
     writeConfigMock.mockClear()
     fake.sendIpc('shell:resize-column', 'files', 10)
     fake.sendIpc('shell:commit-columns')
@@ -1699,7 +1699,7 @@ describe('the side columns', () => {
   // file goes into it. The tree is the column a user opens by hand.
   it('opens the tree from the View menu, leaving the editor closed', async () => {
     await bootReady()
-    const toggle = installMenuMock.mock.calls[0][1] as () => void
+    const toggle = (installMenuMock.mock.calls[0][1] as { toggleFiles(): void }).toggleFiles
     writeConfigMock.mockClear()
     toggle()
     expect(applyLayout).toHaveBeenLastCalledWith(
@@ -1719,7 +1719,7 @@ describe('the side columns', () => {
   // button contributed into the harness UI has no other way to reach the app.
   it('opens the tree from the harness page’s own button', async () => {
     await bootReady()
-    fake.sendIpc('harness:toggle-pane')
+    fake.sendIpc('harness:toggle-files')
     expect(applyLayout).toHaveBeenLastCalledWith(
       fake.views,
       expect.objectContaining({ files: expect.objectContaining({ open: true }) }),

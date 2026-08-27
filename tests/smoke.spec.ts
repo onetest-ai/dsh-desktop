@@ -133,14 +133,17 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
 
     // The pane starts closed, so the harness view has the whole window: its
     // width is the window's own, not a fraction of it.
-    const paneClosed = await app.evaluate(({ BrowserWindow }) => {
+    // Harness, editor, files, web. With both columns closed the harness has
+    // everything except the rail at the edge, and nothing else has width.
+    const closed = await app.evaluate(({ BrowserWindow }) => {
       const [main] = BrowserWindow.getAllWindows().filter((each) => each.getContentSize()[0] > 800)
       const [width] = main.getContentSize()
-      return main.contentView.children.map((child) => child.getBounds().width === width)
+      const widths = main.contentView.children.map((child) => child.getBounds().width)
+      return { widths, width }
     })
-    // Harness, editor, files, web: only the harness has the window's width,
-    // because the columns start closed.
-    expect(paneClosed).toEqual([true, false, false, false])
+    expect(closed.widths[0]).toBeGreaterThan(closed.width - 60)
+    expect(closed.widths[0]).toBeLessThan(closed.width)
+    expect(closed.widths.slice(1)).toEqual([0, 0, 0])
 
     await expect
       .poll(

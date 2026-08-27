@@ -74,6 +74,9 @@ vi.mock('electron', () => ({
 }))
 
 beforeEach(() => {
+  // The resize test moves this; without a reset the next test lays out a
+  // window of that size and every coordinate in it is off.
+  fake.windowInstance.getContentSize.mockReturnValue([1280, 860])
   fake.domReadyHandlers.length = 0
   fake.insertedCss.length = 0
   fake.resizeHandlers.length = 0
@@ -121,25 +124,26 @@ describe('the window\'s views', () => {
     expect(fake.views[3].preload).toBeUndefined()
   })
 
-  it('starts with both columns hidden and the harness filling the window', async () => {
+  it('starts with both columns hidden and the harness filling what the rail leaves', async () => {
     const { createWindow } = await import('./window')
     createWindow(CLOSED)
-    expect(fake.views[0].bounds).toEqual({ x: 0, y: 0, width: 1280, height: 860 })
+    expect(fake.views[0].bounds).toEqual({ x: 0, y: 0, width: 1280 - 30, height: 860 })
     expect(fake.views[1].visible).toBe(false)
     expect(fake.views[2].visible).toBe(false)
   })
 
   // reason: the web view covers the editor column. Placed over the tab strip
   // it would take the tabs with it, leaving no way back to the editor.
-  it('leaves the editor column’s tab strip uncovered by the web view', async () => {
+  it('leaves the editor column’s tab strip and address bar uncovered by the web view', async () => {
     const { createWindow, applyLayout } = await import('./window')
     const views = createWindow(OPEN)
     applyLayout(views, OPEN, true)
     const editor = fake.views[1].bounds as { x: number; y: number; height: number }
     const web = fake.views[3].bounds as { x: number; y: number; height: number }
     expect(web.x).toBe(editor.x)
-    expect(web.y).toBeGreaterThan(editor.y)
-    expect(web.height).toBeLessThan(editor.height)
+    // Both strips: 35px of tabs and 35px of address bar.
+    expect(web.y).toBe(editor.y + 70)
+    expect(web.height).toBe(editor.height - 70)
   })
 
   it('shows the web view only when the editor column is open and its tab is chosen', async () => {
@@ -161,20 +165,34 @@ describe('the window\'s views', () => {
     fake.windowInstance.getContentSize.mockReturnValue([1200, 600])
     expect(fake.resizeHandlers).toHaveLength(1)
     fake.resizeHandlers[0]?.()
-    expect(fake.views[0].bounds).toMatchObject({ width: 1200 - 420 - 6, height: 600 })
+    expect(fake.views[0].bounds).toMatchObject({ width: 1200 - 30 - 420 - 6, height: 600 })
     expect(fake.views[1].bounds).toMatchObject({ width: 420, height: 600 })
   })
 
   // reason: the window's own page draws the dividers and cannot see where the
   // views are. Both would otherwise fill the page and the one drawn last would
   // take every pointer event, including the other column's.
-  it('tells the window page where each divider goes', async () => {
+  it('tells the window page where the dividers and the rail go', async () => {
     const { createWindow, applyLayout } = await import('./window')
     const views = createWindow(OPEN)
     applyLayout(views, OPEN, false)
     const sent = (fake.windowInstance.webContents.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)
-    expect(sent?.[0]).toBe('shell:dividers')
+    expect(sent?.[0]).toBe('shell:places')
     expect(sent?.[1].editor.width).toBe(6)
     expect(sent?.[1].files.x).toBeGreaterThan(sent?.[1].editor.x)
+    expect(sent?.[1].rail).toMatchObject({ x: 1280 - 30, width: 30 })
+  })
+
+  // reason: the rail's buttons say what the window is showing, not only what
+  // it can show, so the state travels with the places.
+  it('tells the window page which columns are up', async () => {
+    const { createWindow, applyLayout } = await import('./window')
+    const views = createWindow(OPEN)
+    applyLayout(views, OPEN, true)
+    const sent = (fake.windowInstance.webContents.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)
+    expect(sent?.[1].open).toEqual({ editor: true, files: true, web: true })
+    applyLayout(views, CLOSED, true)
+    const closed = (fake.windowInstance.webContents.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)
+    expect(closed?.[1].open).toEqual({ editor: false, files: false, web: false })
   })
 })

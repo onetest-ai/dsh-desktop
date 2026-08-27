@@ -1,5 +1,6 @@
 import { PANE_TABS, selectTab, type PaneTab, type TabView } from './tabs.ts'
 import { Editor, type Surface } from './editor.ts'
+import { normalizeAddress } from './address.ts'
 import { mountDiff, mountMonaco } from './monaco-surface.ts'
 import './bridge.ts'
 
@@ -113,4 +114,32 @@ window.pane.onShowDiff((root, relative, proposed) => {
 
 window.pane.onShowWeb(() => {
   selectTab('web', view)
+})
+
+// --- the browser's chrome -----------------------------------------------
+
+el('web-url').addEventListener('keydown', (event) => {
+  if ((event as KeyboardEvent).key !== 'Enter') return
+  const url = normalizeAddress((el('web-url') as HTMLInputElement).value)
+  if (url === undefined) return
+  window.pane.navigate(url)
+})
+
+el('web-back').addEventListener('click', () => {
+  window.pane.webBack()
+})
+el('web-forward').addEventListener('click', () => {
+  window.pane.webForward()
+})
+el('web-reload').addEventListener('click', () => {
+  window.pane.webReload()
+})
+
+window.pane.onWebState((state) => {
+  const field = el('web-url') as HTMLInputElement
+  // Not while it is being typed into: replacing the text under the cursor
+  // mid-edit is how an address bar loses what someone was writing.
+  if (document.activeElement !== field) field.value = state.url
+  ;(el('web-back') as HTMLButtonElement).disabled = !state.canGoBack
+  ;(el('web-forward') as HTMLButtonElement).disabled = !state.canGoForward
 })

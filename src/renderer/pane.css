@@ -216,3 +216,57 @@ body {
   background: var(--pane-hover);
   color: var(--pane-fg);
 }
+
+/* The web panel holds only the address bar: the page is a view stacked below
+   it, so the panel must not scroll or pad around a body it does not have. */
+.panel-web {
+  overflow: hidden;
+  padding: 0;
+}
+
+.address {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--pane-line);
+}
+
+.chrome {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--pane-dim);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chrome:hover:not(:disabled) {
+  background: var(--pane-hover);
+  color: var(--pane-fg);
+}
+
+.chrome:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+#web-url {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--pane-line);
+  border-radius: 11px;
+  background: var(--pane-bg);
+  color: var(--pane-fg);
+  font: inherit;
+  font-size: 12px;
+}

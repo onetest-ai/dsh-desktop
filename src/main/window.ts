@@ -240,25 +240,30 @@ export function applyLayout(views: MainWindow, columns: Columns, webVisible: boo
   views.harness.setBounds(places.harness)
   views.pane.setBounds(places.editor)
   views.files.setBounds(places.files)
-  // The web view covers the editor column's panel area, minus its tab strip,
-  // so the tabs stay reachable while a page is showing.
+  // The web view covers the editor column's panel area, minus its tab strip
+  // and the address bar under it, so both stay reachable while a page shows.
+  const chrome = TAB_STRIP_HEIGHT + ADDRESS_BAR_HEIGHT
   views.web.setBounds({
     x: places.editor.x,
-    y: places.editor.y + TAB_STRIP_HEIGHT,
+    y: places.editor.y + chrome,
     width: places.editor.width,
-    height: Math.max(0, places.editor.height - TAB_STRIP_HEIGHT),
+    height: Math.max(0, places.editor.height - chrome),
   })
   // A hidden view is given no bounds to render in rather than being detached:
   // it keeps whatever it was showing, so reopening costs no reload.
   views.pane.setVisible(columns.editor.open)
   views.files.setVisible(columns.files.open)
   views.web.setVisible(columns.editor.open && webVisible)
-  // The window's own page draws the dividers but cannot see where the views
-  // are, so it is told: each divider is placed over its own gap, and a
-  // closed column's is given no width to be grabbed by.
-  views.window.webContents.send('shell:dividers', {
+  // The window's own page draws the dividers and the rail but cannot see
+  // where the views are, so it is told: each divider is placed over its own
+  // gap, a closed column's is given no width to be grabbed by, and the rail
+  // takes the strip at the edge.
+  views.window.webContents.send('shell:places', {
     editor: places.editorDivider,
     files: places.filesDivider,
+    rail: places.rail,
+    // The rail's buttons show which columns are up, so it is told.
+    open: { editor: columns.editor.open, files: columns.files.open, web: columns.editor.open && webVisible },
   })
 }
 
@@ -270,6 +275,14 @@ export function applyLayout(views: MainWindow, columns: Columns, webVisible: boo
  * than over it, so the tabs stay clickable while a page is loaded.
  */
 const TAB_STRIP_HEIGHT = 35
+
+/**
+ * How much of the Web tab the address bar occupies.
+ *
+ * Mirrors `pane.css`: a 34px row plus its border. The page is placed under it
+ * rather than over it, so what is showing and where it can go stay visible.
+ */
+const ADDRESS_BAR_HEIGHT = 35
 
 /**
  * Replace the harness view's contents with a failure pane.
@@ -289,9 +302,9 @@ export function showError(views: MainWindow, title: string, detail: string): voi
  * both in the File menu (explicitly requested) and the app menu (macOS
  * convention), so `onSettings` is wired to both.
  * @param onSettings - opens the settings window.
- * @param onTogglePane - shows or hides the file tree.
+ * @param panes - shows or hides this app's own columns.
  */
-export function installMenu(onSettings: () => void, onTogglePane: () => void): void {
+export function installMenu(onSettings: () => void, panes: { toggleFiles(): void; toggleWeb(): void }): void {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
@@ -310,9 +323,10 @@ export function installMenu(onSettings: () => void, onTogglePane: () => void): v
       {
         label: 'View',
         submenu: [
-          // The only way to open the tree by hand. Alt rather than plain
-          // Cmd+B, which the harness Web UI may want for its own sidebar.
-          { label: 'Toggle File Tree', accelerator: 'CmdOrCtrl+Alt+B', click: onTogglePane },
+          // Alt rather than plain Cmd+B and Cmd+W, both of which the harness
+          // Web UI may want — and Cmd+W already closes a window.
+          { label: 'Toggle File Tree', accelerator: 'CmdOrCtrl+Alt+B', click: panes.toggleFiles },
+          { label: 'Toggle Browser', accelerator: 'CmdOrCtrl+Alt+W', click: panes.toggleWeb },
           { type: 'separator' },
           { role: 'reload' },
           { role: 'forceReload' },

@@ -10,6 +10,15 @@ export const DIVIDER_WIDTH = 6
 /** Below this the harness Web UI's own layout collapses, so the columns stop taking width. */
 export const MIN_HARNESS_WIDTH = 480
 
+/**
+ * How wide the rail on the right edge is.
+ *
+ * Always present, and the only chrome of this app's own that is visible when
+ * every column is closed — which is what makes the tree and the browser
+ * reachable without a menu.
+ */
+export const RAIL_WIDTH = 30
+
 /** Below these a column shows nothing worth reading. */
 export const MIN_EDITOR_WIDTH = 320
 export const MIN_FILES_WIDTH = 180
@@ -37,6 +46,8 @@ export interface Columns {
 /** Where each of the window's parts goes, left to right. */
 export interface Layout {
   harness: Rect
+  /** The strip at the right edge the window's own page draws its buttons in. */
+  rail: Rect
   /** The gap before the editor column; zero-width when that column is closed. */
   editorDivider: Rect
   editor: Rect
@@ -50,7 +61,8 @@ export interface Layout {
  * them.
  *
  * The order is the mirror of an IDE's: the conversation on the left, what it
- * is working on in the middle, the tree on the right.
+ * is working on in the middle, the tree on the right, and a rail of buttons
+ * on the outside edge.
  *
  * Pure arithmetic, deliberately free of any Electron import: this is the part
  * of the split worth testing exhaustively, and it should not need a window to
@@ -63,13 +75,17 @@ export interface Layout {
  */
 export function layout(bounds: { width: number; height: number }, columns: Columns): Layout {
   const full = { y: 0, height: bounds.height }
+  const railWidth = Math.min(RAIL_WIDTH, bounds.width)
+  const rail = { x: bounds.width - railWidth, width: railWidth, ...full }
+  // Everything else divides what the rail leaves.
+  const usable = bounds.width - railWidth
   const open = [
     { key: 'editor' as const, state: columns.editor, min: MIN_EDITOR_WIDTH },
     { key: 'files' as const, state: columns.files, min: MIN_FILES_WIDTH },
   ].filter((column) => column.state.open)
 
   const gaps = open.length * DIVIDER_WIDTH
-  const available = Math.max(0, bounds.width - gaps)
+  const available = Math.max(0, usable - gaps)
   const wanted = open.map((column) => Math.max(column.state.width, column.min))
   const total = wanted.reduce((sum, width) => sum + width, 0)
   const spare = Math.max(0, available - MIN_HARNESS_WIDTH)
@@ -84,10 +100,10 @@ export function layout(bounds: { width: number; height: number }, columns: Colum
   let x = available - used
   const harness = { x: 0, width: x, ...full }
   const places: Record<string, Rect> = {
-    editor: { x: bounds.width, width: 0, ...full },
-    files: { x: bounds.width, width: 0, ...full },
-    editorDivider: { x: bounds.width, width: 0, ...full },
-    filesDivider: { x: bounds.width, width: 0, ...full },
+    editor: { x: rail.x, width: 0, ...full },
+    files: { x: rail.x, width: 0, ...full },
+    editorDivider: { x: rail.x, width: 0, ...full },
+    filesDivider: { x: rail.x, width: 0, ...full },
   }
   open.forEach((column, index) => {
     places[`${column.key}Divider`] = { x, width: DIVIDER_WIDTH, ...full }
@@ -98,6 +114,7 @@ export function layout(bounds: { width: number; height: number }, columns: Colum
 
   return {
     harness,
+    rail,
     editorDivider: places.editorDivider,
     editor: places.editor,
     filesDivider: places.filesDivider,

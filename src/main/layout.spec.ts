@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DIVIDER_WIDTH, MIN_FILES_WIDTH, MIN_HARNESS_WIDTH, layout, type Columns } from './layout'
+import { DIVIDER_WIDTH, MIN_FILES_WIDTH, MIN_HARNESS_WIDTH, RAIL_WIDTH, layout, type Columns } from './layout'
 
 /** A 1280x860 window, the size the app opens at. */
 const BOUNDS = { width: 1280, height: 860 }
@@ -12,14 +12,25 @@ function columns(overrides: Partial<Columns> = {}): Columns {
 /** Every part's width, in the order they appear left to right. */
 function widths(bounds: { width: number; height: number }, state: Columns): number[] {
   const places = layout(bounds, state)
-  return [places.harness, places.editorDivider, places.editor, places.filesDivider, places.files].map(
+  return [places.harness, places.editorDivider, places.editor, places.filesDivider, places.files, places.rail].map(
     (rect) => rect.width,
   )
 }
 
 describe('layout', () => {
-  it('gives the harness the whole window when both columns are closed', () => {
-    expect(widths(BOUNDS, columns())).toEqual([1280, 0, 0, 0, 0])
+  it('gives the harness everything the rail leaves when both columns are closed', () => {
+    expect(widths(BOUNDS, columns())).toEqual([1280 - RAIL_WIDTH, 0, 0, 0, 0, RAIL_WIDTH])
+  })
+
+  // reason: it is the only chrome of this app's own that is visible when
+  // every column is closed, so it is what makes them reachable at all.
+  it('keeps the rail on the right edge in every state', () => {
+    for (const editor of [true, false]) {
+      for (const files of [true, false]) {
+        const places = layout(BOUNDS, columns({ editor: { width: 520, open: editor }, files: { width: 220, open: files } }))
+        expect(places.rail).toMatchObject({ x: BOUNDS.width - RAIL_WIDTH, width: RAIL_WIDTH })
+      }
+    }
   })
 
   // reason: the order is the mirror of an IDE's — conversation left, what it
@@ -31,6 +42,7 @@ describe('layout', () => {
     expect(places.editor.x).toBe(places.editorDivider.x + DIVIDER_WIDTH)
     expect(places.filesDivider.x).toBe(places.editor.x + places.editor.width)
     expect(places.files.x).toBe(places.filesDivider.x + DIVIDER_WIDTH)
+    expect(places.rail.x).toBe(places.files.x + places.files.width)
   })
 
   it('covers the window exactly, whichever columns are open', () => {
@@ -43,14 +55,15 @@ describe('layout', () => {
   })
 
   it('leaves one divider per open column', () => {
-    expect(widths(BOUNDS, columns({ files: { width: 240, open: true } }))).toEqual([1280 - 6 - 240, 0, 0, 6, 240])
-    expect(widths(BOUNDS, columns({ editor: { width: 520, open: true } }))).toEqual([1280 - 6 - 520, 6, 520, 0, 0])
+    const usable = 1280 - RAIL_WIDTH
+    expect(widths(BOUNDS, columns({ files: { width: 240, open: true } }))).toEqual([usable - 6 - 240, 0, 0, 6, 240, RAIL_WIDTH])
+    expect(widths(BOUNDS, columns({ editor: { width: 520, open: true } }))).toEqual([usable - 6 - 520, 6, 520, 0, 0, RAIL_WIDTH])
   })
 
   it('honours each stored width when the window can afford it', () => {
-    const places = layout(BOUNDS, columns({ editor: { width: 520, open: true }, files: { width: 240, open: true } }))
+    const places = layout(BOUNDS, columns({ editor: { width: 520, open: true }, files: { width: 220, open: true } }))
     expect(places.editor.width).toBe(520)
-    expect(places.files.width).toBe(240)
+    expect(places.files.width).toBe(220)
   })
 
   it('never lets a column open below its own minimum', () => {

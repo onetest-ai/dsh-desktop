@@ -23,6 +23,15 @@ contextBridge.exposeInMainWorld('pane', {
   onFileChanged: (listener: (root: string, relative: string) => void) => {
     ipcRenderer.on('pane:file-changed', (_event, root: string, relative: string) => listener(root, relative))
   },
+  navigate: (url: string) => ipcRenderer.send('pane:navigate', url),
+  webBack: () => ipcRenderer.send('pane:web-back'),
+  webForward: () => ipcRenderer.send('pane:web-forward'),
+  webReload: () => ipcRenderer.send('pane:web-reload'),
+  onWebState: (listener: (state: { url: string; canGoBack: boolean; canGoForward: boolean }) => void) => {
+    ipcRenderer.on('pane:web-state', (_event, state: { url: string; canGoBack: boolean; canGoForward: boolean }) =>
+      listener(state),
+    )
+  },
   onShowWeb: (listener: () => void) => {
     ipcRenderer.on('pane:show-web', () => listener())
   },

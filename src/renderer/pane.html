@@ -17,8 +17,15 @@
     <div id="editor-host" class="editor" hidden></div>
     <p class="status" id="editor-status" role="status"></p>
   </section>
-  <!-- Empty by design: the Web tab's contents are a view of their own,
-       stacked over this panel by main. -->
-  <section id="panel-web" role="tabpanel" aria-labelledby="tab-web" class="panel"></section>
+  <!-- Only the chrome: the page itself is a view of its own, stacked over
+       this panel by main, below this bar. -->
+  <section id="panel-web" role="tabpanel" aria-labelledby="tab-web" class="panel panel-web">
+    <div class="address">
+      <button type="button" id="web-back" class="chrome" aria-label="Back" title="Back">‹</button>
+      <button type="button" id="web-forward" class="chrome" aria-label="Forward" title="Forward">›</button>
+      <button type="button" id="web-reload" class="chrome" aria-label="Reload" title="Reload">⟳</button>
+      <input id="web-url" type="text" spellcheck="false" autocomplete="off" aria-label="Address" placeholder="example.com">
+    </div>
+  </section>
 </main>
 <script src="pane-bundle.js"></script>

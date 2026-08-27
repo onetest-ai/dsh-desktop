@@ -41,11 +41,12 @@ import { createSettingsHandlers } from './settings-ipc'
 import { openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
-import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, applyLayout, createWindow, installMenu, registerPaneScheme, servePane, showError, type MainWindow } from './window'
+import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, createWindow, installMenu, registerPaneScheme, servePane, showError, type MainWindow } from './window'
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
-import { DIVIDER_WIDTH, type Columns } from './layout'
+import { DIVIDER_WIDTH, RAIL_WIDTH, type Columns } from './layout'
 import { serveViewTools, VIEW_SERVER_NAME, type ViewServer } from './view-mcp'
+import { loadableUrl } from './view-tools'
 import { readTextFile, writeTextFile } from './file-io'
 import type { ServerStatus } from './status'
 
@@ -100,6 +101,27 @@ function setColumn(key: keyof Columns, next: { width?: number; open?: boolean })
   if (next.width !== undefined) columns[key].width = next.width
   if (next.open !== undefined) columns[key].open = next.open
   if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, columns, webViewVisible)
+}
+
+/**
+ * Show or hide the browser.
+ *
+ * The Web tab lives in the editor column, so opening the browser opens that
+ * column and selects the tab — a browser you can only reach by first opening
+ * a file is not one the user can go to. Toggling it off closes the column
+ * only when the browser is what it was showing.
+ */
+function toggleWeb(): void {
+  if (columns.editor.open && webViewVisible) {
+    setColumn('editor', { open: false })
+    storeColumns()
+    return
+  }
+  if (!columns.editor.open) {
+    setColumn('editor', { open: true })
+    storeColumns()
+  }
+  if (views !== undefined && !views.window.isDestroyed()) views.pane.webContents.send('pane:show-web')
 }
 
 /** Show or hide one column, storing the choice. */
@@ -163,6 +185,26 @@ async function startViewTools(config: DesktopConfig): Promise<void> {
     // the harness boots, and every other tool it has still works.
     console.warn(`dsh-desktop: the view tools could not start: ${(error as Error).message}`)
   }
+}
+
+/**
+ * Tell the browser's address bar where the page is and where it can go.
+ *
+ * Pushed rather than asked for: the page navigates on its own — a link, a
+ * redirect — and a bar that only updated when something asked it to would
+ * show the last address the user typed rather than the one they are on.
+ */
+function pushWebState(): void {
+  if (views === undefined || views.window.isDestroyed()) return
+  const { webContents } = views.web
+  const url = webContents.getURL()
+  views.pane.webContents.send('pane:web-state', {
+    // The empty page is this app's own; showing its `app://` URL in the bar
+    // would be an address the user can neither use nor go back to.
+    url: url.startsWith(PANE_ORIGIN) ? '' : url,
+    canGoBack: webContents.navigationHistory.canGoBack(),
+    canGoForward: webContents.navigationHistory.canGoForward(),
+  })
 }
 
 /**
@@ -1326,8 +1368,11 @@ if (!app.requestSingleInstanceLock()) {
     // Offers each shipped default once, recorded by generation so a default
     // the user removes stays removed.
     ensureDefaultPlugins(DSH_HOME)
-    installMenu(showSettings, () => {
-      toggleColumn('files')
+    installMenu(showSettings, {
+      toggleFiles: () => {
+        toggleColumn('files')
+      },
+      toggleWeb,
     })
     try {
       const stored = loadConfig(CONFIG_PATH)
@@ -1347,11 +1392,11 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.on('shell:resize-column', (_event, key: keyof Columns, windowX: number) => {
       if (views === undefined || views.window.isDestroyed()) return
       const [width] = views.window.getContentSize()
-      // Each column is measured from the window's right edge, past whatever
-      // columns sit outside it: dragging the editor's divider must not move
-      // the tree.
+      // Each column is measured inward from the rail, past whatever columns
+      // sit outside it: dragging the editor's divider must not move the tree,
+      // and neither reaches the strip at the edge.
       const outside = key === 'editor' && columns.files.open ? views.files.getBounds().width + DIVIDER_WIDTH : 0
-      setColumn(key, { width: width - windowX - outside })
+      setColumn(key, { width: width - RAIL_WIDTH - windowX - outside })
     })
     ipcMain.on('shell:nudge-column', (_event, key: keyof Columns, delta: number) => {
       setColumn(key, { width: columns[key].width + delta })
@@ -1365,12 +1410,13 @@ if (!app.requestSingleInstanceLock()) {
       }
       storeColumns()
     })
-    // The button in the harness sidebar owns the tree, not the editor: the
-    // editor is not something to open empty. It appears when a file goes into
-    // it and closes when the user is done with that file.
-    ipcMain.on('harness:toggle-pane', () => {
+    // The buttons in the harness sidebar own the tree and the browser. The
+    // editor is not among them: it is not something to open empty, and
+    // appears when a file goes into it.
+    ipcMain.on('harness:toggle-files', () => {
       toggleColumn('files')
     })
+    ipcMain.on('harness:toggle-web', toggleWeb)
     ipcMain.on('pane:close-editor', () => {
       setColumn('editor', { open: false })
       storeColumns()
@@ -1394,6 +1440,31 @@ if (!app.requestSingleInstanceLock()) {
     // one path into the editor rather than two.
     ipcMain.on('pane:open-file', (_event, root: string, relative: string) => {
       openInPane(root, relative)
+    })
+    // The browser's chrome. The page is a view of this window, so its address
+    // bar can only reach it through here.
+    ipcMain.on('pane:navigate', (_event, url: string) => {
+      if (views === undefined || views.window.isDestroyed()) return
+      if (!loadableUrl(url)) return
+      void views.web.webContents.loadURL(url)
+    })
+    ipcMain.on('pane:web-back', () => {
+      if (views !== undefined && !views.window.isDestroyed()) views.web.webContents.navigationHistory.goBack()
+    })
+    ipcMain.on('pane:web-forward', () => {
+      if (views !== undefined && !views.window.isDestroyed()) views.web.webContents.navigationHistory.goForward()
+    })
+    ipcMain.on('pane:web-reload', () => {
+      if (views !== undefined && !views.window.isDestroyed()) views.web.webContents.reload()
+    })
+    // Every navigation, wherever it came from — the address bar, a link in the
+    // page, or the agent's own tool — reports back so the bar shows where the
+    // browser actually is.
+    views.web.webContents.on('did-navigate', () => {
+      pushWebState()
+    })
+    views.web.webContents.on('did-navigate-in-page', () => {
+      pushWebState()
     })
     // The pane's Web tab: the web view is stacked over the pane's own bounds,
     // so only main can raise or drop it.
