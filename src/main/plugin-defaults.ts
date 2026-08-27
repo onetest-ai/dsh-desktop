@@ -41,7 +41,7 @@ export const PROJECT_MCP_BRIDGE = 'dsh-project-mcp-bridge@0.2.1'
  * and is expected to move with it, which is exactly why an update should be
  * a deliberate raise rather than whatever `latest` happens to be.
  */
-export const DESKTOP_PANE = '@onetest/dsh-desktop-pane@0.1.0'
+export const DESKTOP_PANE = '@onetest/dsh-desktop-pane@0.1.1'
 
 export const DEFAULT_PLUGIN_SPECS: readonly string[] = [PROJECT_MCP_BRIDGE, DESKTOP_PANE]
 

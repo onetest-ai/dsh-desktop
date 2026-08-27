@@ -1,7 +1,7 @@
 {
   "name": "@onetest/dsh-desktop-pane",
-  "version": "0.1.0",
-  "description": "Side-pane controls for DeepSeek Harness running inside the dsh-desktop app: a sidebar button that shows and hides the desktop's file, editor, and web pane",
+  "version": "0.1.1",
+  "description": "Side-pane controls for DeepSeek Harness running inside the dsh-desktop app: sidebar buttons that show and hide the desktop's file tree and browser",
   "keywords": [
     "deepseek-harness",
     "dsh",
