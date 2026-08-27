@@ -16,6 +16,8 @@
     <button type="button" id="close-editor" class="tab-close" aria-label="Close the editor" title="Close">✕</button>
   </nav>
   <section id="panel-editor" role="tabpanel" aria-labelledby="tab-editor" class="panel">
+    <!-- One entry per open file. Empty, and hidden, until something is. -->
+    <div class="file-tabs" id="file-tabs" role="tablist" aria-label="Open files" hidden></div>
     <p class="empty" id="editor-empty">Nothing open. Pick a file from the tree, or let the agent open one.</p>
     <div id="editor-host" class="editor" hidden></div>
     <p class="status" id="editor-status" role="status"></p>

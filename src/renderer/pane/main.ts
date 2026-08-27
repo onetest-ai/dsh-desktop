@@ -1,7 +1,7 @@
 import { PANE_TABS, selectTab, type PaneTab, type TabView } from './tabs.ts'
-import { Editor, type Surface } from './editor.ts'
+import { Editor } from './editor.ts'
 import { normalizeAddress } from './address.ts'
-import { mountDiff, mountMonaco } from './monaco-surface.ts'
+import { monacoDocuments } from './monaco-surface.ts'
 import './bridge.ts'
 import { followSystemTheme } from './theme.ts'
 
@@ -68,20 +68,68 @@ const editor = new Editor({
   say: (message) => {
     el('editor-status').textContent = message
   },
-  mount: (text, name) => mountInto((host, dark) => mountMonaco(host, text, name, dark)),
-  mountDiff: (original, proposed, name) =>
-    mountInto((host, dark) => mountDiff(host, original, proposed, name, dark)),
+  render: renderFileTabs,
+  closeColumn: () => {
+    window.pane.closeEditor()
+  },
+  documents: monacoDocuments(el('editor-host'), dark),
 })
 
 /**
- * Reveal the editor host and mount something in it.
- * @param mount - builds the surface once the host is on screen.
- * @returns the mounted surface.
+ * Draw one entry per open file, marking the one showing.
+ *
+ * Redrawn whole on every change rather than patched: the strip is a handful
+ * of buttons, and a rebuild cannot disagree with the tabs it is drawn from.
  */
-function mountInto(mount: (host: HTMLElement, dark: boolean) => Surface): Surface {
-  el('editor-empty').hidden = true
-  el('editor-host').hidden = false
-  return mount(el('editor-host'), matchMedia('(prefers-color-scheme: dark)').matches)
+function renderFileTabs(): void {
+  const strip = el('file-tabs')
+  strip.textContent = ''
+  const tabs = editor.openTabs
+  strip.hidden = tabs.length === 0
+  el('editor-empty').hidden = tabs.length > 0
+  el('editor-host').hidden = tabs.length === 0
+
+  for (const tab of tabs) {
+    const showing = editor.current?.root === tab.file.root && editor.current.relative === tab.file.relative
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'file-tab'
+    button.setAttribute('role', 'tab')
+    button.setAttribute('aria-selected', String(showing))
+    button.title = tab.file.relative
+
+    const name = document.createElement('span')
+    name.className = 'file-tab-name'
+    // The file's own name, not its path: the path is in the status line, and
+    // a strip of paths is unreadable at tab width.
+    name.textContent = `${tab.comparing ? '± ' : ''}${tab.file.relative.split('/').pop() ?? tab.file.relative}`
+    button.append(name)
+    button.addEventListener('click', () => {
+      editor.show(tab)
+    })
+    strip.append(button)
+
+    if (editor.isDirty(tab)) {
+      const dirty = document.createElement('span')
+      dirty.className = 'file-tab-dirty'
+      dirty.setAttribute('aria-label', 'Unsaved')
+      dirty.textContent = '•'
+      button.append(dirty)
+      continue
+    }
+    const close = document.createElement('button')
+    close.type = 'button'
+    close.className = 'file-tab-close'
+    close.setAttribute('aria-label', `Close ${tab.file.relative}`)
+    close.textContent = '✕'
+    close.addEventListener('click', (event) => {
+      // Without this the tab's own click handler runs too, showing the tab
+      // that is on its way out.
+      event.stopPropagation()
+      editor.close(tab)
+    })
+    button.append(close)
+  }
 }
 
 el('close-editor').addEventListener('click', () => {
@@ -96,8 +144,6 @@ window.addEventListener('keydown', (event) => {
   void editor.save()
 })
 
-// Opening a file is one path whether the click came from this pane's tree or
-// from a tool the agent called: both arrive here.
 window.pane.onOpenFile((root, relative) => {
   selectTab('editor', view)
   void editor.open({ root, relative })

@@ -1,24 +1,45 @@
-/** The file the editor currently holds. */
+/** A file the editor has open. */
 export interface OpenFile {
   root: string
   relative: string
 }
 
-/**
- * A mounted document.
- *
- * The editor library sits behind this: Monaco needs a real DOM, workers, and
- * a layout pass, none of which belong in the rules this class exists to
- * enforce — which file is open, whether it differs from disk, and what
- * happens when it changes underneath.
- */
-export interface Surface {
+/** One open document, as the editor library holds it. */
+export interface Document {
   /** The current contents of the buffer. */
   text(): string
-  /** What the user has selected, or '' when nothing is. */
+  /** What the user has selected in it, or '' when nothing is. */
   selection(): string
-  /** Release the document and its editor. */
+  /** Show this document, hiding whichever was showing. */
+  activate(): void
+  /** Release it. */
   destroy(): void
+}
+
+/**
+ * The editor library, behind a seam.
+ *
+ * Monaco needs a real DOM, workers, and a layout pass, none of which belong
+ * in the rules this class enforces — which files are open, which is showing,
+ * whether one differs from disk, and what happens when one changes
+ * underneath.
+ */
+export interface Documents {
+  /**
+   * Open a document.
+   * @param text - its contents.
+   * @param name - the file's path, which chooses the language.
+   * @returns the document, not yet showing.
+   */
+  open(text: string, name: string): Document
+  /**
+   * Open a file beside the text proposed for it, read-only on both sides.
+   * @param original - the file as it is on disk.
+   * @param proposed - the text proposed for it.
+   * @param name - the file's path, which chooses the language.
+   * @returns the document, not yet showing.
+   */
+  openDiff(original: string, proposed: string, name: string): Document
 }
 
 /** What the editor needs from main and from the editor library. */
@@ -27,96 +48,97 @@ export interface EditorDeps {
   writeFile(root: string, relative: string, text: string): Promise<{ ok: true } | { ok: false; reason: string }>
   /** Report a message to the user, or clear it with `''`. */
   say(message: string): void
-  /**
-   * Put a document on screen, replacing any previous one.
-   * @param text - the document's contents.
-   * @param name - the file's path, which chooses the language.
-   * @returns the mounted surface.
-   */
-  mount(text: string, name: string): Surface
-  /**
-   * Put a file on screen beside the text proposed for it.
-   * @param original - the file as it is on disk.
-   * @param proposed - the text proposed for it.
-   * @param name - the file's path, which chooses the language.
-   * @returns the mounted surface.
-   */
-  mountDiff(original: string, proposed: string, name: string): Surface
+  /** Redraw the tab strip; called whenever the open set or the active tab changes. */
+  render(): void
+  /** Close the editor column, when the last tab goes. */
+  closeColumn(): void
+  documents: Documents
+}
+
+/** One tab: a file, its document, and what was last read or written for it. */
+export interface Tab {
+  file: OpenFile
+  document: Document
+  /** The text as last read or written, which is what makes "dirty" answerable. */
+  saved: string
+  /** Whether this tab is a proposed change, which nothing may be saved from. */
+  comparing: boolean
 }
 
 /**
- * The pane's editor: one open file at a time.
+ * The pane's editor: the open files, and which of them is showing.
  *
- * One at a time deliberately. Tabs within a tab are a second navigation model
- * beside the file tree, which already lists everything and remembers where
- * the user was.
+ * One document per file rather than one editor re-mounted per switch, so a
+ * tab keeps its undo history and its scroll position — which is the whole
+ * difference between tabs and a viewer that reloads.
  */
 export class Editor {
-  private surface: Surface | undefined
-  private file: OpenFile | undefined
-  /** The text as last read or written, which is what makes "dirty" answerable. */
-  private saved = ''
-  /** Whether what is mounted is a diff, which nothing may be saved from. */
-  private comparing = false
+  private readonly tabs: Tab[] = []
+  private active: Tab | undefined
 
   constructor(private readonly deps: EditorDeps) {}
 
-  /** The file currently open, or undefined when none is. */
-  get current(): OpenFile | undefined {
-    return this.file
+  /**
+   * Every open tab, in the order they were opened.
+   *
+   * Named apart from `open()`: a getter and a method of one name cannot both
+   * exist, and the method is the one callers reach for by that word.
+   */
+  get openTabs(): readonly Tab[] {
+    return this.tabs
   }
 
-  /** Whether the buffer differs from what is on disk. */
+  /** The file showing, or undefined when nothing is open. */
+  get current(): OpenFile | undefined {
+    return this.active?.file
+  }
+
+  /** Whether the showing tab differs from what is on disk. */
   get dirty(): boolean {
-    return this.surface !== undefined && this.surface.text() !== this.saved
+    return this.active !== undefined && !this.active.comparing && this.active.document.text() !== this.active.saved
   }
 
   /**
-   * Open a file, replacing whatever was open.
+   * Whether one tab differs from what is on disk.
+   * @param tab - the tab to ask about.
+   * @returns whether it has unsaved edits.
+   */
+  isDirty(tab: Tab): boolean {
+    return !tab.comparing && tab.document.text() !== tab.saved
+  }
+
+  /**
+   * Open a file, or bring it forward when it is already open.
    * @param file - the file to open.
-   * @returns resolution once it is mounted, or its failure reported.
+   * @returns resolution once it is showing, or its failure reported.
    */
   async open(file: OpenFile): Promise<void> {
+    const already = this.find(file)
+    if (already !== undefined && !already.comparing) {
+      this.show(already)
+      return
+    }
     const outcome = await this.deps.readFile(file.root, file.relative)
     if (!outcome.ok) {
       this.deps.say(outcome.reason)
       return
     }
-    this.file = file
-    this.saved = outcome.text
-    this.comparing = false
-    this.surface?.destroy()
-    this.surface = this.deps.mount(outcome.text, file.relative)
-    this.deps.say(file.relative)
-  }
-
-  /**
-   * Write the buffer back to disk.
-   * @returns resolution once the write settled.
-   */
-  async save(): Promise<void> {
-    if (this.file === undefined || this.surface === undefined) return
-    if (this.comparing) {
-      // A diff is a change to look at before it happens. Saving from one
-      // would write the agent's proposal as though the user had made it.
-      this.deps.say('This is a proposed change. Open the file to edit it.')
-      return
-    }
-    const text = this.surface.text()
-    const outcome = await this.deps.writeFile(this.file.root, this.file.relative, text)
-    if (!outcome.ok) {
-      this.deps.say(outcome.reason)
-      return
-    }
-    this.saved = text
-    this.deps.say(`Saved ${this.file.relative}`)
+    // A diff for this file is replaced rather than joined: two tabs for one
+    // path, one of them read-only, is a puzzle rather than a convenience.
+    if (already !== undefined) this.drop(already)
+    this.add({
+      file,
+      document: this.deps.documents.open(outcome.text, file.relative),
+      saved: outcome.text,
+      comparing: false,
+    })
   }
 
   /**
    * Show a file beside the text an agent proposes for it.
    * @param file - the file being proposed against.
    * @param proposed - the text the agent proposes.
-   * @returns resolution once mounted, or its failure reported.
+   * @returns resolution once it is showing, or its failure reported.
    */
   async showDiff(file: OpenFile, proposed: string): Promise<void> {
     const outcome = await this.deps.readFile(file.root, file.relative)
@@ -124,14 +146,78 @@ export class Editor {
       this.deps.say(outcome.reason)
       return
     }
-    this.file = file
-    // The proposal is what the buffer holds, so a diff never reads as dirty
-    // and never invites the reload that a dirty buffer refuses.
-    this.saved = proposed
-    this.comparing = true
-    this.surface?.destroy()
-    this.surface = this.deps.mountDiff(outcome.text, proposed, file.relative)
-    this.deps.say(`Proposed change to ${file.relative}`)
+    const already = this.find(file)
+    // An unsaved edit is never taken away by an agent's proposal: the
+    // proposal opens beside nothing, and the user's tab stays as it is.
+    if (already !== undefined && this.isDirty(already)) {
+      this.deps.say(`${file.relative} has unsaved edits, so the proposed change was not opened.`)
+      return
+    }
+    if (already !== undefined) this.drop(already)
+    this.add({
+      file,
+      document: this.deps.documents.openDiff(outcome.text, proposed, file.relative),
+      saved: proposed,
+      comparing: true,
+    })
+  }
+
+  /**
+   * Bring one tab forward.
+   * @param tab - the tab to show.
+   */
+  show(tab: Tab): void {
+    this.active = tab
+    tab.document.activate()
+    this.deps.say(tab.comparing ? `Proposed change to ${tab.file.relative}` : tab.file.relative)
+    this.deps.render()
+  }
+
+  /**
+   * Close one tab, showing its neighbour.
+   *
+   * Closing the last one closes the column: an editor with nothing in it has
+   * no reason to take width from the conversation beside it.
+   * @param tab - the tab to close.
+   */
+  close(tab: Tab): void {
+    const at = this.tabs.indexOf(tab)
+    if (at === -1) return
+    this.drop(tab)
+    if (this.tabs.length === 0) {
+      this.active = undefined
+      this.deps.say('')
+      this.deps.render()
+      this.deps.closeColumn()
+      return
+    }
+    // The neighbour to the right, or the new last one — what every editor
+    // does, and what keeps the eye where the closed tab was.
+    this.show(this.tabs[Math.min(at, this.tabs.length - 1)])
+  }
+
+  /**
+   * Write the showing tab back to disk.
+   * @returns resolution once the write settled.
+   */
+  async save(): Promise<void> {
+    const tab = this.active
+    if (tab === undefined) return
+    if (tab.comparing) {
+      // A diff is a change to look at before it happens. Saving from one
+      // would write the agent's proposal as though the user had made it.
+      this.deps.say('This is a proposed change. Open the file to edit it.')
+      return
+    }
+    const text = tab.document.text()
+    const outcome = await this.deps.writeFile(tab.file.root, tab.file.relative, text)
+    if (!outcome.ok) {
+      this.deps.say(outcome.reason)
+      return
+    }
+    tab.saved = text
+    this.deps.say(`Saved ${tab.file.relative}`)
+    this.deps.render()
   }
 
   /**
@@ -139,29 +225,76 @@ export class Editor {
    * @returns the selected text.
    */
   selection(): string {
-    return this.surface?.selection() ?? ''
+    return this.active?.document.selection() ?? ''
   }
 
   /**
    * Take a change made outside this editor.
    *
-   * A clean buffer is replaced silently — that is the agent editing a file the
-   * user happens to be looking at, and showing stale text would be a lie. A
-   * dirty buffer is never overwritten: the user's unsaved work is the one
-   * thing here that exists nowhere else.
+   * A clean tab is replaced silently — that is the agent editing a file the
+   * user happens to have open, and showing stale text would be a lie. A dirty
+   * one is never overwritten: the user's unsaved work is the one thing here
+   * that exists nowhere else. A tab that is not showing is reloaded just the
+   * same, so bringing it forward does not surface text from before the change.
    * @param file - the file that changed.
    * @returns resolution once reloaded, or the conflict reported.
    */
   async reload(file: OpenFile): Promise<void> {
-    if (this.file === undefined) return
-    if (this.file.root !== file.root || this.file.relative !== file.relative) return
+    const tab = this.find(file)
     // A diff is not a view of the file as it is, so a change to that file is
     // not something to fold into it.
-    if (this.comparing) return
-    if (this.dirty) {
+    if (tab === undefined || tab.comparing) return
+    if (this.isDirty(tab)) {
       this.deps.say(`${file.relative} changed on disk. Save to overwrite, or reopen it to discard your edits.`)
       return
     }
-    await this.open(file)
+    const outcome = await this.deps.readFile(file.root, file.relative)
+    if (!outcome.ok) {
+      this.deps.say(outcome.reason)
+      return
+    }
+    const showing = this.active === tab
+    const at = this.tabs.indexOf(tab)
+    this.drop(tab)
+    const replacement: Tab = {
+      file,
+      document: this.deps.documents.open(outcome.text, file.relative),
+      saved: outcome.text,
+      comparing: false,
+    }
+    // Put back exactly where it was, so a reload does not reorder the strip
+    // under the user.
+    this.tabs.splice(at, 0, replacement)
+    if (showing) this.show(replacement)
+    else this.deps.render()
+  }
+
+  /**
+   * The tab holding a file, if one does.
+   * @param file - the file to look for.
+   * @returns its tab, or undefined.
+   */
+  private find(file: OpenFile): Tab | undefined {
+    return this.tabs.find((tab) => tab.file.root === file.root && tab.file.relative === file.relative)
+  }
+
+  /**
+   * Add a tab and show it.
+   * @param tab - the tab to add.
+   */
+  private add(tab: Tab): void {
+    this.tabs.push(tab)
+    this.show(tab)
+  }
+
+  /**
+   * Remove a tab and release its document.
+   * @param tab - the tab to remove.
+   */
+  private drop(tab: Tab): void {
+    const at = this.tabs.indexOf(tab)
+    if (at !== -1) this.tabs.splice(at, 1)
+    tab.document.destroy()
+    if (this.active === tab) this.active = undefined
   }
 }

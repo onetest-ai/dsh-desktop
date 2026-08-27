@@ -1,5 +1,5 @@
 import * as monaco from 'monaco-editor'
-import type { Surface } from './editor.ts'
+import type { Document, Documents } from './editor.ts'
 
 /**
  * Where the pane and its workers are served from.
@@ -29,86 +29,13 @@ const WORKERS: Record<string, string> = {
 }
 
 // Monaco reads this off the global before it starts any worker. Set at module
-// load rather than per mount: it is process-wide state, and Monaco caches the
-// workers it starts.
+// load rather than per document: it is process-wide state, and Monaco caches
+// the workers it starts.
 ;(globalThis as { MonacoEnvironment?: monaco.Environment }).MonacoEnvironment = {
   getWorker: (_workerId: string, label: string) => new Worker(`${ORIGIN}/${WORKERS[label] ?? 'editor.worker.js'}`),
 }
 
-/**
- * Mount a document in Monaco.
- *
- * The model is created against a `file:` URI so Monaco picks the language
- * from the extension itself — its own table, kept current with the editor,
- * rather than one this app would have to maintain.
- * @param host - the element to fill.
- * @param text - the document's contents.
- * @param path - the file's path within its project.
- * @param dark - whether to use the dark theme.
- * @returns the mounted surface.
- */
-export function mountMonaco(host: HTMLElement, text: string, path: string, dark: boolean): Surface {
-  const model = monaco.editor.createModel(text, undefined, monaco.Uri.file(path))
-  const editor = monaco.editor.create(host, { ...options(dark), model })
-  return {
-    text: () => model.getValue(),
-    selection: () => {
-      const range = editor.getSelection()
-      return range === null ? '' : model.getValueInRange(range)
-    },
-    destroy: () => {
-      editor.dispose()
-      // Disposed separately: a model outlives the editor showing it, and
-      // leaking one keeps its whole document and language service alive.
-      model.dispose()
-    },
-  }
-}
-
-/**
- * Mount a file beside the text an agent proposes for it.
- *
- * Read-only on both sides: this is a change to look at before it happens, not
- * one to edit here — the agent writes the file, or it does not.
- * @param host - the element to fill.
- * @param original - the file as it is on disk.
- * @param proposed - the text the agent proposes.
- * @param path - the file's path within its project.
- * @param dark - whether to use the dark theme.
- * @returns the mounted surface, whose text is the proposed side.
- */
-export function mountDiff(
-  host: HTMLElement,
-  original: string,
-  proposed: string,
-  path: string,
-  dark: boolean,
-): Surface {
-  // Distinct URIs: two models over one path would be the same model, and the
-  // diff would compare a document with itself.
-  const left = monaco.editor.createModel(original, undefined, monaco.Uri.file(path).with({ scheme: 'ondisk' }))
-  const right = monaco.editor.createModel(proposed, undefined, monaco.Uri.file(path).with({ scheme: 'proposed' }))
-  const editor = monaco.editor.createDiffEditor(host, { ...options(dark), readOnly: true, renderSideBySide: true })
-  editor.setModel({ original: left, modified: right })
-  return {
-    text: () => right.getValue(),
-    selection: () => {
-      const range = editor.getModifiedEditor().getSelection()
-      return range === null ? '' : right.getValueInRange(range)
-    },
-    destroy: () => {
-      editor.dispose()
-      left.dispose()
-      right.dispose()
-    },
-  }
-}
-
-/**
- * The options both surfaces share.
- * @param dark - whether to use the dark theme.
- * @returns the editor options.
- */
+/** The options every editor here shares. */
 function options(dark: boolean): monaco.editor.IStandaloneEditorConstructionOptions {
   return {
     theme: dark ? 'vs-dark' : 'vs',
@@ -118,5 +45,121 @@ function options(dark: boolean): monaco.editor.IStandaloneEditorConstructionOpti
     fontSize: 12,
     tabSize: 2,
     renderWhitespace: 'selection',
+  }
+}
+
+/**
+ * A unique model URI for one document.
+ *
+ * Two models over one path would be the same model — which is how a diff
+ * would end up comparing a document with itself, and how a second tab for one
+ * file would silently share the first one's buffer.
+ * @param path - the file's path within its project.
+ * @param role - what this model is for.
+ * @returns the URI.
+ */
+function uriFor(path: string, role: string): monaco.Uri {
+  return monaco.Uri.file(path).with({ scheme: role })
+}
+
+/**
+ * Hold the open documents in one host, showing one at a time.
+ *
+ * One host element per document, shown and hidden, rather than one editor
+ * whose model is swapped: Monaco keeps view state — scroll position, folded
+ * regions, the cursor — per editor, so swapping models on a shared editor
+ * loses exactly what a tab is supposed to remember.
+ * @param host - the element to fill.
+ * @param dark - whether to use the dark theme.
+ * @returns the documents.
+ */
+export function monacoDocuments(host: HTMLElement, dark: boolean): Documents {
+  let counter = 0
+
+  /**
+   * Give one document its own layer in the host.
+   * @returns the layer, already hidden.
+   */
+  const layer = (): HTMLElement => {
+    const element = document.createElement('div')
+    element.className = 'editor-layer'
+    element.hidden = true
+    host.append(element)
+    return element
+  }
+
+  /**
+   * Show one layer and hide every other.
+   * @param mine - the layer to show.
+   */
+  const only = (mine: HTMLElement): void => {
+    for (const each of host.children) (each as HTMLElement).hidden = each !== mine
+  }
+
+  return {
+    open: (text, name) => {
+      const element = layer()
+      counter += 1
+      const model = monaco.editor.createModel(text, undefined, uriFor(name, `file${String(counter)}`))
+      const editor = monaco.editor.create(element, { ...options(dark), model })
+      return document_(element, only, editor, model, () => {
+        editor.dispose()
+        // Disposed separately: a model outlives the editor showing it, and
+        // leaking one keeps its whole document and language service alive.
+        model.dispose()
+      })
+    },
+    openDiff: (original, proposed, name) => {
+      const element = layer()
+      counter += 1
+      const left = monaco.editor.createModel(original, undefined, uriFor(name, `ondisk${String(counter)}`))
+      const right = monaco.editor.createModel(proposed, undefined, uriFor(name, `proposed${String(counter)}`))
+      const editor = monaco.editor.createDiffEditor(element, {
+        ...options(dark),
+        readOnly: true,
+        renderSideBySide: true,
+      })
+      editor.setModel({ original: left, modified: right })
+      return document_(element, only, editor.getModifiedEditor(), right, () => {
+        editor.dispose()
+        left.dispose()
+        right.dispose()
+      })
+    },
+  }
+}
+
+/**
+ * Wrap one editor and model as a document.
+ * @param element - the layer it renders in.
+ * @param only - shows one layer and hides the rest.
+ * @param editor - the editor to read the selection from.
+ * @param model - the model holding the text.
+ * @param destroy - releases the editor and its models.
+ * @returns the document.
+ */
+function document_(
+  element: HTMLElement,
+  only: (mine: HTMLElement) => void,
+  editor: monaco.editor.ICodeEditor,
+  model: monaco.editor.ITextModel,
+  destroy: () => void,
+): Document {
+  return {
+    text: () => model.getValue(),
+    selection: () => {
+      const range = editor.getSelection()
+      return range === null ? '' : model.getValueInRange(range)
+    },
+    activate: () => {
+      only(element)
+      // Monaco measures on layout, and a hidden element measures as nothing —
+      // so a document shown for the first time needs telling.
+      editor.layout()
+    },
+    destroy: () => {
+      destroy()
+      element.remove()
+    },
   }
 }
