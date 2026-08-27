@@ -323,7 +323,10 @@ export function pluginStatus(
 ): PluginStatus {
   const { package: pkg } = parseSpec(entry.spec)
   if (entry.version === undefined) {
-    return { kind: 'unavailable', package: pkg, reason: `${pkg} is not installed yet; save Settings once to install it.` }
+    // No instruction here any more: startup repairs what the config declares
+    // before the harness boots, so telling the user to save Settings would be
+    // advice for a state the app resolves on its own.
+    return { kind: 'unavailable', package: pkg, reason: `${pkg} is not installed yet.` }
   }
   const installDir = managedDir(dshHome, pkg, entry.version)
   if (!isInstalled(deps, dshHome, pkg, entry.version, (dir) => pluginInstallMarker(dir, pkg))) {

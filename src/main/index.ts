@@ -12,6 +12,9 @@ import { mcpConfigPath, readMcpConfig, writeMcpConfig, type McpServerEntry } fro
 import { migrateMcpConfig } from './mcp-migrate'
 import { createMcpProber } from './mcp-probe'
 import { ensureDefaultPlugins } from './plugin-defaults'
+import { repairablePlugins, runHealthcheck, type Finding } from './healthcheck'
+import { repairPlugins } from './repair'
+import { pushFindings, pushPhase, pushProgress, showStartup } from './startup-window'
 import { loadPresets, shippedPresetsPath, userPresetsPath } from './mcp-presets'
 import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-servers'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
@@ -156,6 +159,78 @@ function mcpEnv(config: DesktopConfig): Record<string, string> {
  */
 function configuredMcpServers(): McpServerEntry[] {
   return readMcpConfig(mcpConfigPath(DSH_HOME))
+}
+
+/**
+ * Check the install, repair what can be repaired, and only then boot.
+ *
+ * Before this, `desktop.json` could declare a plugin that was never
+ * installed — plugins install during a Settings save — and the Plugins tab
+ * reported that divergence as a failure the user did not cause. Repair runs
+ * ahead of the boot rather than behind it: a session that starts without its
+ * plugins and is then restarted underneath is worse than a launch that says
+ * what it is waiting for.
+ *
+ * Never throws. Every phase here is best-effort — the harness boots after it
+ * whatever happened, exactly as it did before this existed.
+ * @param config - the stored settings this launch is starting from.
+ * @returns resolution once the screen has handed off to the boot.
+ */
+async function runStartupPhases(config: DesktopConfig): Promise<void> {
+  if (window === undefined) return
+  try {
+    await showStartup(window, { openSettings: showSettings, continueAnyway: () => {} })
+  } catch {
+    // A startup page that will not load must not cost the user their launch:
+    // the boot below is what matters, and it proceeds unannounced.
+    return
+  }
+
+  // The MCP client is filtered out for the same reason the boot filters it:
+  // this app owns that package on the MCP tab, a bare entry for it is
+  // residue, and offering to install something the boot will ignore would
+  // spend the user's time on a plugin that then does not appear.
+  const checked: DesktopConfig = {
+    ...config,
+    plugins: (config.plugins ?? []).filter((entry) => parseSpec(entry.spec).package !== MCP_CLIENT_PACKAGE),
+  }
+  const findings: Finding[] = runHealthcheck(checked, {
+    preflight,
+    statusFor: (entry) => pluginStatus(installDeps, DSH_HOME, entry),
+    // Checked against what the boot will actually mount, below.
+    binaryResolves: (configured, name) => {
+      try {
+        resolveBinary(configured, name, process.env)
+        return true
+      } catch {
+        // `resolveBinary` throws when a Finder-minimal PATH cannot supply the
+        // launcher and no absolute path is configured — which is the finding.
+        return false
+      }
+    },
+    shellPathCached: () => cachedShellPath() !== undefined,
+  })
+  pushFindings(window, findings)
+
+  const missing = repairablePlugins(findings)
+  if (missing.length === 0) {
+    pushPhase(window, 'starting')
+    return
+  }
+
+  pushPhase(window, 'repairing')
+  const outcome = await repairPlugins(
+    missing,
+    config.npmPath,
+    {
+      installPlugin: installPluginEntry,
+      isQuitting: () => quitting,
+    },
+    (line) => pushProgress(window, line),
+  )
+  if (quitting) return
+  for (const failure of outcome.failed) pushProgress(window, `${failure.spec}: ${failure.reason}`)
+  pushPhase(window, 'starting')
 }
 
 /**
@@ -308,6 +383,35 @@ const installDeps: InstallDeps = {
   rename: renameSync,
 }
 
+/**
+ * Resolve and install one plugin entry.
+ *
+ * Named rather than inlined into the settings dependencies because startup
+ * repair installs through it too: an entry installed at launch must be
+ * indistinguishable from one installed by a save, and two call sites sharing
+ * a definition is the only way that stays true.
+ * @param pkg - the package name.
+ * @param version - the concrete version or dist-tag to install.
+ * @param npmPath - the configured `npm` override.
+ * @param onLine - receives `npm install` output as it arrives.
+ * @returns the concrete installed version.
+ */
+function installPluginEntry(
+  pkg: string,
+  version: string,
+  npmPath: string | undefined,
+  onLine: (line: string) => void,
+): Promise<string> {
+  return createManagedInstaller(
+    installDeps,
+    resolveBinary(npmPath, 'npm', process.env),
+    DSH_HOME,
+    // A plugin entry links no `bin`, so its completion marker cannot be the
+    // default `dsh` binary check; see `plugin-entries.ts`'s own doc.
+    (dir) => pluginInstallMarker(dir, pkg),
+  )(pkg, version, onLine)
+}
+
 const settingsHandlers = createSettingsHandlers({
   readConfig: () => loadConfig(CONFIG_PATH),
   writeConfig: (config) => writeConfig(CONFIG_PATH, config),
@@ -320,15 +424,7 @@ const settingsHandlers = createSettingsHandlers({
   isQuitting: () => quitting,
   installManaged: (pkg, version, npmPath, onLine) =>
     createManagedInstaller(installDeps, resolveBinary(npmPath, 'npm', process.env), DSH_HOME)(pkg, version, onLine),
-  installPlugin: (pkg, version, npmPath, onLine) =>
-    createManagedInstaller(
-      installDeps,
-      resolveBinary(npmPath, 'npm', process.env),
-      DSH_HOME,
-      // A plugin entry links no `bin`, so its completion marker cannot be
-      // the default `dsh` binary check; see `plugin-entries.ts`'s own doc.
-      (dir) => pluginInstallMarker(dir, pkg),
-    )(pkg, version, onLine),
+  installPlugin: installPluginEntry,
   checkManagedUpdate: (pkg, installed, npmPath) =>
     createUpdateChecker(installDeps, resolveBinary(npmPath, 'npm', process.env))(pkg, installed),
   checkBinaries: (pnpmPath, npmPath) => checkBinaries(pnpmPath, npmPath, process.env, CHECK_BINARY_TIMEOUT_MS),
@@ -1018,6 +1114,7 @@ if (!app.requestSingleInstanceLock()) {
       showSettings()
       return
     }
+    await runStartupPhases(stored.config)
     await enqueue(bootNow)
   })
 

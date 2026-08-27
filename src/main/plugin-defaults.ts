@@ -22,17 +22,15 @@ export const PROJECT_MCP_BRIDGE = 'dsh-project-mcp-bridge@0.2.1'
 /**
  * Plugins every install gets unless the user removes them.
  *
- * Empty on purpose. `PROJECT_MCP_BRIDGE` belongs here, but declaring a plugin
- * is not installing one: plugins install during a Settings save, so a default
- * added to the config arrives declared-but-absent and the Plugins tab reports
- * it as a failure the user did nothing to cause. It is reinstated together
- * with the startup repair phase that installs what the config declares.
+ * Safe to declare because startup repairs what the config declares: before
+ * that phase existed, a default arrived declared-but-absent and the Plugins
+ * tab reported it as a failure the user did nothing to cause.
  *
  * Kept as specs rather than resolved entries: the install path resolves and
  * pins a concrete version on first save, exactly as it does for a plugin the
  * user typed.
  */
-export const DEFAULT_PLUGIN_SPECS: readonly string[] = []
+export const DEFAULT_PLUGIN_SPECS: readonly string[] = [PROJECT_MCP_BRIDGE]
 
 /**
  * The defaults generation this build ships.

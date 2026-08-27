@@ -219,6 +219,36 @@ vi.mock('./install-process', () => ({
   createInstallRunner: () => ({ run: installRun, stopAll: installStopAll }),
 }))
 
+/**
+ * Installs the startup repair phase performs, as
+ * `[package, version]`. `managed-install` is mocked rather than left real
+ * because the real installer spawns `npm`; the runner beneath it is already
+ * mocked, but the resolve-then-install logic is not this file's subject.
+ */
+const managedInstallMock = vi.fn(async (_pkg: string, _version: string, _onLine: (line: string) => void) => '1.0.0')
+vi.mock('./managed-install', () => ({
+  createManagedInstaller:
+    () =>
+    (pkg: string, version: string, onLine: (line: string) => void) =>
+      managedInstallMock(pkg, version, onLine),
+  createUpdateChecker: () => async () => undefined,
+}))
+
+/**
+ * The startup surface, mocked: it registers `ipcMain` handlers and loads a
+ * file, neither of which exists under the electron fake. Without this the
+ * phases degrade to a silent boot — which is the designed failure, and would
+ * make every assertion below vacuous.
+ */
+const showStartupMock = vi.fn(async () => {})
+const pushPhaseMock = vi.fn()
+vi.mock('./startup-window', () => ({
+  showStartup: (...args: unknown[]) => showStartupMock(...(args as [])),
+  pushFindings: vi.fn(),
+  pushPhase: (...args: unknown[]) => pushPhaseMock(...(args as [])),
+  pushProgress: vi.fn(),
+}))
+
 const preflightMock = vi.fn(() => ({ ok: true }))
 vi.mock('./preflight', () => ({ preflight: (...args: unknown[]) => preflightMock(...(args as [])) }))
 
@@ -417,6 +447,9 @@ beforeEach(() => {
   configResult = { configured: true, config: STORED }
   // clearAllMocks leaves implementations in place, so a test that made the
   // config unreadable would otherwise leak that into the next one.
+  // `vi.clearAllMocks()` clears calls but not a `mockReturnValue`, so a test
+  // that stubs preflight would otherwise stub it for every test after it.
+  preflightMock.mockReturnValue({ ok: true })
   loadConfigMock.mockImplementation(() => configResult)
   startNotifyListenerMock.mockImplementation(async () => ({ port: 1, close: notifyCloseMock }))
   writeRuntimeFilesMock.mockImplementation((_directory: string, _port: number, statuses: PluginStatus[] = []) => ({
@@ -434,6 +467,8 @@ beforeEach(() => {
     reason: 'not installed yet',
   }))
   installStopAll.mockImplementation(async () => {})
+  managedInstallMock.mockImplementation(async () => '1.0.0')
+  showStartupMock.mockImplementation(async () => {})
   settingsOnClosed = undefined
   declaresClientHalfMock.mockImplementation(() => false)
   presetsDeclarationMock.mockImplementation(() => undefined)
@@ -595,7 +630,10 @@ describe('boot', () => {
 
 describe('configuration-class boot failures', () => {
   it('opens settings when the checkout preflight fails', async () => {
-    preflightMock.mockReturnValueOnce({ ok: false, message: 'checkout missing' })
+    // Not `Once`: the startup healthcheck reports the harness state before
+    // the boot checks it, so preflight is legitimately called twice per
+    // launch and a one-shot stub would be consumed by the first.
+    preflightMock.mockReturnValue({ ok: false, message: 'checkout missing' })
     await readyHandler()
     expect(showError).toHaveBeenCalledWith(fake.window, 'The harness checkout is not ready', 'checkout missing')
     expect(openSettingsMock).toHaveBeenCalled()
@@ -1374,8 +1412,11 @@ describe('a stored MCP client plugin entry', () => {
       },
     }
     await bootReady()
-    const specs = pluginStatusMock.mock.calls.map((call) => (call[2] as { spec: string }).spec)
-    expect(specs).toEqual(['@deepseek-ai/dsh-hooks-claude-code'])
+    // Deduplicated: each declared plugin is resolved twice per launch — once
+    // by the startup healthcheck to report it, once by the boot to mount it.
+    // What this pins is which packages are considered at all.
+    const specs = new Set(pluginStatusMock.mock.calls.map((call) => (call[2] as { spec: string }).spec))
+    expect([...specs]).toEqual(['@deepseek-ai/dsh-hooks-claude-code'])
   })
 })
 
@@ -1408,5 +1449,77 @@ describe('shell PATH', () => {
       if (original === undefined) delete process.env.DSH_HOME
       else process.env.DSH_HOME = original
     }
+  })
+})
+
+describe('startup healthcheck', () => {
+  let home: string
+  let original: string | undefined
+
+  beforeEach(() => {
+    original = process.env.DSH_HOME
+    home = mkdtempSync(join(tmpdir(), 'dsh-startup-'))
+    process.env.DSH_HOME = home
+  })
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = original
+  })
+
+  /** A stored config declaring the given plugins. */
+  function declaring(plugins: { spec: string; version?: string }[]): void {
+    configResult = { configured: true, config: { ...STORED, plugins } }
+  }
+
+  it('installs a declared plugin that is not installed, before the harness boots', async () => {
+    declaring([{ spec: 'dsh-project-mcp-bridge@0.2.1' }])
+    pluginStatusMock.mockImplementation(() => ({
+      kind: 'unavailable',
+      package: 'dsh-project-mcp-bridge',
+      reason: 'not installed yet',
+    }))
+    await bootReady()
+    expect(managedInstallMock).toHaveBeenCalledWith('dsh-project-mcp-bridge', '0.2.1', expect.any(Function))
+  })
+
+  it('boots the harness only after repair has finished', async () => {
+    const order: string[] = []
+    declaring([{ spec: 'a@1.0.0' }])
+    pluginStatusMock.mockImplementation(() => ({ kind: 'unavailable', package: 'a', reason: 'not installed yet' }))
+    managedInstallMock.mockImplementation(async () => {
+      order.push('install')
+      return '1.0.0'
+    })
+    const previousStart = startServer.getMockImplementation()
+    startServer.mockImplementation((options: StartOptions) => {
+      order.push('boot')
+      return previousStart!(options)
+    })
+    await bootReady()
+    expect(order).toEqual(['install', 'boot'])
+  })
+
+  it('installs nothing when everything the config declares is present', async () => {
+    declaring([{ spec: 'a', version: '1.0.0' }])
+    pluginStatusMock.mockImplementation(() => ({
+      kind: 'ready',
+      package: 'a',
+      entryPath: '/a/i.js',
+      probeDirectory: '/a',
+      packageDir: '/a',
+    }))
+    await bootReady()
+    expect(managedInstallMock).not.toHaveBeenCalled()
+  })
+
+  it('still boots when repair fails, with whatever did install', async () => {
+    declaring([{ spec: 'a@1.0.0' }])
+    pluginStatusMock.mockImplementation(() => ({ kind: 'unavailable', package: 'a', reason: 'not installed yet' }))
+    managedInstallMock.mockImplementation(async () => {
+      throw new Error('registry unreachable')
+    })
+    const child = await bootReady()
+    expect(child).toBeDefined()
   })
 })
