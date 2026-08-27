@@ -1,0 +1,126 @@
+/*
+ * The splash is its own frameless window sized to the artwork, so the image is
+ * the window rather than a picture inside one: everything the startup sequence
+ * says is laid over the lower band of that image.
+ */
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: rgb(6, 14, 30);
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* Frameless leaves no chrome to drag by, so the artwork itself moves the
+   window; the overlay below takes `no-drag` back for the buttons. */
+.splash {
+  position: relative;
+  display: block;
+  height: 100%;
+  background-image: url('splash.png');
+  background-size: cover;
+  background-position: center;
+  -webkit-app-region: drag;
+}
+
+/* Anchored to the bottom and sized by its content: while the check is quiet it
+   is one status line, and it grows upward as findings and install output
+   arrive rather than reserving room for them. */
+.splash-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 46px 20px 16px;
+  background: linear-gradient(rgba(3, 8, 20, 0), rgba(3, 8, 20, 0.82) 38%, rgba(3, 8, 20, 0.92));
+  color: rgb(255, 255, 255);
+  font: 12px/17px -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* `.findings` and `.actions` are flex, which outranks the UA stylesheet's
+   `display: none` for `hidden` and would leave the failure buttons on screen
+   through every phase. */
+[hidden] {
+  display: none !important;
+}
+
+.phase {
+  margin: 0;
+  font-size: 13px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+/* Findings are chips on one wrapping row rather than a list: the splash window
+   is short, and five stacked rows would push the artwork out of its own
+   window. */
+.findings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+
+.finding {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+/* A chip's own colour carries its severity, so the row reads without its
+   marks: repairable is the setup tone, never the failure one. */
+.finding-repairable {
+  border-color: rgba(255, 190, 92, 0.85);
+  color: rgb(255, 205, 130);
+}
+
+.finding-blocked {
+  border-color: rgba(255, 130, 130, 0.9);
+  color: rgb(255, 160, 160);
+}
+
+.finding-mark {
+  opacity: 0.85;
+  font-size: 10px;
+}
+
+/* The install log is one line, the newest: the window has room for a tail, not
+   a transcript, and the line that matters during a wait is the current one. */
+.progress {
+  margin: 8px 0 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.72);
+  font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  -webkit-app-region: no-drag;
+}
+
+.actions button {
+  padding: 4px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgb(255, 255, 255);
+  font: 12px/18px -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.actions button:hover {
+  background: rgba(255, 255, 255, 0.24);
+}

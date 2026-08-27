@@ -48,14 +48,11 @@ export function createWindow(): BrowserWindow {
     height: 860,
     show: false,
     titleBarStyle: 'hiddenInset',
+    // No preload: this window only ever holds harness pages and the error
+    // pane, and the startup surface has a window of its own.
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      // The startup surface loads into this window before the harness URL
-      // replaces it, so its preload lives here. It exposes only two calls —
-      // open Settings, start anyway — and main ignores both once the harness
-      // has booted, so the harness page inherits nothing that can act.
-      preload: join(__dirname, '..', 'preload', 'startup.js'),
     },
   })
 

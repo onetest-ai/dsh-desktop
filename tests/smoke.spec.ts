@@ -1,5 +1,5 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
-import { expect, test, _electron as electron } from '@playwright/test'
+import { expect, test, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +16,29 @@ const APP = join(APP_DIR, 'Contents', 'MacOS', 'DeepSeek Harness')
  * hardcoded, keeping it portable across machines that follow that layout.
  */
 const HARNESS_REPO = join(__dirname, '..', '..', 'deepseek-harness')
+
+/**
+ * Wait for one of the app's windows to be showing a matching URL.
+ *
+ * The app has two windows with different lifetimes — a splash that is
+ * destroyed and a main window that outlives it — so a window is found by what
+ * it is showing rather than by `firstWindow()`, which resolves to whichever
+ * one Electron happened to create first.
+ * @param app - the launched Electron application.
+ * @param pattern - the URL to wait for.
+ * @returns the matching page.
+ */
+async function waitForWindowUrl(app: ElectronApplication, pattern: RegExp): Promise<Page> {
+  const deadline = Date.now() + 90_000
+  for (;;) {
+    const match = app.windows().find((page) => pattern.test(page.url()))
+    if (match !== undefined) return match
+    if (Date.now() > deadline) {
+      throw new Error(`no window matched ${pattern}; open windows: ${app.windows().map((page) => page.url()).join(', ') || '(none)'}`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+}
 
 /**
  * Build a `desktop.json` pointing at a local harness checkout, in a fresh
@@ -63,6 +86,10 @@ function findLeakedChildren(marker: string): string {
   }
 }
 
+// Playwright's 30s default covers none of this: a cold launch builds the
+// harness overlay, boots a child, and may install a missing plugin first.
+test.setTimeout(180_000)
+
 test('launches, renders the harness UI, and leaves no orphans', async () => {
   // Its own user-data directory, for two reasons: Electron's single-instance
   // lock is keyed on that path, so without this the test fails outright
@@ -79,9 +106,27 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
   try {
     const userData: string = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'))
     marker = join(userData, 'runtime', 'desktop.patch.yml')
-    const window = await app.firstWindow()
+    // The splash is what appears first: it checks the install and repairs what
+    // is missing before the harness boots, so the harness window arrives
+    // afterwards rather than immediately. All three halves are pinned — that
+    // the splash appears, that the harness window follows, and that the splash
+    // then goes away rather than being left behind as a frameless window with
+    // no close button.
+    const splash = await waitForWindowUrl(app, /startup\.html$/)
+    const window = await waitForWindowUrl(app, /^http:\/\/127\.0\.0\.1:\d+/)
     await window.waitForLoadState('domcontentloaded', { timeout: 90_000 })
-    expect(window.url()).toMatch(/^http:\/\/127\.0\.0\.1:\d+/)
+    // Asked of the main process rather than of Playwright's page handle: the
+    // splash is destroyed, and what matters is that no window is left holding
+    // it, not how the driver reports that page.
+    await expect
+      .poll(
+        async () =>
+          await app.evaluate(({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows().map((each) => each.webContents.getURL()),
+          ),
+        { timeout: 30_000 },
+      )
+      .not.toContain(splash.url())
 
     // Asked of the Electron main process, whose fs understands app.asar.
     // getAppPath() already resolves to the app.asar path on this build (verified
@@ -122,6 +167,7 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
         startup:
           existsSync(join(dist, 'renderer', 'startup.html')) &&
           existsSync(join(dist, 'renderer', 'startup.js')) &&
+          existsSync(join(dist, 'renderer', 'splash.css')) &&
           existsSync(join(dist, 'renderer', 'splash.png')) &&
           existsSync(join(dist, 'preload', 'startup.js')),
       }

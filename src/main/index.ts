@@ -14,7 +14,7 @@ import { createMcpProber } from './mcp-probe'
 import { ensureDefaultPlugins } from './plugin-defaults'
 import { repairablePlugins, runHealthcheck, type Finding } from './healthcheck'
 import { repairPlugins } from './repair'
-import { pushFindings, pushPhase, pushProgress, showStartup } from './startup-window'
+import { closeStartup, pushFindings, pushPhase, pushProgress, showStartup } from './startup-window'
 import { loadPresets, shippedPresetsPath, userPresetsPath } from './mcp-presets'
 import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-servers'
 import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
@@ -72,6 +72,8 @@ const CHECK_BINARY_TIMEOUT_MS = 10_000
 const MAX_ISOLATION_ATTEMPTS = 2
 
 let window: BrowserWindow | undefined
+/** The frameless startup splash, open only until the main window appears. */
+let splash: BrowserWindow | undefined
 let quitting = false
 let tray: TrayController | undefined
 let notifier: NotifyServer | undefined
@@ -177,9 +179,8 @@ function configuredMcpServers(): McpServerEntry[] {
  * @returns resolution once the screen has handed off to the boot.
  */
 async function runStartupPhases(config: DesktopConfig): Promise<void> {
-  if (window === undefined) return
   try {
-    await showStartup(window, { openSettings: showSettings, continueAnyway: () => {} })
+    splash = await showStartup({ openSettings: showSettings, continueAnyway: () => {} })
   } catch {
     // A startup page that will not load must not cost the user their launch:
     // the boot below is what matters, and it proceeds unannounced.
@@ -210,15 +211,15 @@ async function runStartupPhases(config: DesktopConfig): Promise<void> {
     },
     shellPathCached: () => cachedShellPath() !== undefined,
   })
-  pushFindings(window, findings)
+  pushFindings(splash, findings)
 
   const missing = repairablePlugins(findings)
   if (missing.length === 0) {
-    pushPhase(window, 'starting')
+    pushPhase(splash, 'starting')
     return
   }
 
-  pushPhase(window, 'repairing')
+  pushPhase(splash, 'repairing')
   const outcome = await repairPlugins(
     missing,
     config.npmPath,
@@ -226,11 +227,11 @@ async function runStartupPhases(config: DesktopConfig): Promise<void> {
       installPlugin: installPluginEntry,
       isQuitting: () => quitting,
     },
-    (line) => pushProgress(window, line),
+    (line) => pushProgress(splash, line),
   )
   if (quitting) return
-  for (const failure of outcome.failed) pushProgress(window, `${failure.spec}: ${failure.reason}`)
-  pushPhase(window, 'starting')
+  for (const failure of outcome.failed) pushProgress(splash, `${failure.spec}: ${failure.reason}`)
+  pushPhase(splash, 'starting')
 }
 
 /**
@@ -962,6 +963,10 @@ async function restart(): Promise<void> {
  */
 async function shutdown(): Promise<void> {
   quitting = true
+  // A frameless splash is not a window the user can close, so a quit during
+  // startup has to take it down itself.
+  closeStartup(splash)
+  splash = undefined
   // The install child is reaped first and unconditionally: it is in neither
   // the lifecycle chain nor `child`, so nothing below would ever find it, and
   // an unreaped `npm` keeps writing into $DSH_HOME after Electron is gone.
@@ -1066,6 +1071,13 @@ if (!app.requestSingleInstanceLock()) {
     ensureDefaultPlugins(DSH_HOME)
     installMenu(showSettings)
     window = createWindow()
+    // The splash covers the wait before the main window has anything to
+    // paint; the moment a real page lands there — the harness URL, or the
+    // error pane when boot fails — the splash has said everything it can.
+    window.webContents.on('did-finish-load', () => {
+      closeStartup(splash)
+      splash = undefined
+    })
     window.on('close', (event) => {
       // Closing the window leaves the app running in the tray; only a quit,
       // which sets `quitting` first, may actually destroy it.

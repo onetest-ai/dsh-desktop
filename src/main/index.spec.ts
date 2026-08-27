@@ -54,6 +54,13 @@ const fake = vi.hoisted(() => {
       windowHandlers.set(name, [...(windowHandlers.get(name) ?? []), handler])
       return window
     }),
+    // Only what index.ts subscribes to: the splash is closed when a real page
+    // finishes loading here.
+    webContents: {
+      on: vi.fn((name: string, handler: Handler) => {
+        windowHandlers.set(`webContents:${name}`, [...(windowHandlers.get(`webContents:${name}`) ?? []), handler])
+      }),
+    },
   }
 
   const app = {
@@ -247,6 +254,7 @@ vi.mock('./startup-window', () => ({
   pushFindings: vi.fn(),
   pushPhase: (...args: unknown[]) => pushPhaseMock(...(args as [])),
   pushProgress: vi.fn(),
+  closeStartup: vi.fn(),
 }))
 
 const preflightMock = vi.fn(() => ({ ok: true }))

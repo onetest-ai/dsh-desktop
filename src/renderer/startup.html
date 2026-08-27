@@ -1,20 +1,16 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>Starting</title>
-<link rel="stylesheet" href="settings.css">
-<div class="titlebar" aria-hidden="true"></div>
-<main class="startup">
-  <div class="splash">
-    <p class="startup-phase" id="phase" role="status">Checking your setup…</p>
-  </div>
-
-  <ul id="findings" class="findings"></ul>
-
-  <pre class="progress" id="startup-progress" role="status" hidden></pre>
-
-  <div class="startup-actions" id="startup-actions" hidden>
-    <button type="button" id="open-settings">Open Settings…</button>
-    <button type="button" id="continue-anyway">Start anyway</button>
+<link rel="stylesheet" href="splash.css">
+<main class="splash">
+  <div class="splash-overlay">
+    <ul id="findings" class="findings"></ul>
+    <p class="phase" id="phase" role="status">Checking your setup…</p>
+    <p class="progress" id="startup-progress" role="status" hidden></p>
+    <div class="actions" id="startup-actions" hidden>
+      <button type="button" id="open-settings">Open Settings…</button>
+      <button type="button" id="continue-anyway">Start anyway</button>
+    </div>
   </div>
 </main>
 <script src="startup.js"></script>
