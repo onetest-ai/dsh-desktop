@@ -42,6 +42,7 @@ import { openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
 import { createWindow, installMenu, showError } from './window'
+import { readWorkspaces } from './workspaces'
 import type { ServerStatus } from './status'
 
 /** The config lives under `$DSH_HOME` (see `configPath`), beside the harness's own state. */
@@ -470,6 +471,8 @@ const settingsHandlers = createSettingsHandlers({
   readMcpServers: () => readMcpConfig(mcpConfigPath(DSH_HOME)),
   writeMcpServers: (servers) => writeMcpConfig(mcpConfigPath(DSH_HOME), servers),
   openMcpConfigFile: () => openConfigFile(mcpConfigPath(DSH_HOME), existsSync, (path) => shell.openPath(path)),
+  readWorkspaces: () => readWorkspaces(DSH_HOME),
+  openProjectMcpFile: (file) => openConfigFile(file, existsSync, (path) => shell.openPath(path)),
   readMcpPresets: () => loadPresets(shippedPresetsPath(), userPresetsPath(DSH_HOME)),
   probeMcpServer: (target, onLine) =>
     // The probe spawns the server's command directly from this process,

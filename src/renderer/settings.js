@@ -72,6 +72,8 @@ let pluginRows = []
 // on every change — they are deliberately not part of the form, because the
 // form is what `save` persists into desktop.json.
 let mcpServers = []
+/** The projects the harness has opened, most recently used first; read-only here. */
+let workspaces = []
 
 // The shipped preset catalog, from `read()` rather than duplicated here.
 let mcpPresets = []
@@ -247,6 +249,132 @@ function renderMcpOffWarning() {
 function mcpSummary(server) {
   if (server.transport !== 'stdio') return server.url ?? ''
   return [server.command, ...(server.args ?? [])].join(' ')
+}
+
+/**
+ * Fill the project picker, keeping the current choice.
+ *
+ * The selection is captured and restored because rebuilding the options
+ * clears `value`: a picker that reset itself on every refresh would move the
+ * user to a different project mid-read.
+ */
+function renderWorkspacePicker() {
+  const picker = el('mcp-workspace')
+  const chosen = picker.value
+  picker.textContent = ''
+  for (const workspace of workspaces) {
+    const option = document.createElement('option')
+    option.value = workspace.path
+    option.textContent = workspace.title
+    picker.append(option)
+  }
+  if (workspaces.some((workspace) => workspace.path === chosen)) picker.value = chosen
+  // Most recently used first, so the default is the project the user is most
+  // likely working in — the harness records no current workspace.
+  else if (workspaces.length > 0) picker.value = workspaces[0].path
+  picker.disabled = workspaces.length === 0
+}
+
+/** The project currently chosen in the picker, or undefined when there are none. */
+function chosenWorkspace() {
+  return workspaces.find((workspace) => workspace.path === el('mcp-workspace').value)
+}
+
+/**
+ * Render what the chosen project declares.
+ *
+ * Read-only rows: these files belong to their projects, and this app shows
+ * them rather than owning them — the button below opens the file for editing.
+ */
+function renderWorkspaceRows() {
+  const list = el('mcp-workspace-rows')
+  const status = el('mcp-workspace-status')
+  list.textContent = ''
+  const workspace = chosenWorkspace()
+
+  if (workspace === undefined) {
+    status.textContent = 'No projects yet. Open a folder in the harness and it will appear here.'
+    el('open-project-mcp-file').disabled = true
+    return
+  }
+  el('open-project-mcp-file').disabled = false
+
+  if (workspace.servers.length === 0) {
+    status.textContent = workspace.declared
+      ? `${workspace.file} declares no servers.`
+      : `${workspace.title} declares none. Add them in ${workspace.file}.`
+    return
+  }
+  status.textContent = workspace.file
+
+  for (const server of workspace.servers) {
+    const row = document.createElement('li')
+    row.className = 'plugin-row'
+
+    const top = document.createElement('div')
+    top.className = 'plugin-row-top'
+
+    const main = document.createElement('div')
+    main.className = 'plugin-row-main'
+
+    const name = document.createElement('span')
+    name.className = 'plugin-name'
+    name.textContent = server.name
+    main.append(name)
+
+    const meta = document.createElement('span')
+    meta.className = 'plugin-meta'
+    meta.textContent = mcpSummary(server)
+    main.append(meta)
+
+    top.append(main)
+
+    const state = document.createElement('span')
+    state.className = 'plugin-meta'
+    state.textContent = server.disabled ? 'off' : 'on'
+    top.append(state)
+
+    row.append(top)
+    list.append(row)
+  }
+}
+
+/** Re-read the projects and their servers, and render both. */
+async function loadWorkspaces() {
+  workspaces = await window.settings.readWorkspaces()
+  renderWorkspacePicker()
+  renderWorkspaceRows()
+}
+
+/**
+ * Open the chosen project's `mcp.json` in the OS-associated editor.
+ *
+ * Main refuses any path that is not a known project's, so the file this asks
+ * for is only ever one the picker offered.
+ */
+async function openProjectMcpFile() {
+  const workspace = chosenWorkspace()
+  if (workspace === undefined) return
+  const button = el('open-project-mcp-file')
+  const result = el('open-project-mcp-file-result')
+  button.disabled = true
+  result.classList.remove('check-result-ok', 'check-result-failed')
+  result.textContent = 'Opening…'
+  try {
+    const outcome = await window.settings.openProjectMcpFile(workspace.file)
+    if (outcome.ok) {
+      result.textContent = 'Opened.'
+      result.classList.add('check-result-ok')
+    } else {
+      result.textContent = outcome.error
+      result.classList.add('check-result-failed')
+    }
+  } catch (error) {
+    result.textContent = messageOf(error)
+    result.classList.add('check-result-failed')
+  } finally {
+    button.disabled = false
+  }
 }
 
 /**
@@ -1120,6 +1248,7 @@ async function load() {
   renderPresetPicker()
   renderMcpRows()
   renderMcpOffWarning()
+  await loadWorkspaces()
 }
 
 for (const radio of document.querySelectorAll('input[name="kind"]')) {
@@ -1193,6 +1322,10 @@ el('mcp-add-anyway').addEventListener('click', () => {
 el('paste-mcp-block').addEventListener('click', () => void pasteMcpBlock())
 el('open-mcp-config-file').addEventListener('click', () => {
   void openMcpConfigFile()
+})
+el('mcp-workspace').addEventListener('change', renderWorkspaceRows)
+el('open-project-mcp-file').addEventListener('click', () => {
+  void openProjectMcpFile()
 })
 
 // Receive-only: the main process pushes progress lines while a managed

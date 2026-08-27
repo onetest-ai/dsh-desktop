@@ -137,6 +137,16 @@
       <button type="button" id="open-mcp-config-file" class="open-config-file">Open mcp.json…</button>
       <p class="check-result" id="open-mcp-config-file-result" role="status"></p>
     </section>
+
+    <p class="group-label" id="mcp-project-label">Per-project servers</p>
+    <section class="group group-flat" aria-labelledby="mcp-project-label">
+      <p class="hint">What each project declares in its own <code>&lt;project&gt;/.dsh/mcp.json</code>, loaded per session by <code>dsh-project-mcp-bridge</code>. Shown here, edited in the file.</p>
+      <select id="mcp-workspace" aria-label="Project"></select>
+      <ul id="mcp-workspace-rows" class="plugin-rows"></ul>
+      <p class="hint" id="mcp-workspace-status" role="status"></p>
+      <button type="button" id="open-project-mcp-file" class="open-config-file">Open this project's mcp.json…</button>
+      <p class="check-result" id="open-project-mcp-file-result" role="status"></p>
+    </section>
   </section>
 
   <section id="panel-notifications" role="tabpanel" aria-labelledby="tab-notifications" tabindex="0" class="panel" hidden>

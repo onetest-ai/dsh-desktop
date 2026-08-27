@@ -27,6 +27,12 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
  * rather than in the form `save` writes to `desktop.json`. Every one is
  * validated in main before anything is written, and `openMcpConfigFile` hands
  * the file to the OS without the renderer ever learning its path.
+ * `readWorkspaces`/`openProjectMcpFile` are the thirteenth and fourteenth,
+ * and the only read-only pair among them: they report the projects the
+ * harness has opened together with what each declares for MCP, and hand one
+ * of those files to the OS editor. Main refuses any path that is not a known
+ * project's `mcp.json`, so a renderer cannot use this to open an arbitrary
+ * file.
  * `onProgress`/`onUpdateAvailable`/`onPluginUpdateAvailable` add no way to
  * *call* into main — they only let the renderer listen for what main chooses
  * to push, each returning an unsubscribe function. `validatePlugin`,
@@ -49,6 +55,8 @@ contextBridge.exposeInMainWorld('settings', {
   saveMcpServers: (servers: unknown) => ipcRenderer.invoke('settings:save-mcp-servers', servers),
   pasteMcpBlock: (text: string) => ipcRenderer.invoke('settings:paste-mcp-block', text),
   openMcpConfigFile: () => ipcRenderer.invoke('settings:open-mcp-config-file'),
+  readWorkspaces: () => ipcRenderer.invoke('settings:read-workspaces'),
+  openProjectMcpFile: (file: string) => ipcRenderer.invoke('settings:open-project-mcp-file', file),
   onMcpProgress: (listener: (line: string) => void) => {
     const handler = (_event: IpcRendererEvent, line: string): void => listener(line)
     ipcRenderer.on('settings:mcp-progress', handler)

@@ -364,6 +364,7 @@ async function load(
   // before it, and putting it earlier silently shifts each existing call
   // site's arguments into the wrong slots.
   initialMcpServers?: Record<string, unknown>[],
+  initialWorkspaces?: Record<string, unknown>[],
 ): Promise<Renderer> {
   const hiddenIds = declaredHiddenIds()
   const ariaSelected = declaredAriaSelected()
@@ -414,6 +415,7 @@ async function load(
   const checkBinariesCalls: Array<[string, string]> = []
   const saveMcpServersCalls: Record<string, unknown>[][] = []
   const pasteMcpBlockCalls: string[] = []
+  const openProjectMcpFileCalls: string[] = []
   let mcpServerStore: Record<string, unknown>[] = initialMcpServers ?? []
   let saveMcpServersOutcome: { ok: boolean; message?: string } | undefined
   let saveMcpServersGate: Promise<void> | undefined
@@ -476,6 +478,11 @@ async function load(
       return { ok: true, servers: mcpServerStore }
     }),
     openMcpConfigFile: vi.fn(async () => ({ ok: true }) as const),
+    readWorkspaces: vi.fn(async () => initialWorkspaces ?? []),
+    openProjectMcpFile: vi.fn(async (file: string) => {
+      openProjectMcpFileCalls.push(file)
+      return { ok: true } as const
+    }),
     checkBinaries: vi.fn(async (pnpmPath: string, npmPath: string) => {
       checkBinariesCalls.push([pnpmPath, npmPath])
       return (onCheckBinaries ?? defaultCheckBinaries)(pnpmPath, npmPath)
@@ -531,6 +538,10 @@ async function load(
   const settleAsyncHandlers = async (): Promise<void> => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
+
+  /** The `<li>` rows rendered into `#mcp-workspace-rows`, one per project-declared server. */
+  const workspaceRows = (): FakeElement[] =>
+    (elements.get('mcp-workspace-rows')?.children ?? []).filter((row) => row.className === 'plugin-row')
 
   /** The `<li>` rows rendered into `#mcp-rows`, one per configured server. */
   const mcpRows = (): FakeElement[] => (elements.get('mcp-rows')?.children ?? []).filter((row) => row.className === 'plugin-row')
@@ -625,6 +636,8 @@ async function load(
     mcpPresetNote: () => elements.get('mcp-preset-note')?.textContent,
     saveMcpServersCalls,
     pasteMcpBlockCalls,
+    openProjectMcpFileCalls,
+    workspaceRows,
     saveMcpServersFails: (outcome) => {
       saveMcpServersOutcome = outcome
     },
@@ -1918,5 +1931,79 @@ describe('Advanced tab extra PATH', () => {
     if (field !== undefined) field.value = '/my/bin'
     await renderer.save()
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ extraPath: '/my/bin' }))
+  })
+})
+
+describe('per-project MCP servers', () => {
+  /** Two projects, the recent one first, as `readWorkspaces` orders them. */
+  const WORKSPACES = [
+    {
+      path: '/p/recent',
+      title: 'recent',
+      file: '/p/recent/.dsh/mcp.json',
+      declared: true,
+      servers: [{ name: 'playwright', disabled: false, transport: 'stdio', command: 'npx', args: ['-y', '@playwright/mcp'], env: {}, headers: {}, rest: {} }],
+    },
+    {
+      path: '/p/older',
+      title: 'older',
+      file: '/p/older/.dsh/mcp.json',
+      declared: true,
+      servers: [{ name: 'memory', disabled: true, transport: 'stdio', command: 'npx', args: ['-y', 'server-memory'], env: {}, headers: {}, rest: {} }],
+    },
+  ]
+
+  /** Load the window with the given projects declared. */
+  const withWorkspaces = (workspaces: Record<string, unknown>[]): Promise<Renderer> =>
+    load(async () => ({ ok: true }), undefined, undefined, undefined, undefined, undefined, [], workspaces)
+
+  // reason: the harness records no current workspace, so the picker's default
+  // is the only thing that decides which project the user is shown.
+  it('shows the most recently used project first', async () => {
+    const renderer = await withWorkspaces(WORKSPACES)
+    expect(renderer.elements.get('mcp-workspace')?.value).toBe('/p/recent')
+    expect(renderer.workspaceRows().map((row) => textOf(row))).toEqual([expect.stringContaining('playwright')])
+  })
+
+  it('reports what each server runs, and whether the project turned it off', async () => {
+    const renderer = await withWorkspaces(WORKSPACES)
+    expect(textOf(renderer.workspaceRows()[0])).toContain('npx -y @playwright/mcp')
+    expect(textOf(renderer.workspaceRows()[0])).toContain('on')
+  })
+
+  it('shows the other project when the picker changes', async () => {
+    const renderer = await withWorkspaces(WORKSPACES)
+    const picker = renderer.elements.get('mcp-workspace')
+    if (picker === undefined) throw new Error('no picker')
+    picker.value = '/p/older'
+    picker.listeners.get('change')?.()
+    expect(renderer.workspaceRows().map((row) => textOf(row))).toEqual([expect.stringContaining('memory')])
+    expect(textOf(renderer.workspaceRows()[0])).toContain('off')
+  })
+
+  it('says where to declare servers for a project that declares none', async () => {
+    const renderer = await withWorkspaces([{ path: '/p/bare', title: 'bare', file: '/p/bare/.dsh/mcp.json', declared: false, servers: [] }])
+    expect(renderer.elements.get('mcp-workspace-status')?.textContent).toContain('/p/bare/.dsh/mcp.json')
+    expect(renderer.workspaceRows()).toEqual([])
+  })
+
+  // reason: with no project chosen there is no file to open, and a button
+  // that reports an error the user cannot act on is worse than one that is
+  // plainly unavailable.
+  it('offers nothing to open when the harness has opened no projects', async () => {
+    const renderer = await withWorkspaces([])
+    expect(renderer.elements.get('open-project-mcp-file')?.disabled).toBe(true)
+    expect(renderer.elements.get('mcp-workspace-status')?.textContent).toContain('No projects yet')
+  })
+
+  it('opens the chosen project’s own file', async () => {
+    const renderer = await withWorkspaces(WORKSPACES)
+    const picker = renderer.elements.get('mcp-workspace')
+    if (picker === undefined) throw new Error('no picker')
+    picker.value = '/p/older'
+    picker.listeners.get('change')?.()
+    void renderer.elements.get('open-project-mcp-file')?.listeners.get('click')?.()
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    expect(renderer.openProjectMcpFileCalls).toEqual(['/p/older/.dsh/mcp.json'])
   })
 })

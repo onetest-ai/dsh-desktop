@@ -61,6 +61,8 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     readMcpServers: vi.fn(() => [] as never[]),
     writeMcpServers: vi.fn(),
     openMcpConfigFile: vi.fn(async () => ({ ok: true }) as const),
+    readWorkspaces: vi.fn(() => []),
+    openProjectMcpFile: vi.fn(async () => ({ ok: true }) as const),
     readMcpPresets: vi.fn(() => [
       { id: 'tavily', label: 'Tavily', transport: 'http' as const, url: 'https://mcp.tavily.com/mcp/' },
     ]),
@@ -1091,5 +1093,30 @@ describe('MCP', () => {
       expect(result.ok).toBe(true)
       if (result.ok) expect(result.warnings.join(' ')).toContain('registry unreachable')
     })
+  })
+})
+
+describe('openProjectMcpFile', () => {
+  /** One workspace record, enough for the handler's own check. */
+  const workspace = { path: '/p/a', title: 'a', file: '/p/a/.dsh/mcp.json', declared: true, servers: [] }
+
+  it('opens a file that belongs to a project the harness has opened', async () => {
+    const openProjectMcpFile = vi.fn(async () => ({ ok: true }) as const)
+    const handlers = createSettingsHandlers(deps({ readWorkspaces: () => [workspace], openProjectMcpFile }))
+    expect(await handlers.openProjectMcpFile('/p/a/.dsh/mcp.json')).toEqual({ ok: true })
+    expect(openProjectMcpFile).toHaveBeenCalledWith('/p/a/.dsh/mcp.json')
+  })
+
+  // reason: the path arrives from the renderer. This handler is the only
+  // place deciding which files the app will hand to the OS, so a path the
+  // picker never offered must be refused rather than opened.
+  it('refuses a path no project declares', async () => {
+    const openProjectMcpFile = vi.fn(async () => ({ ok: true }) as const)
+    const handlers = createSettingsHandlers(deps({ readWorkspaces: () => [workspace], openProjectMcpFile }))
+    expect(await handlers.openProjectMcpFile('/etc/passwd')).toEqual({
+      ok: false,
+      error: 'That file does not belong to a project the harness has opened.',
+    })
+    expect(openProjectMcpFile).not.toHaveBeenCalled()
   })
 })

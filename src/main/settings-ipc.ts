@@ -2,6 +2,7 @@ import type { BinaryChecks } from './check-binaries'
 import type { ConfigResult, DesktopConfig } from './config'
 import { isConfigurationProblem, summarizeConfigurationNeed, summarizeFailure } from './error-summary'
 import type { OpenConfigFileResult } from './open-config-file'
+import type { WorkspaceMcp } from './workspaces'
 import { parseMcpBlock, type McpServerEntry } from './mcp-config'
 import type { ProbeResult, ProbeTarget } from './mcp-probe'
 import type { McpPreset } from './mcp-presets'
@@ -126,6 +127,21 @@ export interface SettingsDeps {
    * @returns ok, or a diagnosable error.
    */
   openMcpConfigFile(): Promise<OpenConfigFileResult>
+  /**
+   * The projects the harness has opened, with the MCP servers each one
+   * declares in its own `.dsh/mcp.json` — what `dsh-project-mcp-bridge` loads
+   * per session. Read-only: those files belong to their projects, and this
+   * app shows them rather than owning them.
+   * @returns one entry per workspace, most recently used first.
+   */
+  readWorkspaces(): WorkspaceMcp[]
+  /**
+   * Open one project's `.dsh/mcp.json` in whatever the OS associates with
+   * `.json`, for manual editing.
+   * @param file - the file to open, already checked to be a known project's.
+   * @returns ok, or a diagnosable error.
+   */
+  openProjectMcpFile(file: string): Promise<OpenConfigFileResult>
   /**
    * Start a candidate stdio server and list its tools, streaming its stderr
    * through `onLine` — which is where `npx` reports a first-run download.
@@ -352,6 +368,23 @@ export interface SettingsHandlers {
    * @returns ok, or a diagnosable error.
    */
   openMcpConfigFile(): Promise<OpenConfigFileResult>
+  /**
+   * The projects the harness has opened and what each declares for MCP.
+   * Bypasses `save`'s install/apply queue, like `checkBinaries`: it reads
+   * nothing settings-owned.
+   * @returns one entry per workspace, most recently used first.
+   */
+  readWorkspaces(): WorkspaceMcp[]
+  /**
+   * Open one project's `.dsh/mcp.json` for manual editing.
+   *
+   * The path is refused unless it is the `mcp.json` of a project the harness
+   * has opened: it arrives from the renderer, and this handler is the only
+   * place that decides which files this app will hand to the OS.
+   * @param file - the file the renderer asked for.
+   * @returns ok, or a diagnosable error.
+   */
+  openProjectMcpFile(file: string): Promise<OpenConfigFileResult>
 }
 
 /**
@@ -869,5 +902,12 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     saveMcpServers: (servers) => performSaveMcpServers(servers),
     pasteMcpBlock: (text) => performPasteMcpBlock(text),
     openMcpConfigFile: () => deps.openMcpConfigFile(),
+    readWorkspaces: () => deps.readWorkspaces(),
+    openProjectMcpFile: async (file) => {
+      if (!deps.readWorkspaces().some((workspace) => workspace.file === file)) {
+        return { ok: false, error: 'That file does not belong to a project the harness has opened.' }
+      }
+      return await deps.openProjectMcpFile(file)
+    },
   }
 }
