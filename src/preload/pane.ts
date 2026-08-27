@@ -27,8 +27,10 @@ contextBridge.exposeInMainWorld('pane', {
   readFile: (root: string, relative: string) => ipcRenderer.invoke('pane:read-file', root, relative),
   writeFile: (root: string, relative: string, text: string) =>
     ipcRenderer.invoke('pane:write-file', root, relative, text),
-  onOpenFile: (listener: (root: string, relative: string) => void) => {
-    ipcRenderer.on('pane:open', (_event, root: string, relative: string) => listener(root, relative))
+  onOpenFile: (listener: (root: string, relative: string, url: string) => void) => {
+    ipcRenderer.on('pane:open', (_event, root: string, relative: string, url: string) =>
+      listener(root, relative, url),
+    )
   },
   onFileChanged: (listener: (root: string, relative: string) => void) => {
     ipcRenderer.on('pane:file-changed', (_event, root: string, relative: string) => listener(root, relative))

@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url'
 import { join, normalize, sep } from 'node:path'
 import { errorPage } from './error-page'
 import { layout, type Columns } from './layout'
+import { projectFilePath, PROJECT_HOST } from './project-url'
 
 /**
  * CSS injected into the main window's `webContents` to make the top edge
@@ -93,15 +94,24 @@ export function registerPaneScheme(): void {
 /**
  * Serve the pane's own files, and nothing else.
  *
- * Every request is resolved inside the renderer directory and refused if it
- * lands outside it: the scheme is reachable from the pane's own page, so a
- * path with `..` in it must not be able to read the rest of the disk.
- * @returns nothing; installs the handler on the `app` scheme.
+ * Every request is resolved inside the renderer directory — or, for a project
+ * file, inside a project the harness has opened — and refused if it lands
+ * outside: the scheme is reachable from the pane's own page, so a path with
+ * `..` in it must not be able to read the rest of the disk.
+ * @param projectRoots - the projects a file may be served from.
  */
-export function servePane(): void {
+export function servePane(projectRoots: () => string[]): void {
   const root = join(__dirname, '..', 'renderer')
   protocol.handle('app', async (request) => {
     const { host, pathname } = new URL(request.url)
+    // Project files: an image or a video the editor column is showing. Served
+    // under their own host and checked against the projects the harness has
+    // opened, since this scheme is reachable from any page this app loads.
+    if (host === PROJECT_HOST) {
+      const file = projectFilePath(pathname, projectRoots())
+      if (file === undefined) return new Response('Forbidden', { status: 403 })
+      return await net.fetch(pathToFileURL(file).toString())
+    }
     if (host !== 'pane') return new Response('Not found', { status: 404 })
     const file = join(root, normalize(pathname))
     if (file !== root && !file.startsWith(root + sep)) return new Response('Forbidden', { status: 403 })

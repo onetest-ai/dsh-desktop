@@ -2,20 +2,15 @@ import { PANE_TABS, selectTab, type PaneTab, type TabView } from './tabs.ts'
 import { Editor } from './editor.ts'
 import { normalizeAddress } from './address.ts'
 import { isMarkdown, openMarkdownLink, renderMarkdown } from './markdown.ts'
+import { isMedia } from './media-kind.ts'
 import { monacoDocuments, setEditorTheme } from './monaco-surface.ts'
 import './bridge.ts'
 import { followHarnessTheme } from './theme.ts'
 
-/**
- * Whether dark is in effect. Main decides and pushes it; until that arrives
- * the editor mounts light, and `setEditorTheme` moves every open document the
- * moment it does.
- */
-let dark = false
-followHarnessTheme((next) => {
-  dark = next
-  setEditorTheme(next)
-})
+// Main decides the theme and pushes it, before any document is mounted; the
+// editor's own theme is process-wide, so this one call moves every open
+// document at once.
+followHarnessTheme(setEditorTheme)
 
 /**
  * One element by id.
@@ -81,7 +76,7 @@ const editor = new Editor({
   closeColumn: () => {
     window.pane.closeEditor()
   },
-  documents: monacoDocuments(el('editor-host'), dark),
+  documents: monacoDocuments(el('editor-host')),
 })
 
 /**
@@ -111,7 +106,7 @@ function renderFileTabs(): void {
     name.className = 'file-tab-name'
     // The file's own name, not its path: the path is in the status line, and
     // a strip of paths is unreadable at tab width.
-    name.textContent = `${tab.comparing ? '± ' : ''}${tab.file.relative.split('/').pop() ?? tab.file.relative}`
+    name.textContent = `${tab.mode === 'diff' ? '± ' : ''}${tab.file.relative.split('/').pop() ?? tab.file.relative}`
     button.append(name)
     button.addEventListener('click', () => {
       editor.show(tab)
@@ -215,9 +210,12 @@ window.addEventListener('keydown', (event) => {
   void editor.save()
 })
 
-window.pane.onOpenFile((root, relative) => {
+window.pane.onOpenFile((root, relative, url) => {
   selectTab('editor', view)
-  void editor.open({ root, relative })
+  // An image, a video, a PDF: shown from the file itself rather than read as
+  // text, which is what `readTextFile` would refuse anyway.
+  if (isMedia(relative)) editor.showMedia({ root, relative }, url)
+  else void editor.open({ root, relative })
 })
 
 window.pane.onFileChanged((root, relative) => {

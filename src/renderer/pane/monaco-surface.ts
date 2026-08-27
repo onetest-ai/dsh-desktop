@@ -1,5 +1,6 @@
 import * as monaco from 'monaco-editor'
 import type { Document, Documents } from './editor.ts'
+import { mediaKind } from './media-kind.ts'
 
 /**
  * Where the pane and its workers are served from.
@@ -47,10 +48,15 @@ export function setEditorTheme(dark: boolean): void {
   monaco.editor.setTheme(dark ? 'vs-dark' : 'vs')
 }
 
-/** The options every editor here shares. */
-function options(dark: boolean): monaco.editor.IStandaloneEditorConstructionOptions {
+/**
+ * The options every editor here shares.
+ *
+ * No `theme`: Monaco's theme is process-wide, and passing one to `create`
+ * sets it globally — so an editor created with a stale value flips every
+ * other document back with it. `setEditorTheme` owns the theme alone.
+ */
+function options(): monaco.editor.IStandaloneEditorConstructionOptions {
   return {
-    theme: dark ? 'vs-dark' : 'vs',
     automaticLayout: true,
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
@@ -82,10 +88,9 @@ function uriFor(path: string, role: string): monaco.Uri {
  * regions, the cursor — per editor, so swapping models on a shared editor
  * loses exactly what a tab is supposed to remember.
  * @param host - the element to fill.
- * @param dark - whether to use the dark theme.
  * @returns the documents.
  */
-export function monacoDocuments(host: HTMLElement, dark: boolean): Documents {
+export function monacoDocuments(host: HTMLElement): Documents {
   let counter = 0
 
   /**
@@ -113,7 +118,7 @@ export function monacoDocuments(host: HTMLElement, dark: boolean): Documents {
       const element = layer()
       counter += 1
       const model = monaco.editor.createModel(text, undefined, uriFor(name, `file${String(counter)}`))
-      const editor = monaco.editor.create(element, { ...options(dark), model })
+      const editor = monaco.editor.create(element, { ...options(), model })
       return document_(element, only, editor, model, () => {
         editor.dispose()
         // Disposed separately: a model outlives the editor showing it, and
@@ -121,13 +126,25 @@ export function monacoDocuments(host: HTMLElement, dark: boolean): Documents {
         model.dispose()
       })
     },
+    openMedia: (url, name) => {
+      const element = layer()
+      element.className = 'editor-layer media-layer'
+      element.append(mediaElement(url, name))
+      return {
+        // Nothing here is text: the file is shown from disk, not read.
+        text: () => '',
+        selection: () => '',
+        activate: () => only(element),
+        destroy: () => element.remove(),
+      }
+    },
     openDiff: (original, proposed, name) => {
       const element = layer()
       counter += 1
       const left = monaco.editor.createModel(original, undefined, uriFor(name, `ondisk${String(counter)}`))
       const right = monaco.editor.createModel(proposed, undefined, uriFor(name, `proposed${String(counter)}`))
       const editor = monaco.editor.createDiffEditor(element, {
-        ...options(dark),
+        ...options(),
         readOnly: true,
         renderSideBySide: true,
       })
@@ -173,5 +190,50 @@ function document_(
       destroy()
       element.remove()
     },
+  }
+}
+
+/**
+ * The element that shows one non-text file.
+ *
+ * A PDF gets an `<embed>`, which is what hands it to Chromium's own viewer;
+ * anything unrecognized gets a link, since a file the pane cannot render is
+ * still a file the user may want to open.
+ * @param url - where the pane can load the file from.
+ * @param name - the file's path, which chooses the viewer.
+ * @returns the element to show.
+ */
+function mediaElement(url: string, name: string): HTMLElement {
+  switch (mediaKind(name)) {
+    case 'image': {
+      const image = document.createElement('img')
+      image.src = url
+      image.alt = name
+      return image
+    }
+    case 'video': {
+      const video = document.createElement('video')
+      video.src = url
+      video.controls = true
+      return video
+    }
+    case 'audio': {
+      const audio = document.createElement('audio')
+      audio.src = url
+      audio.controls = true
+      return audio
+    }
+    case 'pdf': {
+      const embed = document.createElement('embed')
+      embed.src = url
+      embed.type = 'application/pdf'
+      return embed
+    }
+    default: {
+      const link = document.createElement('a')
+      link.href = url
+      link.textContent = `Open ${name}`
+      return link
+    }
   }
 }

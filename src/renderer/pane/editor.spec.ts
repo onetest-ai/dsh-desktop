@@ -62,6 +62,11 @@ function deps(overrides: Omit<Partial<EditorDeps>, 'documents'> = {}): Fake {
         made.push(made1)
         return made1
       },
+      openMedia: (url: string) => {
+        const made1 = document(url)
+        made.push(made1)
+        return made1
+      },
     },
     ...overrides,
   }
@@ -236,7 +241,7 @@ describe('Editor and proposed changes', () => {
     const d = deps()
     const editor = new Editor(d)
     await editor.showDiff(FILE, '# proposed')
-    expect(editor.openTabs[0].comparing).toBe(true)
+    expect(editor.openTabs[0].mode).toBe('diff')
     expect(d.said.some((message) => message.includes('Proposed change'))).toBe(true)
   })
 
@@ -258,7 +263,7 @@ describe('Editor and proposed changes', () => {
     const editor = await withOpen(d, FILE)
     await editor.showDiff(FILE, '# proposed')
     expect(editor.openTabs.length).toBe(1)
-    expect(editor.openTabs[0].comparing).toBe(true)
+    expect(editor.openTabs[0].mode).toBe('diff')
   })
 
   // reason: an agent's proposal must never take away an edit the user has not
@@ -269,7 +274,7 @@ describe('Editor and proposed changes', () => {
     d.documents.made[0].buffer = 'my edits'
     await editor.showDiff(FILE, '# proposed')
     expect(editor.openTabs.length).toBe(1)
-    expect(editor.openTabs[0].comparing).toBe(false)
+    expect(editor.openTabs[0].mode).toBe('edit')
     expect(d.said.some((message) => message.includes('unsaved edits'))).toBe(true)
   })
 
@@ -279,7 +284,7 @@ describe('Editor and proposed changes', () => {
     await editor.showDiff(FILE, '# proposed')
     await editor.open(FILE)
     expect(editor.openTabs.length).toBe(1)
-    expect(editor.openTabs[0].comparing).toBe(false)
+    expect(editor.openTabs[0].mode).toBe('edit')
     await editor.save()
     expect(d.writeFile).toHaveBeenCalled()
   })
@@ -304,3 +309,53 @@ describe('Editor and proposed changes', () => {
 export function paths(tabs: readonly Tab[]): string[] {
   return tabs.map((tab) => tab.file.relative)
 }
+
+describe('Editor and files that are not text', () => {
+  const IMAGE = { root: '/p/demo', relative: 'assets/shot.png' }
+
+  it('shows an image without reading it', async () => {
+    const d = deps()
+    const editor = new Editor(d)
+    editor.showMedia(IMAGE, 'app://project/x/assets/shot.png')
+    expect(d.readFile).not.toHaveBeenCalled()
+    expect(editor.openTabs[0].mode).toBe('media')
+    expect(editor.current).toEqual(IMAGE)
+  })
+
+  // reason: nothing was read, so there is no buffer to be dirty and nothing
+  // to write back.
+  it('is never dirty and saves nothing', async () => {
+    const d = deps()
+    const editor = new Editor(d)
+    editor.showMedia(IMAGE, 'app://project/x/assets/shot.png')
+    expect(editor.dirty).toBe(false)
+    await editor.save()
+    expect(d.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('ignores an outside change, since it shows the file itself', async () => {
+    const d = deps()
+    const editor = new Editor(d)
+    editor.showMedia(IMAGE, 'app://project/x/assets/shot.png')
+    d.said.length = 0
+    await editor.reload(IMAGE)
+    expect(d.said).toEqual([])
+  })
+
+  it('brings an open image forward rather than opening it twice', () => {
+    const d = deps()
+    const editor = new Editor(d)
+    editor.showMedia(IMAGE, 'app://project/x/assets/shot.png')
+    editor.showMedia(IMAGE, 'app://project/x/assets/shot.png')
+    expect(editor.openTabs.length).toBe(1)
+  })
+
+  it('closes like any other tab', () => {
+    const d = deps()
+    const editor = new Editor(d)
+    editor.showMedia(IMAGE, 'app://project/x/assets/shot.png')
+    editor.close(editor.openTabs[0])
+    expect(editor.openTabs.length).toBe(0)
+    expect(d.columnClosed).toBe(1)
+  })
+})

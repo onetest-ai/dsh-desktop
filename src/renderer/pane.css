@@ -482,3 +482,31 @@ body {
   width: 100%;
   height: 100%;
 }
+
+/* A file shown rather than read: centred in the panel, never larger than it,
+   and on a chequerless plain ground so a transparent image reads as one. */
+.media-layer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+.media-layer img,
+.media-layer video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* A PDF fills the panel: Chromium's viewer brings its own controls. */
+.media-layer embed {
+  width: 100%;
+  height: 100%;
+}
+
+.media-layer a {
+  color: var(--dsw-alias-state-business-primary);
+}

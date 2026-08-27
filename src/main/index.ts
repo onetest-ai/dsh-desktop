@@ -47,6 +47,7 @@ import { readDirectory } from './file-tree'
 import { DIVIDER_WIDTH, RAIL_WIDTH, type Columns } from './layout'
 import { serveViewTools, VIEW_SERVER_NAME, type PageText, type ViewServer } from './view-mcp'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
+import { projectFileUrl } from './project-url'
 import { loadableUrl } from './view-tools'
 import { readTextFile, writeTextFile } from './file-io'
 import { harnessTheme, settingsPath } from './harness-theme'
@@ -485,7 +486,7 @@ function openInPane(root: string, relative: string): void {
     setColumn('editor', { open: true })
     storeColumns()
   }
-  views.pane.webContents.send('pane:open', root, relative)
+  views.pane.webContents.send('pane:open', root, relative, projectFileUrl(PANE_ORIGIN, root, relative))
   // Opening a file says more about what is being worked on than the workspace
   // list does, so the tree follows it there.
   const workspace = readWorkspaces(DSH_HOME).find((each) => each.path === root)
@@ -1568,7 +1569,7 @@ if (!app.requestSingleInstanceLock()) {
   registerPaneScheme()
 
   void app.whenReady().then(async () => {
-    servePane()
+    servePane(() => readWorkspaces(DSH_HOME).map((workspace) => workspace.path))
     // Scheduled before anything else and never awaited: the resolution runs
     // on its own turn, so a slow rc file delays nothing here, and its result
     // is only ever read by the NEXT launch.

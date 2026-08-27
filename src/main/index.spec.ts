@@ -1964,6 +1964,12 @@ describe('the side columns', () => {
       expect.objectContaining({ editor: expect.objectContaining({ open: true }) }),
       expect.any(Boolean),
     )
-    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith('pane:open', '/p/known', 'readme.md')
+    // The URL is how the pane shows a file it cannot read as text.
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith(
+      'pane:open',
+      '/p/known',
+      'readme.md',
+      expect.stringContaining('project'),
+    )
   })
 })

@@ -33,6 +33,13 @@ export interface Documents {
    */
   open(text: string, name: string): Document
   /**
+   * Show a file that is not text — an image, a video, a PDF.
+   * @param url - where the pane can load the file from.
+   * @param name - the file's path, which chooses the viewer.
+   * @returns the document, not yet showing.
+   */
+  openMedia(url: string, name: string): Document
+  /**
    * Open a file beside the text proposed for it, read-only on both sides.
    * @param original - the file as it is on disk.
    * @param proposed - the text proposed for it.
@@ -55,14 +62,22 @@ export interface EditorDeps {
   documents: Documents
 }
 
+/** How one tab is showing its file. */
+export type TabMode =
+  /** The file's text, editable and savable. */
+  | 'edit'
+  /** The file beside a proposed change, read-only on both sides. */
+  | 'diff'
+  /** An image, video, audio, or PDF: shown, never read as text. */
+  | 'media'
+
 /** One tab: a file, its document, and what was last read or written for it. */
 export interface Tab {
   file: OpenFile
   document: Document
   /** The text as last read or written, which is what makes "dirty" answerable. */
   saved: string
-  /** Whether this tab is a proposed change, which nothing may be saved from. */
-  comparing: boolean
+  mode: TabMode
 }
 
 /**
@@ -95,7 +110,7 @@ export class Editor {
 
   /** Whether the showing tab differs from what is on disk. */
   get dirty(): boolean {
-    return this.active !== undefined && !this.active.comparing && this.active.document.text() !== this.active.saved
+    return this.active !== undefined && this.isDirty(this.active)
   }
 
   /**
@@ -104,7 +119,7 @@ export class Editor {
    * @returns whether it has unsaved edits.
    */
   isDirty(tab: Tab): boolean {
-    return !tab.comparing && tab.document.text() !== tab.saved
+    return tab.mode === 'edit' && tab.document.text() !== tab.saved
   }
 
   /**
@@ -114,7 +129,7 @@ export class Editor {
    */
   async open(file: OpenFile): Promise<void> {
     const already = this.find(file)
-    if (already !== undefined && !already.comparing) {
+    if (already !== undefined && already.mode === 'edit') {
       this.show(already)
       return
     }
@@ -130,7 +145,29 @@ export class Editor {
       file,
       document: this.deps.documents.open(outcome.text, file.relative),
       saved: outcome.text,
-      comparing: false,
+      mode: 'edit',
+    })
+  }
+
+  /**
+   * Show a file that is not text.
+   *
+   * Nothing is read: an image is shown from the file itself, so there is no
+   * buffer to be dirty and nothing to save.
+   * @param file - the file to show.
+   * @param url - where the pane can load it from.
+   */
+  showMedia(file: OpenFile, url: string): void {
+    const already = this.find(file)
+    if (already !== undefined) {
+      this.show(already)
+      return
+    }
+    this.add({
+      file,
+      document: this.deps.documents.openMedia(url, file.relative),
+      saved: '',
+      mode: 'media',
     })
   }
 
@@ -158,7 +195,7 @@ export class Editor {
       file,
       document: this.deps.documents.openDiff(outcome.text, proposed, file.relative),
       saved: proposed,
-      comparing: true,
+      mode: 'diff',
     })
   }
 
@@ -169,7 +206,7 @@ export class Editor {
   show(tab: Tab): void {
     this.active = tab
     tab.document.activate()
-    this.deps.say(tab.comparing ? `Proposed change to ${tab.file.relative}` : tab.file.relative)
+    this.deps.say(tab.mode === 'diff' ? `Proposed change to ${tab.file.relative}` : tab.file.relative)
     this.deps.render()
   }
 
@@ -203,12 +240,14 @@ export class Editor {
   async save(): Promise<void> {
     const tab = this.active
     if (tab === undefined) return
-    if (tab.comparing) {
+    if (tab.mode === 'diff') {
       // A diff is a change to look at before it happens. Saving from one
       // would write the agent's proposal as though the user had made it.
       this.deps.say('This is a proposed change. Open the file to edit it.')
       return
     }
+    // Nothing was read, so there is nothing to write back.
+    if (tab.mode === 'media') return
     const text = tab.document.text()
     const outcome = await this.deps.writeFile(tab.file.root, tab.file.relative, text)
     if (!outcome.ok) {
@@ -241,9 +280,9 @@ export class Editor {
    */
   async reload(file: OpenFile): Promise<void> {
     const tab = this.find(file)
-    // A diff is not a view of the file as it is, so a change to that file is
-    // not something to fold into it.
-    if (tab === undefined || tab.comparing) return
+    // Only an editable tab holds text that could go stale: a diff is not a
+    // view of the file as it is, and a media tab reads the file itself.
+    if (tab === undefined || tab.mode !== 'edit') return
     if (this.isDirty(tab)) {
       this.deps.say(`${file.relative} changed on disk. Save to overwrite, or reopen it to discard your edits.`)
       return
@@ -260,7 +299,7 @@ export class Editor {
       file,
       document: this.deps.documents.open(outcome.text, file.relative),
       saved: outcome.text,
-      comparing: false,
+      mode: 'edit',
     }
     // Put back exactly where it was, so a reload does not reorder the strip
     // under the user.
