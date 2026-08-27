@@ -261,6 +261,35 @@ async function readPaneSelection(): Promise<string> {
 }
 
 /**
+ * Look for a newer harness once, in the background.
+ *
+ * At startup rather than when the Settings window opens: an update the user
+ * only learns about by opening a window they have no reason to open is one
+ * they do not learn about. The answer goes to the tray, which is the surface
+ * of this app they see without asking.
+ *
+ * Never awaited and never surfaced as a failure — an offline registry is not
+ * something to interrupt a launch for.
+ * @param config - the desktop settings this launch is starting from.
+ */
+function checkForUpdate(config: DesktopConfig): void {
+  if (config.harness.kind !== 'managed') return
+  const { package: pkg, version } = config.harness
+  try {
+    void createUpdateChecker(installDeps, resolveBinary(config.npmPath, 'npm', process.env))(pkg, version)
+      .then((latest) => {
+        if (latest !== undefined && !quitting) tray?.setUpdate(latest)
+      })
+      .catch(() => {
+        // An offline or unreachable registry leaves the tray as it was.
+      })
+  } catch {
+    // `createUpdateChecker` resolves the npm binary before it has a promise
+    // to reject, so a Finder-minimal PATH throws here rather than rejecting.
+  }
+}
+
+/**
  * Tell this app's own pages which theme to draw in.
  *
  * The harness owns the setting — its Appearance row writes it — so every
@@ -1594,6 +1623,7 @@ if (!app.requestSingleInstanceLock()) {
     // overlay, so one that came up afterwards would be one it never learned
     // about.
     await startViewTools(stored.config)
+    checkForUpdate(stored.config)
     await enqueue(bootNow)
   })
 

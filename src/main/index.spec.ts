@@ -14,6 +14,13 @@ const STORED: DesktopConfig = {
   hotkey: 'CommandOrControl+Shift+D',
 }
 
+/** The same, with a managed harness — the only kind an update check applies to. */
+const MANAGED_STORED: DesktopConfig = {
+  harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: '0.1.0', workspace: '/tmp/ws' },
+  notifyPort: 44444,
+  hotkey: 'CommandOrControl+Shift+D',
+}
+
 /**
  * Orchestration tests for the main entry point.
  *
@@ -204,7 +211,9 @@ vi.mock('./window', () => ({
   installMenu: (...args: unknown[]) => installMenuMock(...(args as [])),
 }))
 
+const updateCheckerMock = vi.fn(async (_pkg: string, _installed: string): Promise<string | undefined> => undefined)
 const setTrayStatus = vi.fn()
+const setTrayUpdate = vi.fn()
 let trayActions:
   | { toggleWindow(): void; restart(): void; quit(): void; openSettings(): void }
   | undefined
@@ -216,7 +225,7 @@ vi.mock('./tray', () => ({
     openSettings(): void
   }) => {
     trayActions = actions
-    return { setStatus: setTrayStatus, destroy: vi.fn() }
+    return { setStatus: setTrayStatus, setUpdate: setTrayUpdate, destroy: vi.fn() }
   },
 }))
 
@@ -298,7 +307,7 @@ vi.mock('./managed-install', () => ({
     () =>
     (pkg: string, version: string, onLine: (line: string) => void) =>
       managedInstallMock(pkg, version, onLine),
-  createUpdateChecker: () => async () => undefined,
+  createUpdateChecker: () => (pkg: string, installed: string) => updateCheckerMock(pkg, installed),
 }))
 
 /**
@@ -1799,6 +1808,37 @@ describe('the side columns', () => {
     fake.views.pane.webContents.send.mockClear()
     await fake.emitWindow('web:did-navigate')
     expect(fake.views.pane.webContents.send).toHaveBeenCalledWith('pane:web-state', expect.objectContaining({ url: '' }))
+  })
+
+  // reason: an update the user only learns about by opening a window they
+  // have no reason to open is one they do not learn about.
+  it('looks for a newer harness at startup and puts it in the tray', async () => {
+    configResult = { configured: true, config: MANAGED_STORED }
+    updateCheckerMock.mockResolvedValue('9.9.9')
+    await bootReady()
+    await vi.waitFor(() => expect(setTrayUpdate).toHaveBeenCalledWith('9.9.9'))
+  })
+
+  it('leaves the tray alone when the harness is current', async () => {
+    configResult = { configured: true, config: MANAGED_STORED }
+    updateCheckerMock.mockResolvedValue(undefined)
+    await bootReady()
+    await settle()
+    expect(setTrayUpdate).not.toHaveBeenCalled()
+  })
+
+  // reason: an offline registry is not something to interrupt a launch for.
+  it('boots anyway when the lookup fails', async () => {
+    configResult = { configured: true, config: MANAGED_STORED }
+    updateCheckerMock.mockRejectedValue(new Error('offline'))
+    const child = await bootReady()
+    expect(child).toBeDefined()
+  })
+
+  it('looks for nothing when the harness is a local checkout', async () => {
+    await bootReady()
+    await settle()
+    expect(updateCheckerMock).not.toHaveBeenCalled()
   })
 
   it('opens at the widths the last session stored', async () => {

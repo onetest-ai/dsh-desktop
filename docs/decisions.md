@@ -193,3 +193,34 @@ Path arguments from a model are the least trusted input in the app. Every one
 is resolved against the projects the harness has opened, and a refusal comes
 back as tool content rather than a protocol error so the model can read it and
 choose differently.
+
+## The pane follows the harness's theme, not the machine's
+
+The columns beside the harness use its design tokens (vendored; see
+`vendor/dsh-theme/README.md`) and read its preference from the harness's own
+user-settings document — `ui-theme.preference` in `settings.yaml`.
+
+The obvious alternative, `prefers-color-scheme`, is wrong in exactly one case
+and it is a common one: a user who sets dark inside the harness on a light
+machine. Then the harness is dark and everything this app draws beside it is
+light.
+
+The document is read and watched, never written. The Appearance row owns that
+setting; a second control for the same thing is how two surfaces come to
+disagree.
+
+## A tab keeps its own editor, not its own text
+
+Each open file holds a live Monaco editor in its own layer, shown one at a
+time, rather than one editor whose model is swapped on every switch.
+
+Monaco keeps view state — scroll position, folded regions, cursor — per
+editor, so a shared editor loses exactly what a tab is supposed to remember.
+The cost is one editor instance per open tab, which is the thing to revisit
+if someone opens dozens.
+
+## Update checks belong to the startup, not the Settings window
+
+The registry lookup used to run when Settings opened, which is the one window
+a user has no particular reason to open. It now runs at launch and reports to
+the tray. It is never awaited: an offline registry must not delay a boot.

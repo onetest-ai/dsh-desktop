@@ -19,6 +19,15 @@ export interface TrayController {
    *   disabled menu row; omit when there is none.
    */
   setStatus(status: ServerStatus, note?: string): void
+  /**
+   * Show that a newer harness is available.
+   *
+   * Here rather than only in Settings, because the check no longer waits for
+   * that window to be opened — and the tray is the one surface of this app
+   * the user sees without asking for it.
+   * @param version - the version available, or undefined to drop the row.
+   */
+  setUpdate(version: string | undefined): void
   destroy(): void
 }
 
@@ -57,7 +66,12 @@ const ICONS: Record<ServerStatus, { file: string; template: boolean }> = {
 export function createTray(actions: TrayActions): TrayController {
   const tray = new Tray(icon('starting'))
 
+  let update: string | undefined
+  /** What the menu is currently showing, so the update row can be added without it. */
+  let current: { status: ServerStatus; note?: string } = { status: 'starting' }
+
   const render = (status: ServerStatus, note?: string): void => {
+    current = { status, ...(note === undefined ? {} : { note }) }
     // A menu item renders its label on one unwrapped line, so an over-long
     // note stretches the menu across the screen. Callers are expected to pass
     // something short; this is the backstop that keeps a future long note from
@@ -73,6 +87,11 @@ export function createTray(actions: TrayActions): TrayController {
         { label: 'Show / Hide', click: () => actions.toggleWindow() },
         { label: 'Restart harness', click: () => actions.restart() },
         { label: 'Settings…', click: () => actions.openSettings() },
+        // Only when there is one: an item saying nothing is available is a
+        // line the user reads every time to learn nothing.
+        ...(update === undefined
+          ? []
+          : [{ label: `Update available: ${update}`, click: () => actions.openSettings() }]),
         { type: 'separator' },
         { label: 'Quit', click: () => actions.quit() },
       ]),
@@ -83,6 +102,13 @@ export function createTray(actions: TrayActions): TrayController {
 
   return {
     setStatus: render,
+    setUpdate: (version) => {
+      if (version === update) return
+      update = version
+      // Re-rendered with what the menu is already showing: the update row is
+      // one line in a menu whose other lines are not this function's to know.
+      render(current.status, current.note)
+    },
     destroy: () => tray.destroy(),
   }
 }

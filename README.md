@@ -156,9 +156,15 @@ Details are in [`docs/notes/mcp-servers.md`](docs/notes/mcp-servers.md).
 
 ## The side pane
 
-Beside the harness the app keeps two columns of its own: an editor in the middle and a file tree on the right. The tree lists the projects the harness has opened; clicking a file opens it in the editor, which is Monaco — syntax highlighting, find and replace, and the TypeScript and JSON language services. `Cmd+S` saves. A file changed on disk while you are looking at it reloads, unless you have unsaved edits, in which case it says so and leaves your work alone.
+Beside the harness the app keeps columns of its own: an editor in the middle, a file tree on the right, and a rail of buttons at the outside edge — the mirror of an IDE, with the conversation where the sidebar usually is.
 
-Toggle the tree from **View → Toggle File Tree** (`Cmd+Alt+B`), or from the **Files** button at the foot of the harness's own sidebar, which arrives with the `@onetest/dsh-desktop-pane` plugin. The editor column has no toggle: it appears when a file is opened and closes with the `✕` in its tab strip. Both columns remember their width.
+The tree lists the projects the harness has opened. Clicking a file opens it in the editor, which is Monaco: syntax highlighting, find and replace, and the TypeScript and JSON language services. Several files can be open at once, one tab each, and every tab keeps its own document — so switching between them keeps your scroll position and your undo history. `Cmd+S` saves; a tab with unsaved edits shows a dot instead of its close button. A file changed on disk reloads, unless you have unsaved edits in it, in which case it says so and leaves your work alone.
+
+The **Web** tab is a browser with back, forward, reload, and an address bar that takes a bare host. It is a real page in its own process, not a frame.
+
+Open the tree and the browser from the rail, from **View** (`Cmd+Alt+B` and `Cmd+Alt+W`), or from the buttons at the foot of the harness's own sidebar, which arrive with the `@onetest/dsh-desktop-pane` plugin. The editor has no toggle of its own: it appears when a file is opened, and closes when its last tab does. Every column remembers its width.
+
+All of it draws in the harness's own design tokens and follows the harness's own **Appearance** setting — set dark there and these columns turn dark with it, without a restart.
 
 The agent can drive these views through four tools, served over MCP on `127.0.0.1` for as long as the app is running:
 
