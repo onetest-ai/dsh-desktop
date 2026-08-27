@@ -416,6 +416,9 @@ async function load(
   const saveMcpServersCalls: Record<string, unknown>[][] = []
   const pasteMcpBlockCalls: string[] = []
   const openProjectMcpFileCalls: string[] = []
+  const saveProjectMcpServersCalls: Array<[string, Record<string, unknown>[]]> = []
+  const pasteProjectMcpBlockCalls: Array<[string, string]> = []
+  let saveProjectMcpServersOutcome: { ok: boolean; message?: string } | undefined
   let mcpServerStore: Record<string, unknown>[] = initialMcpServers ?? []
   let saveMcpServersOutcome: { ok: boolean; message?: string } | undefined
   let saveMcpServersGate: Promise<void> | undefined
@@ -479,6 +482,24 @@ async function load(
     }),
     openMcpConfigFile: vi.fn(async () => ({ ok: true }) as const),
     readWorkspaces: vi.fn(async () => initialWorkspaces ?? []),
+    saveProjectMcpServers: vi.fn(async (file: string, servers: Record<string, unknown>[]) => {
+      saveProjectMcpServersCalls.push([file, servers])
+      return saveProjectMcpServersOutcome ?? ({ ok: true } as const)
+    }),
+    pasteProjectMcpBlock: vi.fn(async (file: string, text: string) => {
+      pasteProjectMcpBlockCalls.push([file, text])
+      const added = (JSON.parse(text) as { mcpServers: Record<string, { command?: string; url?: string }> }).mcpServers
+      return {
+        ok: true,
+        servers: Object.entries(added).map(([name, entry]) => ({
+          name,
+          disabled: false,
+          transport: entry.command === undefined ? 'http' : 'stdio',
+          ...entry,
+          args: [],
+        })),
+      }
+    }),
     openProjectMcpFile: vi.fn(async (file: string) => {
       openProjectMcpFileCalls.push(file)
       return { ok: true } as const
@@ -637,6 +658,11 @@ async function load(
     saveMcpServersCalls,
     pasteMcpBlockCalls,
     openProjectMcpFileCalls,
+    saveProjectMcpServersCalls,
+    pasteProjectMcpBlockCalls,
+    refuseProjectSave: (message: string) => {
+      saveProjectMcpServersOutcome = { ok: false, message }
+    },
     workspaceRows,
     saveMcpServersFails: (outcome) => {
       saveMcpServersOutcome = outcome
@@ -1953,9 +1979,23 @@ describe('per-project MCP servers', () => {
     },
   ]
 
-  /** Load the window with the given projects declared. */
+  /**
+   * Load the window with the given projects declared.
+   *
+   * Cloned per call: the renderer edits the workspace records it is handed in
+   * place, and a shared fixture would carry one test's removals into the next.
+   */
   const withWorkspaces = (workspaces: Record<string, unknown>[]): Promise<Renderer> =>
-    load(async () => ({ ok: true }), undefined, undefined, undefined, undefined, undefined, [], workspaces)
+    load(
+      async () => ({ ok: true }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [],
+      JSON.parse(JSON.stringify(workspaces)) as Record<string, unknown>[],
+    )
 
   // reason: the harness records no current workspace, so the picker's default
   // is the only thing that decides which project the user is shown.
@@ -1965,10 +2005,14 @@ describe('per-project MCP servers', () => {
     expect(renderer.workspaceRows().map((row) => textOf(row))).toEqual([expect.stringContaining('playwright')])
   })
 
+  /** The row's On checkbox, which carries whether the project turned it off. */
+  const rowToggle = (row: FakeElement): FakeElement | undefined =>
+    subtree(row).find((node) => node.className === 'mcp-row-enabled')
+
   it('reports what each server runs, and whether the project turned it off', async () => {
     const renderer = await withWorkspaces(WORKSPACES)
     expect(textOf(renderer.workspaceRows()[0])).toContain('npx -y @playwright/mcp')
-    expect(textOf(renderer.workspaceRows()[0])).toContain('on')
+    expect(rowToggle(renderer.workspaceRows()[0])?.checked).toBe(true)
   })
 
   it('shows the other project when the picker changes', async () => {
@@ -1978,7 +2022,7 @@ describe('per-project MCP servers', () => {
     picker.value = '/p/older'
     picker.listeners.get('change')?.()
     expect(renderer.workspaceRows().map((row) => textOf(row))).toEqual([expect.stringContaining('memory')])
-    expect(textOf(renderer.workspaceRows()[0])).toContain('off')
+    expect(rowToggle(renderer.workspaceRows()[0])?.checked).toBe(false)
   })
 
   it('says where to declare servers for a project that declares none', async () => {
@@ -1994,6 +2038,72 @@ describe('per-project MCP servers', () => {
     const renderer = await withWorkspaces([])
     expect(renderer.elements.get('open-project-mcp-file')?.disabled).toBe(true)
     expect(renderer.elements.get('mcp-workspace-status')?.textContent).toContain('No projects yet')
+  })
+
+  /** Let the click handlers' awaited writes settle. */
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
+
+  it('writes a removal to that project’s own file, not the global one', async () => {
+    const renderer = await withWorkspaces(WORKSPACES)
+    const row = renderer.workspaceRows()[0]
+    subtree(row).find((node) => node.className === 'mcp-remove')?.listeners.get('click')?.()
+    await settle()
+    expect(renderer.saveProjectMcpServersCalls).toEqual([['/p/recent/.dsh/mcp.json', []]])
+    expect(renderer.saveMcpServersCalls).toEqual([])
+  })
+
+  it('switches one off without removing it', async () => {
+    const renderer = await withWorkspaces(WORKSPACES)
+    const toggle = subtree(renderer.workspaceRows()[0]).find((node) => node.className === 'mcp-row-enabled')
+    if (toggle === undefined) throw new Error('no toggle')
+    toggle.checked = false
+    toggle.listeners.get('change')?.()
+    await settle()
+    expect(renderer.saveProjectMcpServersCalls[0][1]).toEqual([expect.objectContaining({ name: 'playwright', disabled: true })])
+  })
+
+  it('adds a hand-entered server to the chosen project', async () => {
+    const renderer = await withWorkspaces(WORKSPACES)
+    const field = (id: string, value: string): void => {
+      const node = renderer.elements.get(id)
+      if (node !== undefined) node.value = value
+    }
+    field('mcp-project-custom-name', 'fs')
+    field('mcp-project-custom-command', 'npx')
+    field('mcp-project-custom-args', '-y server-filesystem')
+    void renderer.elements.get('add-mcp-project-custom')?.listeners.get('click')?.()
+    await settle()
+    expect(renderer.saveProjectMcpServersCalls[0][0]).toBe('/p/recent/.dsh/mcp.json')
+    expect(renderer.saveProjectMcpServersCalls[0][1]).toEqual([
+      expect.objectContaining({ name: 'playwright' }),
+      expect.objectContaining({ name: 'fs', command: 'npx', args: ['-y', 'server-filesystem'] }),
+    ])
+  })
+
+  it('pastes a block into the chosen project’s file', async () => {
+    const renderer = await withWorkspaces(WORKSPACES)
+    const textarea = renderer.elements.get('mcp-project-paste')
+    if (textarea === undefined) throw new Error('no textarea')
+    textarea.value = '{ "mcpServers": { "memory": { "command": "npx" } } }'
+    void renderer.elements.get('paste-mcp-project-block')?.listeners.get('click')?.()
+    await settle()
+    expect(renderer.pasteProjectMcpBlockCalls).toEqual([
+      ['/p/recent/.dsh/mcp.json', '{ "mcpServers": { "memory": { "command": "npx" } } }'],
+    ])
+    expect(renderer.workspaceRows().map((row) => textOf(row))).toEqual([expect.stringContaining('memory')])
+  })
+
+  // reason: a rejected write must not leave the window showing a list that is
+  // not on disk — the next render would claim a server the project never got.
+  it('rolls the list back when the write is refused', async () => {
+    const renderer = await withWorkspaces(WORKSPACES)
+    renderer.refuseProjectSave('that file does not belong to a project the harness has opened.')
+    subtree(renderer.workspaceRows()[0]).find((node) => node.className === 'mcp-remove')?.listeners.get('click')?.()
+    await settle()
+    expect(renderer.workspaceRows().map((row) => textOf(row))).toEqual([expect.stringContaining('playwright')])
+    expect(renderer.elements.get('error-mcp-project')?.textContent).toContain('does not belong')
   })
 
   it('opens the chosen project’s own file', async () => {

@@ -63,6 +63,7 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     openMcpConfigFile: vi.fn(async () => ({ ok: true }) as const),
     readWorkspaces: vi.fn(() => []),
     openProjectMcpFile: vi.fn(async () => ({ ok: true }) as const),
+    writeProjectMcpServers: vi.fn(),
     readMcpPresets: vi.fn(() => [
       { id: 'tavily', label: 'Tavily', transport: 'http' as const, url: 'https://mcp.tavily.com/mcp/' },
     ]),
@@ -1118,5 +1119,82 @@ describe('openProjectMcpFile', () => {
       error: 'That file does not belong to a project the harness has opened.',
     })
     expect(openProjectMcpFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('saveProjectMcpServers', () => {
+  const workspace = { path: '/p/a', title: 'a', file: '/p/a/.dsh/mcp.json', declared: true, servers: [] }
+  const server = {
+    name: 'playwright',
+    disabled: false,
+    transport: 'stdio' as const,
+    command: 'npx',
+    args: [],
+    env: {},
+    headers: {},
+    rest: {},
+  }
+
+  it('writes the project’s own file', async () => {
+    const writeProjectMcpServers = vi.fn()
+    const handlers = createSettingsHandlers(deps({ readWorkspaces: () => [workspace], writeProjectMcpServers }))
+    expect(await handlers.saveProjectMcpServers('/p/a/.dsh/mcp.json', [server])).toEqual({ ok: true })
+    expect(writeProjectMcpServers).toHaveBeenCalledWith('/p/a/.dsh/mcp.json', [server])
+  })
+
+  // reason: the path arrives from the renderer, so this handler is what keeps
+  // a write from reaching any file other than a known project's.
+  it('refuses a path no project declares', async () => {
+    const writeProjectMcpServers = vi.fn()
+    const handlers = createSettingsHandlers(deps({ readWorkspaces: () => [workspace], writeProjectMcpServers }))
+    expect(await handlers.saveProjectMcpServers('/etc/mcp.json', [server])).toEqual({
+      ok: false,
+      message: 'That file does not belong to a project the harness has opened.',
+    })
+    expect(writeProjectMcpServers).not.toHaveBeenCalled()
+  })
+
+  it('refuses entries the global list would also refuse', async () => {
+    const writeProjectMcpServers = vi.fn()
+    const handlers = createSettingsHandlers(deps({ readWorkspaces: () => [workspace], writeProjectMcpServers }))
+    const outcome = await handlers.saveProjectMcpServers('/p/a/.dsh/mcp.json', [{ ...server, command: undefined }])
+    expect(outcome.ok).toBe(false)
+    expect(writeProjectMcpServers).not.toHaveBeenCalled()
+  })
+
+  it('refuses a paste naming a server the project already declares', async () => {
+    const declared = { ...workspace, servers: [server] }
+    const handlers = createSettingsHandlers(deps({ readWorkspaces: () => [declared] }))
+    const outcome = await handlers.pasteProjectMcpBlock(
+      '/p/a/.dsh/mcp.json',
+      '{ "mcpServers": { "playwright": { "command": "npx" } } }',
+    )
+    expect(outcome).toEqual({
+      ok: false,
+      message: 'Already declared: playwright. Remove it first, or rename it in the pasted JSON.',
+    })
+  })
+
+  it('adds a pasted server to what the project already declares', async () => {
+    const declared = { ...workspace, servers: [server] }
+    const writeProjectMcpServers = vi.fn()
+    const handlers = createSettingsHandlers(deps({ readWorkspaces: () => [declared], writeProjectMcpServers }))
+    const outcome = await handlers.pasteProjectMcpBlock(
+      '/p/a/.dsh/mcp.json',
+      '{ "mcpServers": { "memory": { "command": "npx" } } }',
+    )
+    expect(outcome.ok).toBe(true)
+    expect(outcome.servers?.map((each) => each.name)).toEqual(['playwright', 'memory'])
+    expect(writeProjectMcpServers).toHaveBeenCalled()
+  })
+
+  // reason: the bridge re-reads each project's file per session within about a
+  // second, so restarting the harness here would cost a running session for
+  // nothing — unlike the global list, which the harness reads only at boot.
+  it('does not restart the harness', async () => {
+    const restartHarness = vi.fn(async () => {})
+    const handlers = createSettingsHandlers(deps({ readWorkspaces: () => [workspace], restartHarness }))
+    await handlers.saveProjectMcpServers('/p/a/.dsh/mcp.json', [server])
+    expect(restartHarness).not.toHaveBeenCalled()
   })
 })

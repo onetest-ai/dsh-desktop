@@ -143,6 +143,15 @@ export interface SettingsDeps {
    */
   openProjectMcpFile(file: string): Promise<OpenConfigFileResult>
   /**
+   * Write one project's `.dsh/mcp.json`, replacing what it declared.
+   *
+   * Separate from `writeMcpServers`, which owns the global file alone: this
+   * one takes the path because there is a file per project.
+   * @param file - the project's `mcp.json`.
+   * @param servers - the entries to persist, in display order.
+   */
+  writeProjectMcpServers(file: string, servers: McpServerEntry[]): void
+  /**
    * Start a candidate stdio server and list its tools, streaming its stderr
    * through `onLine` — which is where `npx` reports a first-run download.
    * @param target - the command to run, as `mcp.json` would hold it.
@@ -385,6 +394,32 @@ export interface SettingsHandlers {
    * @returns ok, or a diagnosable error.
    */
   openProjectMcpFile(file: string): Promise<OpenConfigFileResult>
+  /**
+   * Replace what one project declares for MCP.
+   *
+   * Restarts nothing: `dsh-project-mcp-bridge` re-reads each project's file
+   * per session and picks a change up within about a second, so the harness
+   * restart the global list needs would cost the user their running session
+   * for no gain.
+   * @param file - the project's `mcp.json`, refused unless the harness has
+   *   opened that project.
+   * @param servers - the entries to persist, in display order.
+   * @returns ok, or why nothing was written.
+   */
+  saveProjectMcpServers(file: string, servers: McpServerEntry[]): Promise<{ ok: boolean; message?: string }>
+  /**
+   * Add the servers a pasted block names to one project's file.
+   *
+   * The same addition-not-replacement rule as `pasteMcpBlock`: a name the
+   * project already declares is refused rather than overwritten.
+   * @param file - the project's `mcp.json`.
+   * @param text - the pasted text.
+   * @returns the servers that project now declares, or why nothing was taken.
+   */
+  pasteProjectMcpBlock(
+    file: string,
+    text: string,
+  ): Promise<{ ok: boolean; message?: string; servers?: McpServerEntry[] }>
 }
 
 /**
@@ -697,6 +732,31 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
   }
 
   /**
+   * Persist one project's servers, after checking the harness knows that
+   * project and the entries themselves are usable.
+   * @param file - the project's `mcp.json`.
+   * @param servers - the entries to persist.
+   * @returns ok, or why nothing was written.
+   */
+  async function performSaveProjectMcpServers(
+    file: string,
+    servers: McpServerEntry[],
+  ): Promise<{ ok: boolean; message?: string }> {
+    if (deps.isQuitting()) return { ok: false, message: 'The app is shutting down.' }
+    if (!deps.readWorkspaces().some((workspace) => workspace.file === file)) {
+      return { ok: false, message: 'That file does not belong to a project the harness has opened.' }
+    }
+    const problems = mcpErrors(servers)
+    if (problems.length > 0) return { ok: false, message: problems.join('; ') }
+    try {
+      deps.writeProjectMcpServers(file, servers)
+    } catch (error) {
+      return { ok: false, message: (error as Error).message }
+    }
+    return { ok: true }
+  }
+
+  /**
    * Add the servers a pasted block names to the configured list.
    *
    * Refuses a name already in use rather than overwriting it: a paste is an
@@ -903,6 +963,23 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     pasteMcpBlock: (text) => performPasteMcpBlock(text),
     openMcpConfigFile: () => deps.openMcpConfigFile(),
     readWorkspaces: () => deps.readWorkspaces(),
+    saveProjectMcpServers: (file, servers) => performSaveProjectMcpServers(file, servers),
+    pasteProjectMcpBlock: async (file, text) => {
+      const parsed = parseMcpBlock(text)
+      if (!parsed.ok) return { ok: false, message: parsed.message }
+      const workspace = deps.readWorkspaces().find((candidate) => candidate.file === file)
+      if (workspace === undefined) {
+        return { ok: false, message: 'That file does not belong to a project the harness has opened.' }
+      }
+      const taken = new Set(workspace.servers.map((server) => server.name))
+      const clashes = parsed.servers.filter((server) => taken.has(server.name)).map((server) => server.name)
+      if (clashes.length > 0) {
+        return { ok: false, message: `Already declared: ${clashes.join(', ')}. Remove it first, or rename it in the pasted JSON.` }
+      }
+      const combined = [...workspace.servers, ...parsed.servers]
+      const written = await performSaveProjectMcpServers(file, combined)
+      return written.ok ? { ok: true, servers: combined } : written
+    },
     openProjectMcpFile: async (file) => {
       if (!deps.readWorkspaces().some((workspace) => workspace.file === file)) {
         return { ok: false, error: 'That file does not belong to a project the harness has opened.' }

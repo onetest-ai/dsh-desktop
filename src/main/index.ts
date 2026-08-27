@@ -473,6 +473,7 @@ const settingsHandlers = createSettingsHandlers({
   openMcpConfigFile: () => openConfigFile(mcpConfigPath(DSH_HOME), existsSync, (path) => shell.openPath(path)),
   readWorkspaces: () => readWorkspaces(DSH_HOME),
   openProjectMcpFile: (file) => openConfigFile(file, existsSync, (path) => shell.openPath(path)),
+  writeProjectMcpServers: (file, servers) => writeMcpConfig(file, servers),
   readMcpPresets: () => loadPresets(shippedPresetsPath(), userPresetsPath(DSH_HOME)),
   probeMcpServer: (target, onLine) =>
     // The probe spawns the server's command directly from this process,

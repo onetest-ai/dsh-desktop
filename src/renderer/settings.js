@@ -72,8 +72,10 @@ let pluginRows = []
 // on every change — they are deliberately not part of the form, because the
 // form is what `save` persists into desktop.json.
 let mcpServers = []
-/** The projects the harness has opened, most recently used first; read-only here. */
+/** The projects the harness has opened, most recently used first. */
 let workspaces = []
+/** Whether a write to a project's own mcp.json is in flight. */
+let projectWriting = false
 
 // The shipped preset catalog, from `read()` rather than duplicated here.
 let mcpPresets = []
@@ -201,14 +203,31 @@ async function validatePluginConfigRow(textarea, errorNode, summaryNode) {
  * typed the name wrong.
  */
 function renderPresetPicker() {
-  const picker = el('mcp-preset')
+  fillPresetPicker(
+    { picker: 'mcp-preset', note: 'mcp-preset-note', add: 'add-mcp-preset' },
+    new Set(mcpServers.map((server) => server.name)),
+    saveInFlight,
+  )
+}
+
+/**
+ * Fill one preset picker and set its note and Add button to match.
+ *
+ * Shared by the global list and the per-project one: the catalog and the
+ * rules for what can be added are the same in both places, only the servers
+ * already present differ.
+ * @param {{picker: string, note: string, add: string}} ids - the three element ids for this scope.
+ * @param {Set<string>} taken - names already configured in this scope.
+ * @param {boolean} busy - whether a write is in flight for this scope.
+ */
+function fillPresetPicker(ids, taken, busy) {
+  const picker = el(ids.picker)
   // Rebuilding the options resets the selection to the first one, and this
   // runs on the picker's own change event — so without restoring it, choosing
   // a preset silently reverted to whichever is listed first and Add wrote
   // that one instead. Captured before the rebuild, reapplied after.
   const chosen = picker.value
   picker.textContent = ''
-  const taken = new Set(mcpServers.map((server) => server.name))
   for (const preset of mcpPresets) {
     const option = document.createElement('option')
     option.value = preset.id
@@ -225,12 +244,12 @@ function renderPresetPicker() {
   // note and the Add button agree with the same source the options were
   // built from.
   const selected = mcpPresets.find((preset) => preset.id === picker.value)
-  el('mcp-preset-note').textContent =
+  el(ids.note).textContent =
     selected === undefined || selected.unavailable === undefined
       ? 'Presets that need a browser sign-in are listed but cannot be added yet.'
       : `${selected.label} ${selected.unavailable}.`
-  el('add-mcp-preset').disabled =
-    saveInFlight || selected === undefined || selected.unavailable !== undefined || taken.has(selected.id)
+  el(ids.add).disabled =
+    busy || selected === undefined || selected.unavailable !== undefined || taken.has(selected.id)
 }
 
 /**
@@ -281,10 +300,9 @@ function chosenWorkspace() {
 }
 
 /**
- * Render what the chosen project declares.
- *
- * Read-only rows: these files belong to their projects, and this app shows
- * them rather than owning them — the button below opens the file for editing.
+ * Render what the chosen project declares, with the same controls the global
+ * list has: each row can be switched off or removed, and the section above
+ * adds new ones.
  */
 function renderWorkspaceRows() {
   const list = el('mcp-workspace-rows')
@@ -329,13 +347,180 @@ function renderWorkspaceRows() {
 
     top.append(main)
 
-    const state = document.createElement('span')
-    state.className = 'plugin-meta'
-    state.textContent = server.disabled ? 'off' : 'on'
-    top.append(state)
+    const actions = document.createElement('div')
+    actions.className = 'plugin-row-actions'
 
+    const toggle = document.createElement('label')
+    toggle.className = 'mcp-row-toggle'
+    const toggleBox = document.createElement('input')
+    toggleBox.className = 'mcp-row-enabled'
+    toggleBox.type = 'checkbox'
+    toggleBox.checked = !server.disabled
+    toggleBox.disabled = projectWriting
+    toggleBox.setAttribute('aria-label', `Use ${server.name} in ${workspace.title}`)
+    toggleBox.addEventListener('change', () => {
+      void commitProjectServers(
+        workspace.servers.map((entry) => (entry.name === server.name ? { ...entry, disabled: !toggleBox.checked } : entry)),
+      )
+    })
+    toggle.append(toggleBox)
+    const toggleText = document.createElement('span')
+    toggleText.textContent = 'On'
+    toggle.append(toggleText)
+    actions.append(toggle)
+
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'mcp-remove'
+    remove.setAttribute('aria-label', `Remove ${server.name} from ${workspace.title}`)
+    remove.textContent = 'Remove'
+    remove.disabled = projectWriting
+    remove.addEventListener('click', () => {
+      void commitProjectServers(workspace.servers.filter((entry) => entry.name !== server.name))
+    })
+    actions.append(remove)
+
+    top.append(actions)
     row.append(top)
     list.append(row)
+  }
+}
+
+/**
+ * Show or clear the "writing" state for the per-project section.
+ * @param {boolean} busy - whether a write is in flight.
+ */
+function projectBusy(busy) {
+  projectWriting = busy
+  for (const id of ['add-mcp-project-preset', 'add-mcp-project-custom', 'paste-mcp-project-block', 'mcp-workspace']) {
+    el(id).disabled = busy
+  }
+  renderProjectPresetPicker()
+}
+
+/** Fill the per-project preset picker from the same catalog the global one uses. */
+function renderProjectPresetPicker() {
+  const workspace = chosenWorkspace()
+  fillPresetPicker(
+    { picker: 'mcp-project-preset', note: 'mcp-project-preset-note', add: 'add-mcp-project-preset' },
+    new Set((workspace?.servers ?? []).map((server) => server.name)),
+    projectWriting || workspace === undefined,
+  )
+}
+
+/**
+ * Write the chosen project's servers through main and adopt what it accepted.
+ *
+ * No harness restart, unlike the global list: the bridge re-reads each
+ * project's file per session and picks a change up within about a second.
+ * @param {object[]} next - the list to persist.
+ * @returns {Promise<void>} resolves once the write settled.
+ */
+async function commitProjectServers(next) {
+  const workspace = chosenWorkspace()
+  if (workspace === undefined) return
+  const error = el('error-mcp-project')
+  error.textContent = ''
+  const previous = workspace.servers
+  workspace.servers = next
+  workspace.declared = true
+  renderWorkspaceRows()
+  projectBusy(true)
+  try {
+    const result = await window.settings.saveProjectMcpServers(workspace.file, next)
+    if (!result.ok) {
+      // Roll back rather than leave the window showing a list that is not on
+      // disk, exactly as the global list does.
+      workspace.servers = previous
+      error.textContent = result.message
+    }
+  } catch (failure) {
+    workspace.servers = previous
+    error.textContent = messageOf(failure)
+  } finally {
+    projectBusy(false)
+    renderWorkspaceRows()
+  }
+}
+
+/**
+ * Probe a candidate server, then add it to the chosen project.
+ *
+ * Probed for the same reason the global list probes: an `npx` server whose
+ * first run downloads its package would otherwise meet the harness's 60
+ * second tool-listing bound cold.
+ * @param {object} server - the entry to add.
+ * @returns {Promise<void>} resolves once the write settled.
+ */
+async function addProjectServer(server) {
+  const error = el('error-mcp-project')
+  error.textContent = ''
+  projectBusy(true)
+  try {
+    const probed = await prepareServer(server)
+    if (!probed.ok) {
+      error.textContent = probed.message
+      return
+    }
+  } finally {
+    projectBusy(false)
+  }
+  await commitProjectServers([...(chosenWorkspace()?.servers ?? []), server])
+}
+
+/** Add the per-project picker's selected preset to the chosen project. */
+async function addProjectPresetServer() {
+  const workspace = chosenWorkspace()
+  const preset = mcpPresets.find((candidate) => candidate.id === el('mcp-project-preset').value)
+  if (workspace === undefined || preset === undefined || preset.unavailable !== undefined) return
+  if (workspace.servers.some((server) => server.name === preset.id)) return
+  await addProjectServer(presetEntry(preset))
+}
+
+/** Add a hand-entered server to the chosen project. */
+async function addProjectCustomServer() {
+  const workspace = chosenWorkspace()
+  if (workspace === undefined) return
+  const read = readCustomServer('mcp-project-custom', new Set(workspace.servers.map((server) => server.name)))
+  const error = el('error-mcp-project-custom')
+  error.textContent = read.error ?? ''
+  if (read.server === undefined) return
+  await addProjectServer(read.server)
+  clearCustomFields('mcp-project-custom')
+}
+
+/**
+ * Add every server a pasted block names to the chosen project's file.
+ *
+ * The whole block goes to main rather than being parsed here, for the same
+ * reason the global paste does: main owns the grammar it re-validates.
+ * @returns {Promise<void>} resolves once the paste settled.
+ */
+async function pasteProjectMcpBlock() {
+  const workspace = chosenWorkspace()
+  const error = el('error-mcp-project-paste')
+  const textarea = el('mcp-project-paste')
+  error.textContent = ''
+  if (workspace === undefined) return
+  if (textarea.value.trim() === '') {
+    error.textContent = 'Paste the mcpServers block from a server\'s README.'
+    return
+  }
+  projectBusy(true)
+  try {
+    const result = await window.settings.pasteProjectMcpBlock(workspace.file, textarea.value)
+    if (!result.ok) {
+      error.textContent = result.message
+      return
+    }
+    workspace.servers = result.servers
+    workspace.declared = true
+    textarea.value = ''
+  } catch (failure) {
+    error.textContent = messageOf(failure)
+  } finally {
+    projectBusy(false)
+    renderWorkspaceRows()
   }
 }
 
@@ -344,6 +529,7 @@ async function loadWorkspaces() {
   workspaces = await window.settings.readWorkspaces()
   renderWorkspacePicker()
   renderWorkspaceRows()
+  renderProjectPresetPicker()
 }
 
 /**
@@ -598,19 +784,30 @@ async function addPresetServer() {
   const preset = mcpPresets.find((candidate) => candidate.id === el('mcp-preset').value)
   if (preset === undefined || preset.unavailable !== undefined) return
   if (mcpServers.some((server) => server.name === preset.id)) return
-  await addServer(
-    {
-      name: preset.id,
-      disabled: false,
-      transport: preset.transport,
-      ...(preset.command === undefined ? {} : { command: preset.command }),
-      args: preset.args ?? [],
-      env: preset.env ?? {},
-      ...(preset.url === undefined ? {} : { url: preset.url }),
-      headers: {},
-      rest: {},
-    },
-  )
+  await addServer(presetEntry(preset))
+}
+
+/**
+ * Build the entry a preset describes.
+ *
+ * The preset's command or URL is copied onto the entry rather than
+ * referenced, so a server keeps working as configured even if the catalog
+ * later changes that vendor's endpoint.
+ * @param {object} preset - the catalog entry.
+ * @returns {object} the server entry to persist.
+ */
+function presetEntry(preset) {
+  return {
+    name: preset.id,
+    disabled: false,
+    transport: preset.transport,
+    ...(preset.command === undefined ? {} : { command: preset.command }),
+    args: preset.args ?? [],
+    env: preset.env ?? {},
+    ...(preset.url === undefined ? {} : { url: preset.url }),
+    headers: {},
+    rest: {},
+  }
 }
 
 /**
@@ -622,30 +819,37 @@ async function addPresetServer() {
  * @returns {Promise<void>} resolves once the write settled.
  */
 async function addCustomServer() {
+  const read = readCustomServer('mcp-custom', new Set(mcpServers.map((server) => server.name)))
   const error = el('error-mcp-custom')
-  const name = el('mcp-custom-name').value.trim()
-  const command = el('mcp-custom-command').value.trim()
-  const url = el('mcp-custom-url').value.trim()
-  error.textContent = ''
+  error.textContent = read.error ?? ''
+  if (read.server === undefined) return
+  await addServer(read.server)
+  clearCustomFields('mcp-custom')
+}
+
+/**
+ * Read one scope's hand-entry fields into a server entry.
+ *
+ * Validated here only well enough to keep an obviously broken row out of the
+ * list; main re-checks over the same rules, which is also what a hand-edited
+ * `mcp.json` passes through.
+ * @param {string} prefix - the field id prefix for this scope.
+ * @param {Set<string>} taken - names already configured in this scope.
+ * @returns {{server?: object, error?: string}} the entry, or why it was refused.
+ */
+function readCustomServer(prefix, taken) {
+  const name = el(`${prefix}-name`).value.trim()
+  const command = el(`${prefix}-command`).value.trim()
+  const url = el(`${prefix}-url`).value.trim()
   if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
-    error.textContent = 'Use letters, digits, - and _ for the name, up to 32 characters.'
-    return
+    return { error: 'Use letters, digits, - and _ for the name, up to 32 characters.' }
   }
-  if (mcpServers.some((server) => server.name === name)) {
-    error.textContent = `A server named ${name} is already in the list.`
-    return
-  }
-  if (command === '' && url === '') {
-    error.textContent = 'Give either a command to run, or an https:// URL.'
-    return
-  }
-  if (command === '' && !url.startsWith('https://')) {
-    error.textContent = 'The URL must start with https://.'
-    return
-  }
-  const args = el('mcp-custom-args').value.trim()
-  await addServer(
-    {
+  if (taken.has(name)) return { error: `A server named ${name} is already in the list.` }
+  if (command === '' && url === '') return { error: 'Give either a command to run, or an https:// URL.' }
+  if (command === '' && !url.startsWith('https://')) return { error: 'The URL must start with https://.' }
+  const args = el(`${prefix}-args`).value.trim()
+  return {
+    server: {
       name,
       disabled: false,
       transport: command === '' ? 'http' : 'stdio',
@@ -656,8 +860,15 @@ async function addCustomServer() {
       headers: {},
       rest: {},
     },
-  )
-  for (const id of ['mcp-custom-name', 'mcp-custom-command', 'mcp-custom-args', 'mcp-custom-url']) el(id).value = ''
+  }
+}
+
+/**
+ * Empty one scope's hand-entry fields after a successful add.
+ * @param {string} prefix - the field id prefix for this scope.
+ */
+function clearCustomFields(prefix) {
+  for (const suffix of ['name', 'command', 'args', 'url']) el(`${prefix}-${suffix}`).value = ''
 }
 
 /**
@@ -1323,7 +1534,14 @@ el('paste-mcp-block').addEventListener('click', () => void pasteMcpBlock())
 el('open-mcp-config-file').addEventListener('click', () => {
   void openMcpConfigFile()
 })
-el('mcp-workspace').addEventListener('change', renderWorkspaceRows)
+el('mcp-workspace').addEventListener('change', () => {
+  renderWorkspaceRows()
+  renderProjectPresetPicker()
+})
+el('mcp-project-preset').addEventListener('change', renderProjectPresetPicker)
+el('add-mcp-project-preset').addEventListener('click', () => void addProjectPresetServer())
+el('add-mcp-project-custom').addEventListener('click', () => void addProjectCustomServer())
+el('paste-mcp-project-block').addEventListener('click', () => void pasteProjectMcpBlock())
 el('open-project-mcp-file').addEventListener('click', () => {
   void openProjectMcpFile()
 })

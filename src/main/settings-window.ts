@@ -84,6 +84,12 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
     ipcMain.handle('settings:open-mcp-config-file', () => handlers.openMcpConfigFile())
     ipcMain.handle('settings:read-workspaces', () => handlers.readWorkspaces())
     ipcMain.handle('settings:open-project-mcp-file', (_event, file: string) => handlers.openProjectMcpFile(file))
+    ipcMain.handle('settings:save-project-mcp-servers', (_event, file: string, servers: McpServerEntry[]) =>
+      handlers.saveProjectMcpServers(file, servers),
+    )
+    ipcMain.handle('settings:paste-project-mcp-block', (_event, file: string, text: string) =>
+      handlers.pasteProjectMcpBlock(file, text),
+    )
     channelsRegistered = true
   }
 
