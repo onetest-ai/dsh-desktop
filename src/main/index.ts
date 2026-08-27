@@ -240,7 +240,33 @@ async function runStartupPhases(config: DesktopConfig): Promise<void> {
   )
   if (quitting) return
   for (const failure of outcome.failed) pushProgress(splash, `${failure.spec}: ${failure.reason}`)
+  recordRepairedVersions(config, outcome.installed)
   pushPhase(splash, 'starting')
+}
+
+/**
+ * Write the versions a repair resolved back into the stored config.
+ *
+ * An entry with no recorded version is what `pluginStatus` reports as not
+ * installed, so without this the same plugin is found missing and reinstalled
+ * on every launch — the repair would never converge. A failed write is not
+ * fatal: the boot below reads the config from disk either way, and the only
+ * cost is that the next launch repairs again.
+ * @param config - the config this launch started from.
+ * @param installed - each repaired spec with the version npm resolved.
+ */
+function recordRepairedVersions(config: DesktopConfig, installed: { spec: string; version: string }[]): void {
+  if (installed.length === 0) return
+  const resolved = new Map(installed.map(({ spec, version }) => [spec, version]))
+  const plugins = (config.plugins ?? []).map((entry) => {
+    const version = resolved.get(entry.spec)
+    return version === undefined ? entry : { ...entry, version }
+  })
+  try {
+    writeConfig(CONFIG_PATH, { ...config, plugins })
+  } catch (error) {
+    console.warn(`dsh-desktop: the repaired plugin versions could not be recorded: ${(error as Error).message}`)
+  }
 }
 
 /**

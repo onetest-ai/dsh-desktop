@@ -20,7 +20,14 @@ export interface RepairDeps {
 
 /** What a repair pass managed and what it could not. */
 export interface RepairOutcome {
-  installed: string[]
+  /**
+   * Each repaired spec with the version `npm` actually resolved.
+   *
+   * The version is carried out rather than discarded because an entry with no
+   * recorded version reads as uninstalled: without writing it back, every
+   * launch would find the same plugin missing and install it again.
+   */
+  installed: { spec: string; version: string }[]
   failed: { spec: string; reason: string }[]
 }
 
@@ -44,14 +51,14 @@ export async function repairPlugins(
   deps: RepairDeps,
   onLine: (line: string) => void,
 ): Promise<RepairOutcome> {
-  const installed: string[] = []
+  const installed: { spec: string; version: string }[] = []
   const failed: { spec: string; reason: string }[] = []
   for (const spec of specs) {
     if (deps.isQuitting()) break
     const { package: pkg, pinnedVersion } = parseSpec(spec)
     try {
-      await deps.installPlugin(pkg, pinnedVersion ?? 'latest', npmPath, onLine)
-      installed.push(spec)
+      const version = await deps.installPlugin(pkg, pinnedVersion ?? 'latest', npmPath, onLine)
+      installed.push({ spec, version })
     } catch (error) {
       failed.push({ spec, reason: (error as Error).message })
     }

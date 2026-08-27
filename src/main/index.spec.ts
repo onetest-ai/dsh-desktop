@@ -1544,6 +1544,34 @@ describe('startup healthcheck', () => {
     expect(managedInstallMock).not.toHaveBeenCalled()
   })
 
+  // reason: `pluginStatus` reports an entry with no recorded version as not
+  // installed, so a repair that does not write the resolved version back
+  // reinstalls the same plugin on every launch and the chip never turns green.
+  it('records the version a repair resolved, so the next launch finds it installed', async () => {
+    declaring([{ spec: 'dsh-project-mcp-bridge@0.2.1' }])
+    pluginStatusMock.mockImplementation(() => ({
+      kind: 'unavailable',
+      package: 'dsh-project-mcp-bridge',
+      reason: 'not installed yet',
+    }))
+    managedInstallMock.mockImplementation(async () => '0.2.1')
+    await bootReady()
+    expect(writeConfigMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ plugins: [{ spec: 'dsh-project-mcp-bridge@0.2.1', version: '0.2.1' }] }),
+    )
+  })
+
+  it('leaves the config alone when a repair fails', async () => {
+    declaring([{ spec: 'a@1.0.0' }])
+    pluginStatusMock.mockImplementation(() => ({ kind: 'unavailable', package: 'a', reason: 'not installed yet' }))
+    managedInstallMock.mockImplementation(async () => {
+      throw new Error('registry unreachable')
+    })
+    await bootReady()
+    expect(writeConfigMock).not.toHaveBeenCalled()
+  })
+
   it('still boots when repair fails, with whatever did install', async () => {
     declaring([{ spec: 'a@1.0.0' }])
     pluginStatusMock.mockImplementation(() => ({ kind: 'unavailable', package: 'a', reason: 'not installed yet' }))

@@ -10,7 +10,10 @@ describe('repairPlugins', () => {
   it('installs every missing plugin', async () => {
     const d = deps()
     const outcome = await repairPlugins(['a@1.0.0', 'b@2.0.0'], undefined, d, () => {})
-    expect(outcome.installed).toEqual(['a@1.0.0', 'b@2.0.0'])
+    expect(outcome.installed).toEqual([
+      { spec: 'a@1.0.0', version: '1.0.0' },
+      { spec: 'b@2.0.0', version: '1.0.0' },
+    ])
     expect(vi.mocked(d.installPlugin)).toHaveBeenCalledTimes(2)
   })
 
@@ -47,7 +50,7 @@ describe('repairPlugins', () => {
     })
     const outcome = await repairPlugins(['a', 'b'], undefined, d, () => {})
     expect(outcome.failed).toEqual([{ spec: 'a', reason: 'registry unreachable' }])
-    expect(outcome.installed).toEqual(['b'])
+    expect(outcome.installed).toEqual([{ spec: 'b', version: '1.0.0' }])
   })
 
   it('stops spawning installs once quitting lands, rather than working behind the quit', async () => {
@@ -61,7 +64,16 @@ describe('repairPlugins', () => {
     })
     const outcome = await repairPlugins(['a', 'b', 'c'], undefined, d, () => {})
     expect(vi.mocked(d.installPlugin)).toHaveBeenCalledTimes(1)
-    expect(outcome.installed).toEqual(['a'])
+    expect(outcome.installed).toEqual([{ spec: 'a', version: '1.0.0' }])
+  })
+
+  // reason: an entry with no recorded version reads as uninstalled, so a
+  // repair that discards what npm resolved makes the next launch install the
+  // same plugin again — which is exactly what an unpinned spec did.
+  it('carries out the version npm resolved, not the one the spec asked for', async () => {
+    const d = deps({ installPlugin: vi.fn(async () => '3.4.5') })
+    const outcome = await repairPlugins(['a'], undefined, d, () => {})
+    expect(outcome.installed).toEqual([{ spec: 'a', version: '3.4.5' }])
   })
 
   it('does nothing at all when there is nothing to repair', async () => {
