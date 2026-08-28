@@ -1,7 +1,7 @@
 {
   "name": "@onetest/dsh-desktop-pane",
-  "version": "0.1.1",
-  "description": "Side-pane controls for DeepSeek Harness running inside the dsh-desktop app: sidebar buttons that show and hide the desktop's file tree and browser",
+  "version": "0.1.2",
+  "description": "Desktop-app controls for DeepSeek Harness: sidebar buttons for the file tree and browser, and picking up files the desktop app sends to the chat",
   "keywords": [
     "deepseek-harness",
     "dsh",

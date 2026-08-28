@@ -8,6 +8,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 // typecheck.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import { PaneButton } from './PaneButton.tsx'
+import { appendToComposer } from './composer.ts'
+import { desktop } from './desktop.ts'
 
 /** Required service: the slot registry. */
 export const inject = ['slots']
@@ -20,12 +22,19 @@ export const inject = ['slots']
  * the declaration instead of assuming apply order, and withdraws the button
  * if the sidebar goes away.
  *
- * The button decides for itself whether to render: outside the desktop app
- * there is no pane, and it returns null.
+ * The buttons decide for themselves whether to render: outside the desktop
+ * app there are no panels, and they return null. The subscription below is
+ * likewise a no-op there, since the bridge that carries it is absent.
  * @param ctx - the client context.
  */
 export function apply(ctx: Context): void {
   ctx.slots.inject('sidebar.footer.action', () =>
     ctx.slots.register({ name: 'sidebar.footer.action', id: 'desktop-pane' }, PaneButton),
   )
+  // A path the user picked in the desktop app's tree, put where they were
+  // going to type it. Subscribed once, outside any slot: the message box
+  // belongs to the page, not to this plugin's own component.
+  desktop()?.onAddToChat?.((reference) => {
+    appendToComposer(reference.path)
+  })
 }
