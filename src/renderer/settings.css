@@ -7,8 +7,15 @@
  * Appearance setting, and a Settings window that followed the machine would
  * be light beside a dark harness. Main resolves which applies and pushes it;
  * see `followHarnessTheme`.
+ *
+ * Mapped on `body`, not on `:root`. The vendored sheet defines every
+ * `--dsw-alias-*` on `body` and `body[data-ds-dark-theme]`; custom properties
+ * inherit downwards only, so the same names read as undefined one level up on
+ * `:root`. Mapped there, every variable below resolves to nothing: the window
+ * paints Electron's white, and the fixed header turns transparent so the
+ * content scrolls visibly through it.
  */
-:root {
+body {
   --bg: var(--dsw-alias-bg-base);
   --surface: var(--dsw-alias-markdown-inline-code);
   --surface-hover: var(--dsw-alias-interactive-bg-hover-solid);
