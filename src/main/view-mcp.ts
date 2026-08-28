@@ -322,12 +322,17 @@ function buildServer(deps: ViewDeps): McpServer {
     {
       title: 'Wait for the built-in browser',
       description:
-        "Wait until an element or some visible text appears in the desktop app's built-in browser, or until it goes. Use this instead of reading the page repeatedly, and to wait out something timed — a dialog a page opens seconds after a click is reported when this returns.",
+        "Wait in the desktop app's built-in browser: until an element or some visible text appears, until it goes, or — naming neither — simply until the time has passed. Use it instead of reading the page repeatedly, and to wait out something timed: a dialog a page opens seconds after a click is reported when this returns.",
       inputSchema: {
         target: target.optional(),
         text: z.string().optional().describe('Visible text to wait for, when no element is named.'),
         gone: z.boolean().optional().describe('Wait for it to disappear instead of appear.'),
-        seconds: z.number().min(1).max(120).optional().describe('How long to wait; 10 by default.'),
+        seconds: z
+          .number()
+          .min(1)
+          .max(120)
+          .optional()
+          .describe('How long to wait, or how long to wait for; 10 by default.'),
       },
     },
     async ({ target: element, text, gone, seconds }) =>

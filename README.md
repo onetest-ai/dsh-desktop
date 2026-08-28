@@ -190,7 +190,7 @@ The browser can also be **driven**, through the Chrome DevTools protocol — the
 | `browser_drag` | Presses, moves across in steps, releases — what a sortable list or a resize handle actually waits for. Onto an element, or by a distance in pixels, or both. |
 | `browser_upload_file` | Puts a file on a file input without a chooser. The file must be inside an open project. |
 | `browser_handle_dialogs` | Decides what happens to `alert`, `confirm`, and `prompt`. They are dismissed by default and always answered at once, since a dialog left open blocks the page; whatever appeared is reported with the action that caused it. |
-| `browser_wait_for` | Waits for an element or some visible text to appear or go. Also how you wait out something timed: a dialog a page opens seconds after a click is reported when this returns. |
+| `browser_wait_for` | Waits for an element or some visible text to appear or go — or, naming neither, simply for the time to pass. Also how you wait out something timed: a dialog a page opens seconds after a click is reported when this returns. |
 | `browser_evaluate` | Runs an expression in the page — for state the rendered text does not show, such as an input's `.value` or a `getBoundingClientRect()`. For reading, not for acting: one action per tool call, since a framework repaints after the expression has already returned. |
 | `browser_read_console` | Reads what the page logged, uncaught exceptions included. |
 | `browser_resize` | Overrides the viewport the page measures, without moving the window you arranged. |

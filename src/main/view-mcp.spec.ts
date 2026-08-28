@@ -313,6 +313,13 @@ describe('the browser tools', () => {
     expect(browser.drag).toHaveBeenCalledWith('.handle', undefined, { dx: 50, dy: 30 })
   })
 
+  it('waits for the time to pass when nothing in particular is named', async () => {
+    const browser = automation()
+    const url = await serve(deps({ browser }))
+    await callTool(url, 'browser_wait_for', { seconds: 6 })
+    expect(browser.waitFor).toHaveBeenCalledWith(undefined, undefined, false, 6)
+  })
+
   it('waits for something to appear, and for something to go', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))

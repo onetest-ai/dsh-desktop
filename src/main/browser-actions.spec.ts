@@ -650,9 +650,13 @@ describe('waitFor', () => {
     expect(seen[0]).toContain('"Saved"')
   })
 
-  it('refuses a wait for nothing in particular', async () => {
+  // reason: a page that acts on a timer gives nothing to wait for but the
+  // time itself, and inventing a condition that never matches to wait it out
+  // reports a failure for a step that did what was asked.
+  it('waits for the time to pass when nothing in particular is named', async () => {
     const { session, sent } = fakeSession()
-    expect(await waitFor(session, undefined, undefined, false, 5)).toMatchObject({ ok: false })
+    const result = await waitFor(session, undefined, undefined, false, 1)
+    expect(result).toEqual({ ok: true, message: 'Waited 1s.' })
     expect(sent).toEqual([])
   })
 })

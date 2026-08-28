@@ -132,7 +132,7 @@ const POLL_MS = 200
  * @param session - the protocol session.
  * @param target - the element to wait for, or undefined when waiting on text.
  * @param text - the visible text to wait for, or undefined when waiting on an
- *   element.
+ *   element. With neither, the wait is simply for the time to pass.
  * @param gone - whether to wait for absence instead of presence.
  * @param seconds - how long to wait before giving up.
  * @returns whether the condition held, or why the wait could not be made.
@@ -145,7 +145,12 @@ export async function waitFor(
   seconds: number,
 ): Promise<ActionResult> {
   if (target === undefined && text === undefined) {
-    return { ok: false, reason: 'Name either an element or some text to wait for.' }
+    // Waiting for nothing in particular is waiting for time to pass, which is
+    // what a page that acts on a timer asks of anyone watching it. Any dialog
+    // that opens meanwhile is reported when this returns, as after any other
+    // action.
+    await pause(seconds * 1000)
+    return { ok: true, message: `Waited ${String(seconds)}s.` }
   }
   const what = target ?? JSON.stringify(text)
   const deadline = seconds * 1000
