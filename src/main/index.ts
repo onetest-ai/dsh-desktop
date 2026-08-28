@@ -1,5 +1,5 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron'
-import { existsSync, mkdirSync, renameSync, rmSync, watch, type FSWatcher } from 'node:fs'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, shell, utilityProcess } from 'electron'
+import { accessSync, constants, existsSync, mkdirSync, renameSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 import { loadDeclaredPatchRows } from './bundle-patch'
 import { checkBinaries } from './check-binaries'
@@ -58,6 +58,9 @@ import { deleteEntry, pasteEntry, renameEntry } from './file-ops'
 import { treeMenu, type TreeAction } from './tree-menu'
 import { resolveInRoot } from './file-tree'
 import { watchProject, type ProjectWatch } from './project-watch'
+import type { HostEvent } from './pty-host'
+import { Terminals } from './terminal'
+import { argsFor, resolveShell, shellProblem } from './terminal-shell'
 import { BrowserSession } from './browser-cdp'
 import {
   click as clickElement,
@@ -124,6 +127,19 @@ const columns: Columns = {
  * @param key - which column to change.
  * @param next - the width, open state, or both to apply.
  */
+/**
+ * Set the terminal panel's height.
+ *
+ * Its own setter because the panel is the one part sized vertically:
+ * `setColumn` writes a width, which for this panel is what it claims when no
+ * column is open to sit under — a different number entirely.
+ * @param height - the height in pixels; clamped by `layout`.
+ */
+function setTerminalHeight(height: number): void {
+  columns.terminal.height = Math.max(0, Math.round(height))
+  if (views !== undefined && !views.window.isDestroyed()) applyLayout(views, columns, webViewVisible)
+}
+
 function setColumn(key: keyof Columns, next: { width?: number; open?: boolean }): void {
   if (next.width !== undefined) columns[key].width = next.width
   if (next.open !== undefined) columns[key].open = next.open
@@ -171,7 +187,11 @@ function storeColumns(): void {
     if (!stored.configured) return
     writeConfig(CONFIG_PATH, {
       ...stored.config,
-      pane: { editor: { ...columns.editor }, files: { ...columns.files } },
+      pane: {
+        editor: { ...columns.editor },
+        files: { ...columns.files },
+        terminal: { ...columns.terminal },
+      },
     })
   } catch (error) {
     console.warn(`dsh-desktop: the column sizes could not be stored: ${(error as Error).message}`)
@@ -230,6 +250,89 @@ async function startViewTools(config: DesktopConfig): Promise<void> {
     console.warn(`dsh-desktop: the view tools could not start: ${(error as Error).message}`)
   }
 }
+
+/**
+ * Start a shell for the terminal panel.
+ *
+ * The directory is the workspace the tree is showing at the moment the panel
+ * opens, and is not revisited: a terminal is a place someone is working, and
+ * moving its `cwd` under a running shell would be a surprise no terminal
+ * anywhere does.
+ * @param cols - the panel's measured width in characters.
+ * @param rows - its measured height in rows.
+ * @returns the id to address it by, or why no shell started.
+ */
+function startTerminal(cols: number, rows: number): { id: number; cwd: string; shell: string } | { error: string } {
+  const stored = loadConfig(CONFIG_PATH)
+  const configured = stored.configured ? stored.config.terminalShell : undefined
+  const shell = resolveShell(configured)
+  const problem = shellProblem(shell.command, (path) => {
+    try {
+      accessSync(path, constants.X_OK)
+      return statSync(path).isFile()
+    } catch {
+      return false
+    }
+  })
+  if (problem !== undefined) {
+    return {
+      error: shell.source === 'configured'
+        ? `${problem} Change it under Settings → Advanced → Terminal shell.`
+        : problem,
+    }
+  }
+  const cwd = currentProject?.path ?? app.getPath('home')
+  const id = terminals.start({
+    shell: shell.command,
+    args: argsFor(shell.command),
+    cwd,
+    cols: Math.max(1, Math.floor(cols)),
+    rows: Math.max(1, Math.floor(rows)),
+    env: { ...process.env, PATH: probePath(), TERM: 'xterm-256color' } as Record<string, string>,
+  })
+  return { id, cwd, shell: shell.command }
+}
+
+/**
+ * The terminals this app has open, and the host process behind them.
+ *
+ * Constructed once; it starts nothing until a terminal is opened, so an app
+ * nobody opens one in never forks a host or loads the native binary.
+ */
+const terminals = new Terminals({
+  fork: (onEvent, onGone) => {
+    const host = utilityProcess.fork(join(__dirname, 'pty-entry.js'), [], {
+      // A shell inherits the environment the harness's own tools were given,
+      // so a terminal finds the same toolchain the agent does.
+      // The same PATH the harness's own tools are found on, so a terminal
+      // finds the toolchain the agent does — a Finder-launched app inherits
+      // almost none of it otherwise.
+      env: { ...process.env, PATH: probePath() },
+      serviceName: 'dsh-terminal',
+    })
+    host.on('message', (event: HostEvent) => {
+      onEvent(event)
+    })
+    host.on('exit', () => {
+      onGone()
+    })
+    return {
+      post: (request) => {
+        host.postMessage(request)
+      },
+      kill: () => {
+        host.kill()
+      },
+    }
+  },
+  toPanel: (event) => {
+    if (views === undefined || views.window.isDestroyed()) return
+    const target = views.terminal.webContents
+    if (event.kind === 'data') target.send('terminal:data', event.id, event.data)
+    else if (event.kind === 'exit') target.send('terminal:exit', event.id, event.code)
+    else target.send('terminal:failed', event.id, event.reason)
+  },
+})
 
 /**
  * The protocol session over the browser column.
@@ -534,6 +637,7 @@ function pushTheme(): void {
     views.window.webContents,
     views.pane.webContents,
     views.files.webContents,
+    views.terminal.webContents,
     ...(settings === undefined ? [] : [settings]),
   ]) {
     target.send('theme', dark)
@@ -1737,6 +1841,12 @@ if (!app.requestSingleInstanceLock()) {
         // closed.
         columns.editor = { width: stored.config.pane.editor.width, open: false }
         columns.files = { ...stored.config.pane.files }
+        // The panel's size is restored but never its open state, for the
+        // editor's reason: a terminal exists because someone opened one, and
+        // reopening it at launch would start a shell nobody asked for.
+        if (stored.config.pane.terminal !== undefined) {
+          columns.terminal = { ...stored.config.pane.terminal, open: false }
+        }
       }
     } catch {
       // An unreadable config is reported further down, where it can open
@@ -1749,6 +1859,12 @@ if (!app.requestSingleInstanceLock()) {
     // page draws one per open column.
     ipcMain.on('shell:resize-column', (_event, key: keyof Columns, windowX: number) => {
       if (views === undefined || views.window.isDestroyed()) return
+      // The panel is sized by height, and the page already measured it from
+      // the bottom edge — there is no column outside it to account for.
+      if (key === 'terminal') {
+        setTerminalHeight(windowX)
+        return
+      }
       const [width] = views.window.getContentSize()
       // Each column is measured inward from the rail, past whatever columns
       // sit outside it: dragging the editor's divider must not move the tree,
@@ -1757,6 +1873,10 @@ if (!app.requestSingleInstanceLock()) {
       setColumn(key, { width: width - RAIL_WIDTH - windowX - outside })
     })
     ipcMain.on('shell:nudge-column', (_event, key: keyof Columns, delta: number) => {
+      if (key === 'terminal') {
+        setTerminalHeight(columns.terminal.height + delta)
+        return
+      }
       setColumn(key, { width: columns[key].width + delta })
     })
     ipcMain.on('shell:commit-columns', () => {
@@ -1774,6 +1894,9 @@ if (!app.requestSingleInstanceLock()) {
       toggleColumn('files')
     })
     ipcMain.on('shell:toggle-web', toggleWeb)
+    ipcMain.on('shell:toggle-terminal', () => {
+      toggleColumn('terminal')
+    })
     // The harness telling us which project it is working in — pushed by the
     // desktop plugin when the user switches session. Better than anything
     // this app can infer: selecting an existing session moves nothing on
@@ -1910,6 +2033,19 @@ if (!app.requestSingleInstanceLock()) {
     // wrong one until something else changed.
     ipcMain.on('theme:ask', () => {
       pushTheme()
+    })
+    // The page asks only for a size. Which shell, and where it runs, are
+    // decided here: a renderer that named either could start any program in
+    // any directory.
+    ipcMain.handle('terminal:start', (_event, cols: number, rows: number) => startTerminal(cols, rows))
+    ipcMain.on('terminal:input', (_event, id: number, data: string) => {
+      terminals.send({ kind: 'input', id, data })
+    })
+    ipcMain.on('terminal:resize', (_event, id: number, cols: number, rows: number) => {
+      terminals.send({ kind: 'resize', id, cols, rows })
+    })
+    ipcMain.on('terminal:ack', (_event, id: number, chars: number) => {
+      terminals.send({ kind: 'ack', id, chars })
     })
     // Asked for as the tree's page loads, for the same reason as the theme:
     // main cannot know when a page is ready to be told.

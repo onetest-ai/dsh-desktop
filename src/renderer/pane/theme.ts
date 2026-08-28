@@ -13,8 +13,8 @@
  * @param onChange - called with whether dark is in effect, whenever it changes.
  */
 export function followHarnessTheme(onChange: (dark: boolean) => void): void {
-  const bridge = (globalThis as { pane?: ThemeBridge; shell?: ThemeBridge }).pane
-    ?? (globalThis as { shell?: ThemeBridge }).shell
+  const global = globalThis as { pane?: ThemeBridge; shell?: ThemeBridge; terminal?: ThemeBridge }
+  const bridge = global.pane ?? global.shell ?? global.terminal
   bridge?.onTheme((dark) => {
     if (dark) document.body.setAttribute('data-ds-dark-theme', '')
     else document.body.removeAttribute('data-ds-dark-theme')

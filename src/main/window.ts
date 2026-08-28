@@ -48,6 +48,8 @@ export interface MainWindow {
   pane: WebContentsView
   /** Holds the file tree, in the right-hand column. */
   files: WebContentsView
+  /** Holds the terminal panel, along the bottom of the columns. */
+  terminal: WebContentsView
   /**
    * Holds whatever page the Web tab is showing.
    *
@@ -177,6 +179,13 @@ export function createWindow(columns: Columns): MainWindow {
       preload: join(__dirname, '..', 'preload', 'pane.js'),
     },
   })
+  const terminal = new WebContentsView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: join(__dirname, '..', 'preload', 'terminal.js'),
+    },
+  })
   const web = new WebContentsView({
     // Whatever the Web tab loads is foreign: no preload, no node, isolated —
     // and stacked over the pane rather than inside its document.
@@ -185,6 +194,7 @@ export function createWindow(columns: Columns): MainWindow {
   window.contentView.addChildView(harness)
   window.contentView.addChildView(pane)
   window.contentView.addChildView(files)
+  window.contentView.addChildView(terminal)
   // Added last so it stacks over the editor column it covers.
   window.contentView.addChildView(web)
   void pane.webContents.loadURL(`${PANE_ORIGIN}/pane.html`)
@@ -193,6 +203,10 @@ export function createWindow(columns: Columns): MainWindow {
   // unloaded view is a target that never finishes, and an automation client
   // attaching to this window waits for it.
   void web.webContents.loadURL(`${PANE_ORIGIN}/web.html`)
+  // Loaded with the window, for the same reason as the web view: an unloaded
+  // view is a target that never finishes. Its shell starts only when the panel
+  // is opened, not here.
+  void terminal.webContents.loadURL(`${PANE_ORIGIN}/terminal.html`)
 
   // A page that opens a new window gets the system browser, exactly as the
   // harness view does: this app has one place to put a page, and it is here.
@@ -201,7 +215,7 @@ export function createWindow(columns: Columns): MainWindow {
     return { action: 'deny' }
   })
 
-  const views = { window, harness, pane, files, web }
+  const views = { window, harness, pane, files, terminal, web }
   applyLayout(views, columns, false)
   window.on('resize', () => applyLayout(views, lastColumns, webShowing))
 
@@ -255,6 +269,7 @@ export function applyLayout(views: MainWindow, columns: Columns, webVisible: boo
   views.harness.setBounds(places.harness)
   views.pane.setBounds(places.editor)
   views.files.setBounds(places.files)
+  views.terminal.setBounds(places.terminal)
   // The web view covers the editor column's panel area, minus its tab strip
   // and the address bar under it, so both stay reachable while a page shows.
   const chrome = TAB_STRIP_HEIGHT + ADDRESS_BAR_HEIGHT
@@ -268,6 +283,7 @@ export function applyLayout(views: MainWindow, columns: Columns, webVisible: boo
   // it keeps whatever it was showing, so reopening costs no reload.
   views.pane.setVisible(columns.editor.open)
   views.files.setVisible(columns.files.open)
+  views.terminal.setVisible(columns.terminal.open)
   views.web.setVisible(columns.editor.open && webVisible)
   // The window's own page draws the dividers and the rail but cannot see
   // where the views are, so it is told: each divider is placed over its own
@@ -276,9 +292,15 @@ export function applyLayout(views: MainWindow, columns: Columns, webVisible: boo
   views.window.webContents.send('shell:places', {
     editor: places.editorDivider,
     files: places.filesDivider,
+    terminal: places.terminalDivider,
     rail: places.rail,
     // The rail's buttons show which columns are up, so it is told.
-    open: { editor: columns.editor.open, files: columns.files.open, web: columns.editor.open && webVisible },
+    open: {
+      editor: columns.editor.open,
+      files: columns.files.open,
+      terminal: columns.terminal.open,
+      web: columns.editor.open && webVisible,
+    },
   })
 }
 

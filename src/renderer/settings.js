@@ -1,6 +1,6 @@
 // Dumb form: reads values, sends them to main, renders whatever comes back.
 // All validation lives in the main process.
-const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'extraPath']
+const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'extraPath', 'terminalShell']
 const el = (id) => document.getElementById(id)
 const kindOf = () => document.querySelector('input[name="kind"]:checked').value
 
@@ -20,6 +20,7 @@ const FIELD_TAB = {
   pnpmPath: 'advanced',
   npmPath: 'advanced',
   extraPath: 'advanced',
+  terminalShell: 'advanced',
   plugins: 'plugins',
   mcp: 'mcp',
 }

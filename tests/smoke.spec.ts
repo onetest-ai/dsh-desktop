@@ -1,10 +1,24 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, statSync, writeFileSync } from 'node:fs'
 import { expect, test, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const APP_DIR = join(__dirname, '..', 'release', 'mac-arm64', 'DeepSeek Harness.app')
+
+/**
+ * The pty helper inside the packaged app.
+ *
+ * node-pty spawns this binary for every terminal, and its published tarball
+ * ships it without the executable bit. electron-builder copies the mode it
+ * finds and a signed bundle cannot be repaired afterwards, so the packaged
+ * artifact is the only place worth asserting it.
+ */
+const SPAWN_HELPER = join(
+  APP_DIR,
+  'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty',
+  'prebuilds', 'darwin-arm64', 'spawn-helper',
+)
 const APP = join(APP_DIR, 'Contents', 'MacOS', 'DeepSeek Harness')
 
 /**
@@ -133,8 +147,9 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
 
     // The pane starts closed, so the harness view has the whole window: its
     // width is the window's own, not a fraction of it.
-    // Harness, editor, files, web. With both columns closed the harness has
-    // everything except the rail at the edge, and nothing else has width.
+    // Harness, editor, files, terminal, web. With every column closed the
+    // harness has everything except the rail at the edge, and nothing else
+    // has width.
     const closed = await app.evaluate(({ BrowserWindow }) => {
       const [main] = BrowserWindow.getAllWindows().filter((each) => each.getContentSize()[0] > 800)
       const [width] = main.getContentSize()
@@ -143,7 +158,7 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
     })
     expect(closed.widths[0]).toBeGreaterThan(closed.width - 60)
     expect(closed.widths[0]).toBeLessThan(closed.width)
-    expect(closed.widths.slice(1)).toEqual([0, 0, 0])
+    expect(closed.widths.slice(1)).toEqual([0, 0, 0, 0])
 
     await expect
       .poll(
@@ -218,4 +233,11 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
   await new Promise((r) => setTimeout(r, 2000))
 
   expect(findLeakedChildren(marker)).toBe('')
+})
+
+// reason: without the executable bit every terminal fails with a bare
+// `posix_spawnp failed.`, and the mode npm leaves it in is not executable.
+test('ships a pty helper the app may actually execute', () => {
+  expect(existsSync(SPAWN_HELPER), `${SPAWN_HELPER} is missing from the packaged app`).toBe(true)
+  expect(statSync(SPAWN_HELPER).mode & 0o111, 'spawn-helper is not executable').not.toBe(0)
 })

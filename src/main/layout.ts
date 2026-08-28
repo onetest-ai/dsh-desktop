@@ -40,6 +40,15 @@ export const MIN_TERMINAL_WIDTH = 480
 /** Below this the terminal shows too few lines to follow what a command did. */
 export const MIN_TERMINAL_HEIGHT = 120
 
+/**
+ * The most of the window a bottom-docked terminal may take.
+ *
+ * It only docks along the bottom when the editor is using the column above
+ * it; past half the window the thing being worked on is smaller than the
+ * terminal watching it.
+ */
+export const MAX_TERMINAL_FRACTION = 0.5
+
 /** A view's bounds, in the window's coordinates. */
 export interface Rect {
   x: number
@@ -106,14 +115,24 @@ export interface Layout {
  * @returns bounds for all five parts, together covering the window exactly.
  */
 export function layout(bounds: { width: number; height: number }, columns: Columns): Layout {
-  // The terminal takes its height off the bottom of the columns' band, so
-  // every column is laid out into what it leaves.
+  // The terminal fills the editor's slot whenever the editor is not using it —
+  // full height beside the tree, or the whole split when the tree is closed
+  // too. It docks along the bottom only when both are up, because only then is
+  // there something above it to keep.
   const panelOpen = columns.terminal.open
-  const panelHeight = panelOpen
-    ? Math.min(Math.max(columns.terminal.height, MIN_TERMINAL_HEIGHT), bounds.height)
+  const docked = panelOpen && columns.editor.open
+  const panelHeight = docked
+    ? Math.min(
+      Math.max(columns.terminal.height, MIN_TERMINAL_HEIGHT),
+      Math.floor(bounds.height * MAX_TERMINAL_FRACTION),
+    )
     : 0
-  const bandHeight = Math.max(0, bounds.height - panelHeight - (panelOpen ? DIVIDER_WIDTH : 0))
-  const full = { y: 0, height: bandHeight }
+  const bandHeight = Math.max(0, bounds.height - panelHeight - (docked ? DIVIDER_WIDTH : 0))
+  // The panel sits under this app's own columns, not under the conversation:
+  // the harness and the rail keep the window's full height, and only the
+  // columns give up the band the panel takes.
+  const full = { y: 0, height: bounds.height }
+  const band = { y: 0, height: bandHeight }
   const railWidth = Math.min(RAIL_WIDTH, bounds.width)
   const rail = { x: bounds.width - railWidth, width: railWidth, ...full }
   // Everything else divides what the rail leaves.
@@ -123,15 +142,9 @@ export function layout(bounds: { width: number; height: number }, columns: Colum
     { key: 'files' as const, state: columns.files, min: MIN_FILES_WIDTH },
   ].filter((column) => column.state.open)
 
-  const gaps = open.length * DIVIDER_WIDTH
+  const gaps = open.length * DIVIDER_WIDTH + (panelOpen && !columns.editor.open ? DIVIDER_WIDTH : 0)
   const available = Math.max(0, usable - gaps)
   const wanted = open.map((column) => Math.max(column.state.width, column.min))
-  // The panel spans whatever the columns occupy. With none open it has
-  // nothing to sit under, so it claims a band of its own and the harness
-  // gives up the width — otherwise the toggle would appear to do nothing.
-  const soloWidth = panelOpen && open.length === 0
-    ? Math.min(Math.max(columns.terminal.width, MIN_TERMINAL_WIDTH), Math.max(0, usable - MIN_HARNESS_WIDTH))
-    : 0
   const total = wanted.reduce((sum, width) => sum + width, 0)
   const spare = Math.max(0, available - MIN_HARNESS_WIDTH)
 
@@ -142,20 +155,37 @@ export function layout(bounds: { width: number; height: number }, columns: Colum
   const widths = wanted.map((width) => Math.floor(width * scale))
   const used = widths.reduce((sum, width) => sum + width, 0)
 
+  // Standing in for the editor, the terminal asks for what the editor would
+  // have: beside an open tree that is the editor's width, and with the tree
+  // closed as well it is the whole split. Clamped against what the columns
+  // and their gaps have already taken, so the harness keeps its minimum.
+  const soloWidth = panelOpen && !columns.editor.open
+    ? Math.min(
+      Math.max(columns.terminal.width, MIN_TERMINAL_WIDTH),
+      Math.max(0, available - MIN_HARNESS_WIDTH - used),
+    )
+    : 0
+
   let x = available - used - soloWidth
   const harness = { x: 0, width: Math.max(0, x), ...full }
   const bandStart = Math.max(0, x)
   const bandWidth = usable - bandStart
+  // Standing in for the editor, the terminal is placed first, in the editor's
+  // slot, and the columns that remain follow it.
+  const slot = soloWidth > 0
+    ? { divider: { x, width: DIVIDER_WIDTH, ...full }, panel: { x: x + DIVIDER_WIDTH, width: soloWidth, ...full } }
+    : undefined
+  if (slot !== undefined) x += DIVIDER_WIDTH + soloWidth
   const places: Record<string, Rect> = {
-    editor: { x: rail.x, width: 0, ...full },
-    files: { x: rail.x, width: 0, ...full },
-    editorDivider: { x: rail.x, width: 0, ...full },
-    filesDivider: { x: rail.x, width: 0, ...full },
+    editor: { x: rail.x, width: 0, ...band },
+    files: { x: rail.x, width: 0, ...band },
+    editorDivider: { x: rail.x, width: 0, ...band },
+    filesDivider: { x: rail.x, width: 0, ...band },
   }
   open.forEach((column, index) => {
-    places[`${column.key}Divider`] = { x, width: DIVIDER_WIDTH, ...full }
+    places[`${column.key}Divider`] = { x, width: DIVIDER_WIDTH, ...band }
     x += DIVIDER_WIDTH
-    places[column.key] = { x, width: widths[index], ...full }
+    places[column.key] = { x, width: widths[index], ...band }
     x += widths[index]
   })
 
@@ -167,11 +197,13 @@ export function layout(bounds: { width: number; height: number }, columns: Colum
     editor: places.editor,
     filesDivider: places.filesDivider,
     files: places.files,
-    terminalDivider: panelOpen
+    // Docked along the bottom of the columns, or standing in the editor's own
+    // slot at full height. Closed, it has no size at all.
+    terminalDivider: docked
       ? { x: bandStart, y: bandHeight, width: bandWidth, height: DIVIDER_WIDTH }
-      : empty,
-    terminal: panelOpen
+      : slot?.divider ?? empty,
+    terminal: docked
       ? { x: bandStart, y: bandHeight + DIVIDER_WIDTH, width: bandWidth, height: panelHeight }
-      : empty,
+      : slot?.panel ?? empty,
   }
 }

@@ -63,7 +63,15 @@ export interface DesktopConfig {
    * request — `layout` clamps it to what the current window can give, so a
    * config written on a wider display cannot strand the harness here.
    */
-  pane?: { editor: { width: number; open: boolean }; files: { width: number; open: boolean } }
+  pane?: {
+    editor: { width: number; open: boolean }
+    files: { width: number; open: boolean }
+    /**
+     * The terminal panel. Absent in a file written before it existed, which
+     * opens it closed at its default size rather than refusing to load.
+     */
+    terminal?: { width: number; height: number; open: boolean }
+  }
   /**
    * Whether this app offers the agent its view tools — open a file, open a
    * page, show a proposed change, read the selection.
@@ -216,8 +224,20 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
 function paneState(value: unknown): DesktopConfig['pane'] {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
   const { editor, files } = value as Record<string, unknown>
+  const { terminal } = value as Record<string, unknown>
   const both = [column(editor), column(files)]
-  return both[0] === undefined || both[1] === undefined ? undefined : { editor: both[0], files: both[1] }
+  if (both[0] === undefined || both[1] === undefined) return undefined
+  const panel = column(terminal)
+  const height = (terminal as { height?: unknown } | null)?.height
+  return {
+    editor: both[0],
+    files: both[1],
+    // The panel needs a height as well as a width, and one without is not a
+    // panel this can restore — it opens at the default instead.
+    ...(panel === undefined || typeof height !== 'number' || !Number.isFinite(height) || height <= 0
+      ? {}
+      : { terminal: { ...panel, height: Math.round(height) } }),
+  }
 }
 
 /**

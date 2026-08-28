@@ -1,0 +1,59 @@
+/*
+ * The terminal panel. Colours come from the harness's own tokens (vendored;
+ * see vendor/dsh-theme/README.md), mapped on `body` because that is the scope
+ * the vendored sheet defines them in — see settings.css for what mapping them
+ * on `:root` costs.
+ */
+body {
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  color-scheme: light dark;
+  font-family: var(--dsw-font-family);
+}
+
+.terminal-chrome {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 28px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  user-select: none;
+}
+
+.terminal-title {
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.terminal-cwd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/* The measured area xterm fits itself to; its own canvas fills this. */
+.terminal-surface {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 6px 0 6px 8px;
+}
+
+.terminal-message {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary);
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}

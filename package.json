@@ -5,17 +5,19 @@
   "description": "Desktop shell for a local DeepSeek Harness checkout",
   "main": "dist/main/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run build:renderer && npm run build:pane",
+    "build": "npm run pty:permissions && tsc -p tsconfig.json && npm run build:renderer && npm run build:pane",
     "typecheck:pane": "tsc -p tsconfig.pane.json",
-    "build:pane": "esbuild src/renderer/pane/files.ts --bundle --outfile=dist/renderer/files-bundle.js --format=iife --platform=browser --target=es2022 --minify --log-level=warning && esbuild src/renderer/pane/main.ts --bundle --outfile=dist/renderer/pane-bundle.js --format=iife --platform=browser --target=es2022 --loader:.ttf=file --minify --log-level=warning && npm run build:workers",
+    "build:pane": "esbuild src/renderer/pane/files.ts --bundle --outfile=dist/renderer/files-bundle.js --format=iife --platform=browser --target=es2022 --minify --log-level=warning && esbuild src/renderer/pane/main.ts --bundle --outfile=dist/renderer/pane-bundle.js --format=iife --platform=browser --target=es2022 --loader:.ttf=file --minify --log-level=warning && esbuild src/renderer/terminal/main.ts --bundle --outfile=dist/renderer/terminal-bundle.js --format=iife --platform=browser --target=es2022 --minify --log-level=warning && npm run build:workers",
     "build:workers": "esbuild node_modules/monaco-editor/esm/vs/editor/editor.worker.js node_modules/monaco-editor/esm/vs/language/typescript/ts.worker.js node_modules/monaco-editor/esm/vs/language/json/json.worker.js node_modules/monaco-editor/esm/vs/language/css/css.worker.js node_modules/monaco-editor/esm/vs/language/html/html.worker.js --bundle --outdir=dist/renderer --entry-names=[name] --format=iife --platform=browser --target=es2022 --minify --log-level=warning",
-    "build:renderer": "mkdir -p dist/renderer/theme dist/renderer/icons && cp vendor/dsh-theme/*.css dist/renderer/theme/ && cp vendor/vscode-icons/icons/*.svg dist/renderer/icons/ && cp src/renderer/settings.html src/renderer/settings.css src/renderer/settings.js src/renderer/startup.html src/renderer/startup.js src/renderer/splash.css src/renderer/splash.png src/renderer/shell.html src/renderer/shell.css src/renderer/shell.js src/renderer/pane.html src/renderer/pane.css src/renderer/files.html src/renderer/web.html dist/renderer/",
+    "build:renderer": "mkdir -p dist/renderer/theme dist/renderer/icons && cp vendor/dsh-theme/*.css dist/renderer/theme/ && cp vendor/vscode-icons/icons/*.svg dist/renderer/icons/ && cp src/renderer/settings.html src/renderer/settings.css src/renderer/settings.js src/renderer/startup.html src/renderer/startup.js src/renderer/splash.css src/renderer/splash.png src/renderer/shell.html src/renderer/shell.css src/renderer/shell.js src/renderer/pane.html src/renderer/pane.css src/renderer/files.html src/renderer/web.html src/renderer/terminal.html src/renderer/terminal.css dist/renderer/ && cp node_modules/@xterm/xterm/css/xterm.css dist/renderer/",
     "test": "vitest run",
     "start": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "test:smoke": "playwright test tests/smoke.spec.ts",
-    "release": "npm run build && electron-builder --mac dmg -c.mac.notarize=true --publish never"
+    "release": "npm run build && electron-builder --mac dmg -c.mac.notarize=true --publish never",
+    "pty:permissions": "node scripts/pty-permissions.mjs",
+    "postinstall": "node scripts/pty-permissions.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
@@ -71,6 +73,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "js-yaml": "^4.3.1",
     "node-pty": "^1.1.0",
     "vscode-icons-js": "^11.6.1",

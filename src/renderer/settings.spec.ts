@@ -107,7 +107,7 @@ function declaredKindRadios(): Array<{ value: string; checked: boolean }> {
 }
 
 /** The field ids `settings.js` collects; asserted against the page below. */
-const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'extraPath']
+const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'extraPath', 'terminalShell']
 
 interface FakeElement {
   id: string

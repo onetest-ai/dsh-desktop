@@ -22,6 +22,13 @@ let dragging
  * @param {PointerEvent} event - the move that carried the pointer.
  */
 function report(column, event) {
+  // The terminal is sized by its height, measured from the bottom edge: the
+  // panel grows upward as the divider is dragged up, which is the direction
+  // every editor's panel grows.
+  if (column === 'terminal') {
+    window.shell.resizeColumn(column, Math.round(window.innerHeight - (event.screenY - window.screenY)))
+    return
+  }
   window.shell.resizeColumn(column, Math.round(event.screenX - window.screenX))
 }
 
@@ -33,15 +40,22 @@ window.shell.onPlaces((places) => {
     const place = places[divider.dataset.column]
     divider.style.left = `${place.x}px`
     divider.style.width = `${place.width}px`
+    // The terminal's runs along the bottom, so it is placed by top and height
+    // as well; the vertical ones inherit both from the stylesheet.
+    if (divider.classList.contains('divider-horizontal')) {
+      divider.style.top = `${place.y}px`
+      divider.style.height = `${place.height}px`
+    }
     // A closed column leaves a zero-width gap; hiding it as well keeps it out
     // of the tab order, where a separator that resizes nothing is noise.
-    divider.hidden = place.width === 0
+    divider.hidden = place.width === 0 || place.height === 0
   }
   const rail = document.getElementById('rail')
   rail.style.left = `${places.rail.x}px`
   rail.style.width = `${places.rail.width}px`
   document.getElementById('rail-files').setAttribute('aria-pressed', String(places.open.files))
   document.getElementById('rail-web').setAttribute('aria-pressed', String(places.open.web))
+  document.getElementById('rail-terminal').setAttribute('aria-pressed', String(places.open.terminal))
 })
 
 document.getElementById('rail-files').addEventListener('click', () => {
@@ -49,6 +63,9 @@ document.getElementById('rail-files').addEventListener('click', () => {
 })
 document.getElementById('rail-web').addEventListener('click', () => {
   window.shell.toggleWeb()
+})
+document.getElementById('rail-terminal').addEventListener('click', () => {
+  window.shell.toggleTerminal()
 })
 
 for (const divider of document.querySelectorAll('.divider')) {

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { DIVIDER_WIDTH, MIN_FILES_WIDTH, MIN_HARNESS_WIDTH, RAIL_WIDTH, layout, type Columns } from './layout'
+import {
+  DIVIDER_WIDTH,
+  MIN_FILES_WIDTH,
+  MIN_HARNESS_WIDTH,
+  MIN_TERMINAL_HEIGHT,
+  RAIL_WIDTH,
+  layout,
+  type Columns,
+} from './layout'
 
 /** A 1280x860 window, the size the app opens at. */
 const BOUNDS = { width: 1280, height: 860 }
@@ -136,6 +144,23 @@ describe('the terminal panel', () => {
 
   // reason: it is one panel across everything this app owns, not a panel per
   // column, so it starts where the harness stops and runs to the rail.
+  // reason: the panel is under this app's own columns, not under the
+  // conversation. Shrinking the harness left a black band beneath it that
+  // nothing filled, and made the window look broken.
+  it('takes its height from the columns, never from the harness or the rail', () => {
+    const places = layout(BOUNDS, withPanel({ editor: { width: 520, open: true }, files: { width: 240, open: true } }))
+    expect(places.harness).toMatchObject({ y: 0, height: 860 })
+    expect(places.rail).toMatchObject({ y: 0, height: 860 })
+    expect(places.editor.height).toBe(860 - 240 - DIVIDER_WIDTH)
+    expect(places.editorDivider.height).toBe(places.editor.height)
+    expect(places.filesDivider.height).toBe(places.editor.height)
+  })
+
+  it('leaves the harness full height even when it claims a band of its own', () => {
+    const places = layout(BOUNDS, withPanel())
+    expect(places.harness).toMatchObject({ y: 0, height: 860 })
+  })
+
   it('spans the columns it sits under', () => {
     const places = layout(BOUNDS, withPanel({ editor: { width: 520, open: true }, files: { width: 240, open: true } }))
     expect(places.terminal.x).toBe(places.editorDivider.x)
@@ -144,25 +169,58 @@ describe('the terminal panel', () => {
     expect(places.terminalDivider.width).toBe(places.terminal.width)
   })
 
-  it('spans one open column just the same', () => {
-    const places = layout(BOUNDS, withPanel({ files: { width: 240, open: true } }))
-    expect(places.terminal.x).toBe(places.filesDivider.x)
-    expect(places.terminal.x + places.terminal.width).toBe(places.rail.x)
+  // The three arrangements, as they were asked for: the terminal fills the
+  // editor's slot whenever the editor is not using it, and docks along the
+  // bottom only when it is.
+  describe('with the editor closed', () => {
+    it('takes the whole split when the tree is closed too', () => {
+      const places = layout(BOUNDS, withPanel())
+      expect(places.terminal).toMatchObject({ y: 0, height: 860 })
+      expect(places.terminal.x + places.terminal.width).toBe(places.rail.x)
+      expect(places.harness.width).toBe(1280 - RAIL_WIDTH - 720 - DIVIDER_WIDTH)
+      expect(places.terminalDivider.width).toBe(DIVIDER_WIDTH)
+    })
+
+    it('takes the editor’s place beside an open tree, at full height', () => {
+      const places = layout(BOUNDS, withPanel({ files: { width: 240, open: true } }))
+      expect(places.terminal).toMatchObject({ y: 0, height: 860 })
+      // Between the harness and the tree, not over either.
+      expect(places.terminal.x).toBeGreaterThanOrEqual(places.harness.width)
+      expect(places.terminal.x + places.terminal.width).toBeLessThanOrEqual(places.filesDivider.x)
+      expect(places.files.width).toBe(240)
+      expect(places.files.height).toBe(860)
+    })
+
+    it('leaves the harness usable in either arrangement', () => {
+      for (const files of [true, false]) {
+        const places = layout({ width: 900, height: 860 }, withPanel({ files: { width: 240, open: files } }))
+        expect(places.harness.width, `files open: ${String(files)}`).toBeGreaterThanOrEqual(MIN_HARNESS_WIDTH)
+        expect(places.terminal.width).toBeGreaterThan(0)
+      }
+    })
   })
 
-  // reason: with nothing to sit under it would be zero-width, and the toggle
-  // would look like it did nothing at all.
-  it('claims a band of its own when no column is open', () => {
-    const places = layout(BOUNDS, withPanel())
-    expect(places.terminal.width).toBe(720)
-    expect(places.terminal.x + places.terminal.width).toBe(places.rail.x)
-    expect(places.harness.width).toBe(1280 - RAIL_WIDTH - 720)
-  })
+  describe('with the editor open', () => {
+    const both = withPanel({ editor: { width: 520, open: true }, files: { width: 240, open: true } })
 
-  it('leaves the harness usable when it claims that band', () => {
-    const places = layout({ width: 900, height: 860 }, withPanel())
-    expect(places.harness.width).toBeGreaterThanOrEqual(MIN_HARNESS_WIDTH)
-    expect(places.terminal.width).toBeGreaterThan(0)
+    it('docks along the bottom instead of taking a column', () => {
+      const places = layout(BOUNDS, both)
+      expect(places.terminal.y).toBe(860 - 240)
+      expect(places.editor.height).toBe(860 - 240 - DIVIDER_WIDTH)
+    })
+
+    // reason: past half the window the thing being worked on is smaller than
+    // the terminal watching it.
+    it('never takes more than half the window, however tall it is asked to be', () => {
+      const places = layout(BOUNDS, { ...both, terminal: { width: 720, height: 800, open: true } })
+      expect(places.terminal.height).toBe(430)
+      expect(places.editor.height).toBeGreaterThan(0)
+    })
+
+    it('keeps a readable minimum when asked for less', () => {
+      const places = layout(BOUNDS, { ...both, terminal: { width: 720, height: 10, open: true } })
+      expect(places.terminal.height).toBe(MIN_TERMINAL_HEIGHT)
+    })
   })
 
   it('never asks for more height than the window has', () => {

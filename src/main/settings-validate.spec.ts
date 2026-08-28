@@ -30,6 +30,7 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
     pnpmPath: '',
     npmPath: '',
     extraPath: '',
+    terminalShell: '',
     plugins: pluginRows(HOOKS_PACKAGE),
     mcp: { enabled: false, servers: [] },
     ...overrides,

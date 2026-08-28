@@ -22,6 +22,14 @@ export interface SettingsForm {
    */
   extraPath: string
   /**
+   * The shell the built-in terminal runs, or '' to follow `$SHELL`.
+   *
+   * Not validated for existence here: a path this window cannot stat may
+   * still be right on the machine the terminal runs on, and the terminal
+   * itself reports a shell that will not start, naming this field.
+   */
+  terminalShell: string
+  /**
    * One row per configured plugin, built by the renderer from its row-based
    * Add control — not raw HTML field values, unlike every other member of
    * this interface. `spec` is typed the way the user would on a command
@@ -278,6 +286,7 @@ export function validateSettings(form: SettingsForm): ValidationResult {
   const pnpmPath = form.pnpmPath.trim()
   const npmPath = form.npmPath.trim()
   const extraPath = form.extraPath.trim()
+  const terminalShell = form.terminalShell.trim()
   return {
     ok: true,
     config: {
@@ -296,6 +305,7 @@ export function validateSettings(form: SettingsForm): ValidationResult {
       ...(pnpmPath === '' ? {} : { pnpmPath }),
       ...(npmPath === '' ? {} : { npmPath }),
       ...(extraPath === '' ? {} : { extraPath }),
+      ...(terminalShell === '' ? {} : { terminalShell }),
     },
   }
 }
@@ -317,6 +327,7 @@ export function formFor(result: ConfigResult): SettingsForm {
     pnpmPath: '',
     npmPath: '',
     extraPath: '',
+    terminalShell: '',
     // A never-configured install pre-seeds the notification hook bridge as
     // the first plugin, so the first save installs it rather than special-
     // casing it outside this generic list.
@@ -328,7 +339,9 @@ export function formFor(result: ConfigResult): SettingsForm {
   }
   if (!result.configured) return base
 
-  const { harness, notifyPort, hotkey, pnpmPath, npmPath, extraPath, plugins, mcpEnabled, viewTools } = result.config
+  const {
+    harness, notifyPort, hotkey, pnpmPath, npmPath, extraPath, terminalShell, plugins, mcpEnabled, viewTools,
+  } = result.config
   return {
     ...base,
     kind: harness.kind,

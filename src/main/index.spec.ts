@@ -83,6 +83,11 @@ const fake = vi.hoisted(() => {
     // `index.ts` tells the tree which project to show.
     webContents: { send: vi.fn() },
   }
+  // The terminal panel: `index.ts` pushes it the theme and the shell's output.
+  const terminal = {
+    getBounds: vi.fn(() => ({ x: 0, y: 620, width: 740, height: 240 })),
+    webContents: { send: vi.fn() },
+  }
   // The browser: `index.ts` drives its navigation and listens for where it
   // ends up.
   const web = {
@@ -102,7 +107,7 @@ const fake = vi.hoisted(() => {
       },
     },
   }
-  const views = { window, harness, pane, files, web }
+  const views = { window, harness, pane, files, terminal, web }
 
   const app = {
     requestSingleInstanceLock: vi.fn(() => true),
@@ -1768,7 +1773,11 @@ describe('the side columns', () => {
     expect(writeConfigMock).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
-        pane: { editor: { width: 520, open: true }, files: { width: 220, open: true } },
+        pane: {
+          editor: { width: 520, open: true },
+          files: { width: 220, open: true },
+          terminal: { width: 720, height: 240, open: false },
+        },
       }),
     )
   })

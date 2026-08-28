@@ -117,12 +117,15 @@ describe('the window\'s views', () => {
   it('gives each view its own preload, and the web view none at all', async () => {
     const { createWindow } = await import('./window')
     createWindow(CLOSED)
-    expect(fake.views).toHaveLength(4)
+    expect(fake.views).toHaveLength(5)
     expect(fake.views[0].preload).toMatch(/harness\.js$/)
     expect(fake.views[1].preload).toMatch(/pane\.js$/)
     expect(fake.views[2].preload).toMatch(/pane\.js$/)
+    // The terminal's own preload: it exposes a shell it never names, and
+    // nothing the pane's preload exposes.
+    expect(fake.views[3].preload).toMatch(/terminal\.js$/)
     // Whatever the Web tab loads is foreign: it gets nothing.
-    expect(fake.views[3].preload).toBeUndefined()
+    expect(fake.views[4].preload).toBeUndefined()
   })
 
   it('starts with both columns hidden and the harness filling what the rail leaves', async () => {
@@ -140,7 +143,7 @@ describe('the window\'s views', () => {
     const views = createWindow(OPEN)
     applyLayout(views, OPEN, true)
     const editor = fake.views[1].bounds as { x: number; y: number; height: number }
-    const web = fake.views[3].bounds as { x: number; y: number; height: number }
+    const web = fake.views[4].bounds as { x: number; y: number; height: number }
     expect(web.x).toBe(editor.x)
     // Both strips: 35px of tabs and 35px of address bar.
     expect(web.y).toBe(editor.y + 70)
@@ -151,11 +154,11 @@ describe('the window\'s views', () => {
     const { createWindow, applyLayout } = await import('./window')
     const views = createWindow(OPEN)
     applyLayout(views, OPEN, true)
-    expect(fake.views[3].visible).toBe(true)
+    expect(fake.views[4].visible).toBe(true)
     applyLayout(views, OPEN, false)
-    expect(fake.views[3].visible).toBe(false)
+    expect(fake.views[4].visible).toBe(false)
     applyLayout(views, CLOSED, true)
-    expect(fake.views[3].visible).toBe(false)
+    expect(fake.views[4].visible).toBe(false)
   })
 
   // reason: `WebContentsView` has no layout of its own — nothing moves when
@@ -186,14 +189,25 @@ describe('the window\'s views', () => {
 
   // reason: the rail's buttons say what the window is showing, not only what
   // it can show, so the state travels with the places.
+  // reason: the panel is a view like the others, and a closed one that kept
+  // its bounds would sit over the columns it is meant to be under.
+  it('shows the terminal panel only when it is open', async () => {
+    const { createWindow, applyLayout } = await import('./window')
+    const views = createWindow(CLOSED)
+    expect(fake.views[3].visible).toBe(false)
+    applyLayout(views, { ...OPEN, terminal: { width: 720, height: 240, open: true } }, false)
+    expect(fake.views[3].visible).toBe(true)
+    expect(fake.views[3].bounds).toMatchObject({ height: 240 })
+  })
+
   it('tells the window page which columns are up', async () => {
     const { createWindow, applyLayout } = await import('./window')
     const views = createWindow(OPEN)
     applyLayout(views, OPEN, true)
     const sent = (fake.windowInstance.webContents.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)
-    expect(sent?.[1].open).toEqual({ editor: true, files: true, web: true })
+    expect(sent?.[1].open).toEqual({ editor: true, files: true, terminal: false, web: true })
     applyLayout(views, CLOSED, true)
     const closed = (fake.windowInstance.webContents.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)
-    expect(closed?.[1].open).toEqual({ editor: false, files: false, web: false })
+    expect(closed?.[1].open).toEqual({ editor: false, files: false, terminal: false, web: false })
   })
 })

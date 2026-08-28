@@ -4,6 +4,18 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 ## [Unreleased]
 
+### Added
+
+- **A terminal panel**, opened from the foot of the rail. It runs your login shell — or the one named under Settings → Advanced → Terminal shell — in the workspace the tree is showing, and keeps that directory: switching workspace later moves the tree, not a shell you are already working in. It takes the editor's place when the editor is closed, the whole split when the tree is closed too, and docks along the bottom (up to half the window) when both are up.
+
+  node-pty runs in its own utility process rather than in main, the arrangement VS Code moved to after node-pty crashes took down whole windows and busy terminals blocked their event loops; here that process holds the harness views, the MCP server, and the project watcher. Output is flow-controlled on their watermarks (100000/5000/5000), so `cat` on a large file cannot outrun the panel drawing it.
+
+  node-pty's published tarball ships `spawn-helper` without its executable bit, and every pty spawns that binary. The build repairs it before packaging — a signed bundle cannot be repaired afterwards — and a smoke test asserts it on the packaged app.
+
+### Fixed
+
+- **Settings rendered white**, with its content scrolling through the fixed header: it mapped the harness's tokens on `:root`, one level above the `body` the vendored sheet defines them on, so every derived variable resolved to nothing.
+
 ## [0.2.0] - 2026-08-28
 
 The first build to carry everything below. `v0.1.0` stored MCP tokens in the OS keychain and met users with a login-password prompt; this release stores them in a file at mode `0600` instead, and adds the side pane, the browser the agent can drive, and the file tree.

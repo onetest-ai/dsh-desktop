@@ -219,6 +219,16 @@
       </div>
       <input id="extraPath" type="text" placeholder="/opt/homebrew/bin:/usr/local/bin" spellcheck="false">
       <p class="error" id="error-extraPath"></p>
+
+      <div class="field-label-row">
+        <label for="terminalShell">Terminal shell</label>
+        <details class="field-info">
+          <summary aria-label="About the terminal shell"><span aria-hidden="true">i</span></summary>
+          <p>The shell the built-in terminal runs, as a full path. Left empty it uses your login shell, the one <code>$SHELL</code> names. Terminals already open keep the shell they started with.</p>
+        </details>
+      </div>
+      <input id="terminalShell" type="text" placeholder="your login shell ($SHELL)" spellcheck="false">
+      <p class="error" id="error-terminalShell"></p>
     </section>
 
     <p class="group-label" id="config-file-label">Config file</p>
