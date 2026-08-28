@@ -1,16 +1,18 @@
 # @onetest/dsh-desktop-pane
 
-Harness-side controls for the side pane in [dsh-desktop](https://github.com/onetest-ai/dsh-desktop).
+Chat-side support for [dsh-desktop](https://github.com/onetest-ai/dsh-desktop).
 
-The desktop app runs the DeepSeek Harness Web UI beside columns of its own — a file tree, a browser, and an editor that appears when a file is opened. This plugin puts the buttons that show and hide the tree and the browser where they belong: at the foot of the harness's own sidebar, beside Settings.
+That app runs the DeepSeek Harness Web UI beside columns of its own — a file tree, a browser, and an editor. **Add to Chat** in the tree's context menu hands a file or folder to the harness page; this plugin is the half that puts its path in the message box.
 
 ## What it does
 
-One registration into `sidebar.footer.action`, a list slot, so the buttons sit alongside whatever else contributes there.
+Nothing visible. It contributes no UI: the desktop app draws its own controls on its own rail, and a second set of buttons in the harness's sidebar was two places to toggle one thing.
 
-It also listens for a file or folder the user picked in the desktop app's tree — **Add to Chat** in that tree's context menu — and appends its path to the message box. The box is React-controlled, so the value is written through the prototype's setter and an `input` event is dispatched; that is what makes React treat it as typing rather than overwriting it on the next render.
+Outside the desktop app it does nothing at all — the bridge it listens to is something that app's preload puts on the page, and it is absent everywhere else.
 
-The buttons render **only inside the desktop app**. The browser half looks for `window.dshDesktop.toggleFiles` and `.toggleWeb`, which that app's preload puts on the page; in a plain browser — or in a desktop older than these buttons — there is nothing to toggle and it renders `null`. Nothing about the harness changes either way.
+## How it works
+
+The message box is React-controlled, so the value is written through the prototype's setter and an `input` event dispatched; that is what makes React treat it as typing rather than overwriting it on the next render. The box is found by role rather than by class name, since the harness's class names are generated and change between builds.
 
 ## Install
 
@@ -22,4 +24,4 @@ The desktop app installs it for you — it is in that app's default plugin set �
 
 ## What it is not
 
-It does not read your files, reach any panel's contents, or talk to the agent. Both calls it makes take no arguments and return nothing: show a panel, or hide it.
+It does not read your files, reach any panel's contents, or talk to the agent. It receives one path at a time, and only when you ask for it.

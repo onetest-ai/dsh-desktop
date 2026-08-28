@@ -162,7 +162,9 @@ The tree shows the project the harness is working in — it follows the file you
 
 The **Web** tab is a browser with back, forward, reload, and an address bar that takes a bare host. It is a real page in its own process, not a frame.
 
-Open the tree and the browser from the rail, from **View** (`Cmd+Alt+B` and `Cmd+Alt+W`), or from the buttons at the foot of the harness's own sidebar, which arrive with the `@onetest/dsh-desktop-pane` plugin. The editor has no toggle of its own: it appears when a file is opened, and closes when its last tab does. Every column remembers its width.
+Open the tree and the browser from the rail, or from **View** (`Cmd+Alt+B` and `Cmd+Alt+W`). The editor has no toggle of its own: it appears when a file is opened, and closes when its last tab does. Every column remembers its width.
+
+Right-click any row in the tree for **New File**, **New Folder**, **Rename**, **Delete**, **Copy**, **Cut**, **Paste**, **Copy Path**, **Reveal in Finder**, and **Add to Chat** — which drops the file's path into the harness's message box, and is the one thing that needs the `@onetest/dsh-desktop-pane` plugin (installed by default).
 
 All of it draws in the harness's own design tokens and follows the harness's own **Appearance** setting — set dark there and these columns turn dark with it, without a restart.
 

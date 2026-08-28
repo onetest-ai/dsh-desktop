@@ -1667,13 +1667,12 @@ if (!app.requestSingleInstanceLock()) {
       }
       storeColumns()
     })
-    // The buttons in the harness sidebar own the tree and the browser. The
-    // editor is not among them: it is not something to open empty, and
-    // appears when a file goes into it.
-    ipcMain.on('harness:toggle-files', () => {
+    // The rail's two buttons. The editor is not among them: it is not
+    // something to open empty, and appears when a file goes into it.
+    ipcMain.on('shell:toggle-files', () => {
       toggleColumn('files')
     })
-    ipcMain.on('harness:toggle-web', toggleWeb)
+    ipcMain.on('shell:toggle-web', toggleWeb)
     // A link in a rendered file goes where the user's links go, not into a
     // view of this app. Checked here because the URL comes from a file.
     ipcMain.on('pane:open-external', (_event, url: string) => {

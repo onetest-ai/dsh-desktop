@@ -1,7 +1,7 @@
 {
   "name": "@onetest/dsh-desktop-pane",
-  "version": "0.1.2",
-  "description": "Desktop-app controls for DeepSeek Harness: sidebar buttons for the file tree and browser, and picking up files the desktop app sends to the chat",
+  "version": "0.2.0",
+  "description": "Picks up files the dsh-desktop app sends to the chat, so a path chosen in its file tree lands in the message box",
   "keywords": [
     "deepseek-harness",
     "dsh",

@@ -1723,7 +1723,7 @@ describe('the side columns', () => {
   it('measures the editor past the tree beside it', async () => {
     await bootReady()
     fake.sendIpc('pane:open-file', '/p/known', 'readme.md')
-    fake.sendIpc('harness:toggle-files')
+    fake.sendIpc('shell:toggle-files')
     fake.sendIpc('shell:resize-column', 'editor', 700)
     expect(applyLayout).toHaveBeenLastCalledWith(
       fake.views,
@@ -1759,7 +1759,7 @@ describe('the side columns', () => {
     ])
     await bootReady()
     fake.sendIpc('pane:open-file', '/p/known', 'readme.md')
-    fake.sendIpc('harness:toggle-files')
+    fake.sendIpc('shell:toggle-files')
     writeConfigMock.mockClear()
     fake.sendIpc('shell:resize-column', 'files', 10)
     fake.sendIpc('shell:commit-columns')
@@ -1791,11 +1791,9 @@ describe('the side columns', () => {
     )
   })
 
-  // reason: this is the whole point of the preload on the harness view — a
-  // button contributed into the harness UI has no other way to reach the app.
-  it('opens the tree from the harness page’s own button', async () => {
+  it('opens the tree from the rail', async () => {
     await bootReady()
-    fake.sendIpc('harness:toggle-files')
+    fake.sendIpc('shell:toggle-files')
     expect(applyLayout).toHaveBeenLastCalledWith(
       fake.views,
       expect.objectContaining({ files: expect.objectContaining({ open: true }) }),
