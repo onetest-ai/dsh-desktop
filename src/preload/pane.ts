@@ -24,6 +24,17 @@ contextBridge.exposeInMainWorld('pane', {
   openFile: (root: string, relative: string) => ipcRenderer.send('pane:open-file', root, relative),
   createFile: (root: string, relative: string) => ipcRenderer.invoke('pane:create-file', root, relative),
   createFolder: (root: string, relative: string) => ipcRenderer.invoke('pane:create-folder', root, relative),
+  treeMenu: (target: { directory: boolean; pending: boolean }) => ipcRenderer.invoke('pane:tree-menu', target),
+  renameEntry: (root: string, relative: string, name: string) =>
+    ipcRenderer.invoke('pane:rename-entry', root, relative, name),
+  deleteEntry: (root: string, relative: string, directory: boolean) =>
+    ipcRenderer.invoke('pane:delete-entry', root, relative, directory),
+  pasteEntry: (root: string, relative: string, into: string, move: boolean) =>
+    ipcRenderer.invoke('pane:paste-entry', root, relative, into, move),
+  revealEntry: (root: string, relative: string) => ipcRenderer.send('pane:reveal-entry', root, relative),
+  copyPath: (root: string, relative: string) => ipcRenderer.send('pane:copy-path', root, relative),
+  addToChat: (root: string, relative: string, directory: boolean) =>
+    ipcRenderer.send('pane:add-to-chat', root, relative, directory),
   closeEditor: () => ipcRenderer.send('pane:close-editor'),
   openExternal: (url: string) => ipcRenderer.send('pane:open-external', url),
   readFile: (root: string, relative: string) => ipcRenderer.invoke('pane:read-file', root, relative),

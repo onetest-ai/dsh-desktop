@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, nativeTheme, Notification, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron'
 import { existsSync, mkdirSync, renameSync, rmSync, watch, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 import { loadDeclaredPatchRows } from './bundle-patch'
@@ -51,6 +51,9 @@ import { projectFileUrl } from './project-url'
 import { loadableUrl } from './view-tools'
 import { readTextFile, writeTextFile } from './file-io'
 import { createFile, createFolder } from './file-create'
+import { deleteEntry, pasteEntry, renameEntry } from './file-ops'
+import { treeMenu, type TreeAction } from './tree-menu'
+import { resolveInRoot } from './file-tree'
 import { harnessTheme, settingsPath } from './harness-theme'
 import { workspacesPath } from './workspaces'
 import type { ServerStatus } from './status'
@@ -455,6 +458,40 @@ function watchTheme(): void {
     // keep whatever they were given, which is the harness's default.
     console.warn(`dsh-desktop: the harness theme could not be followed: ${(error as Error).message}`)
   }
+}
+
+/**
+ * Show the tree's context menu and wait for a choice.
+ *
+ * The menu's items are decided in `treeMenu`, which has no Electron in it;
+ * this only turns them into a native menu and reports what was chosen.
+ * @param window - the window to pop over.
+ * @param target - what the menu was opened on.
+ * @returns the action chosen, or undefined when the menu was dismissed.
+ */
+async function popTreeMenu(
+  window: BrowserWindow,
+  target: { directory: boolean; pending: boolean },
+): Promise<TreeAction | undefined> {
+  return await new Promise<TreeAction | undefined>((resolve) => {
+    let chosen: TreeAction | undefined
+    const menu = Menu.buildFromTemplate(
+      treeMenu(target).map((item) =>
+        'separator' in item
+          ? { type: 'separator' as const }
+          : {
+              label: item.label,
+              enabled: item.enabled ?? true,
+              click: () => {
+                chosen = item.action
+              },
+            },
+      ),
+    )
+    // `callback` runs after the click handler above, so it reports what was
+    // chosen — including nothing, when the menu was dismissed.
+    menu.popup({ window, callback: () => resolve(chosen) })
+  })
 }
 
 /** Refusal for a root that is not a project the harness has opened. */
@@ -1652,6 +1689,55 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('pane:list-directory', (_event, root: string, relative: string) =>
       knownProject(root) ? readDirectory(root, relative) : [],
     )
+    // The tree's context menu. Native, so it looks like every other menu on
+    // the machine, and popped from here since only main can.
+    ipcMain.handle('pane:tree-menu', async (_event, target: { directory: boolean; pending: boolean }) => {
+      if (views === undefined || views.window.isDestroyed()) return undefined
+      return await popTreeMenu(views.window, target)
+    })
+    ipcMain.handle('pane:rename-entry', (_event, root: string, relative: string, name: string) =>
+      knownProject(root) ? renameEntry(root, relative, name) : OUTSIDE_PROJECT,
+    )
+    ipcMain.handle('pane:paste-entry', (_event, root: string, relative: string, into: string, move: boolean) =>
+      knownProject(root) ? pasteEntry(root, relative, into, move) : OUTSIDE_PROJECT,
+    )
+    // Deleting is the one operation with no undo, so it asks first — and it
+    // asks here, where the answer cannot be faked by a renderer.
+    ipcMain.handle('pane:delete-entry', async (_event, root: string, relative: string, directory: boolean) => {
+      if (!knownProject(root)) return OUTSIDE_PROJECT
+      if (views === undefined || views.window.isDestroyed()) return OUTSIDE_PROJECT
+      const { response } = await dialog.showMessageBox(views.window, {
+        type: 'warning',
+        buttons: ['Delete', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        message: `Delete ${relative}?`,
+        detail: directory
+          ? 'The folder and everything in it is deleted. This cannot be undone, and it does not go to the Trash.'
+          : 'This cannot be undone, and it does not go to the Trash.',
+      })
+      if (response !== 0) return { ok: false as const, reason: '' }
+      return deleteEntry(root, relative)
+    })
+    ipcMain.on('pane:reveal-entry', (_event, root: string, relative: string) => {
+      if (!knownProject(root)) return
+      const target = resolveInRoot(root, relative)
+      if (target !== undefined) shell.showItemInFolder(target)
+    })
+    // The chat lives in the harness's own page, so this hands the reference
+    // to that page; the desktop plugin's browser half puts it in the
+    // composer. Nothing happens if that plugin is not installed.
+    ipcMain.on('pane:add-to-chat', (_event, root: string, relative: string, directory: boolean) => {
+      if (!knownProject(root) || views === undefined || views.window.isDestroyed()) return
+      const target = resolveInRoot(root, relative)
+      if (target === undefined) return
+      views.harness.webContents.send('harness:add-to-chat', { path: target, directory })
+    })
+    ipcMain.on('pane:copy-path', (_event, root: string, relative: string) => {
+      if (!knownProject(root)) return
+      const target = resolveInRoot(root, relative)
+      if (target !== undefined) clipboard.writeText(target)
+    })
     ipcMain.handle('pane:create-file', (_event, root: string, relative: string) =>
       knownProject(root) ? createFile(root, relative) : OUTSIDE_PROJECT,
     )

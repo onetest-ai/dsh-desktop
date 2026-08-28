@@ -56,6 +56,10 @@ function drawTree(relative: string, into: HTMLElement): void {
     name.textContent = entry.name
     row.append(name)
 
+    row.addEventListener('contextmenu', (event) => {
+      event.preventDefault()
+      void openMenu(path, entry.directory)
+    })
     row.addEventListener('click', () => {
       if (!entry.directory) {
         tree.openFile(path)
@@ -113,6 +117,132 @@ async function showProject(project: Project | undefined): Promise<void> {
   drawTree('', el('file-tree'))
 }
 
+/** What was copied or cut, waiting to be pasted. */
+let held: { relative: string; move: boolean } | undefined
+
+/**
+ * Open the context menu for one row and act on what it says.
+ *
+ * The menu is native and lives in main; this only says what it was opened on
+ * and carries out the answer.
+ * @param relative - the row's path within the project.
+ * @param directory - whether the row is a directory.
+ * @returns resolution once the chosen action has finished.
+ */
+async function openMenu(relative: string, directory: boolean): Promise<void> {
+  const project = tree.root
+  if (project === undefined) return
+  const action = await window.pane.treeMenu({ directory, pending: held !== undefined })
+  switch (action) {
+    case 'open': {
+      tree.openFile(relative)
+      return
+    }
+    case 'new-file':
+    case 'new-folder': {
+      // Created inside the folder that was right-clicked, which is the whole
+      // point of reaching this from the tree rather than from the header.
+      startCreating(action === 'new-file' ? 'file' : 'folder', relative)
+      return
+    }
+    case 'copy':
+    case 'cut': {
+      held = { relative, move: action === 'cut' }
+      return
+    }
+    case 'paste': {
+      if (held === undefined) return
+      const outcome = await window.pane.pasteEntry(project.path, held.relative, relative, held.move)
+      // A cut is spent once it lands; a copy can be pasted again.
+      if (outcome.ok && held.move) held = undefined
+      await afterChange(outcome, [parentOf(held?.relative ?? ''), relative])
+      return
+    }
+    case 'rename': {
+      startRenaming(relative)
+      return
+    }
+    case 'delete': {
+      const outcome = await window.pane.deleteEntry(project.path, relative, directory)
+      await afterChange(outcome, [parentOf(relative)])
+      return
+    }
+    case 'reveal': {
+      window.pane.revealEntry(project.path, relative)
+      return
+    }
+    case 'copy-path': {
+      window.pane.copyPath(project.path, relative)
+      return
+    }
+    case 'add-to-chat': {
+      window.pane.addToChat(project.path, relative, directory)
+      return
+    }
+    default:
+      // Dismissed without choosing anything.
+      return
+  }
+}
+
+/**
+ * The directory one path sits in, as a path within the project.
+ * @param relative - the entry's path.
+ * @returns its parent's path, '' for the root.
+ */
+function parentOf(relative: string): string {
+  const cut = relative.lastIndexOf('/')
+  return cut === -1 ? '' : relative.slice(0, cut)
+}
+
+/**
+ * Redraw after an operation, or report why it did not happen.
+ * @param outcome - what the operation reported.
+ * @param directories - the directories whose listings may have changed.
+ * @returns resolution once the tree is redrawn.
+ */
+async function afterChange(
+  outcome: { ok: true; relative: string } | { ok: false; reason: string },
+  directories: string[],
+): Promise<void> {
+  if (!outcome.ok) {
+    // An empty reason is a cancelled confirmation, not a failure to report.
+    if (outcome.reason !== '') report(outcome.reason)
+    return
+  }
+  for (const directory of new Set(directories)) await tree.refresh(directory)
+  drawTree('', el('file-tree'))
+}
+
+/**
+ * Say why something did not happen, where the tree can be seen saying it.
+ * @param message - what to show.
+ */
+function report(message: string): void {
+  const error = el('new-entry-error')
+  error.textContent = message
+  error.hidden = false
+}
+
+/** The entry being renamed, while the name field is open for it. */
+let renaming: string | undefined
+
+/**
+ * Open the name field to rename one entry.
+ * @param relative - the entry's path within the project.
+ */
+function startRenaming(relative: string): void {
+  renaming = relative
+  creating = undefined
+  const field = el('new-entry-name') as HTMLInputElement
+  field.value = relative.split('/').pop() ?? relative
+  field.placeholder = 'new name'
+  el('new-entry').hidden = false
+  el('new-entry-error').hidden = true
+  field.focus()
+  field.select()
+}
+
 /** What the name field, when open, is going to create. */
 let creating: 'file' | 'folder' | undefined
 /** The path within the project the new entry goes in; '' is the root. */
@@ -124,11 +254,14 @@ let creatingIn = ''
  * Named before it is created, in the tree, the way an editor does it — rather
  * than creating `untitled` and making the user rename it.
  * @param kind - what to create.
+ * @param into - the folder to create it in; the header's buttons pass none
+ *   and get whatever the tree last opened.
  */
-function startCreating(kind: 'file' | 'folder'): void {
+function startCreating(kind: 'file' | 'folder', into?: string): void {
   if (tree.root === undefined) return
   creating = kind
-  creatingIn = selectedParent()
+  renaming = undefined
+  creatingIn = into ?? selectedParent()
   const field = el('new-entry-name') as HTMLInputElement
   field.value = ''
   field.placeholder = kind === 'file' ? 'file name' : 'folder name'
@@ -140,6 +273,7 @@ function startCreating(kind: 'file' | 'folder'): void {
 /** Put the name field away, whether or not anything was created. */
 function stopCreating(): void {
   creating = undefined
+  renaming = undefined
   el('new-entry').hidden = true
   el('new-entry-error').hidden = true
 }
@@ -163,7 +297,22 @@ function selectedParent(): string {
 async function finishCreating(): Promise<void> {
   const project = tree.root
   const name = (el('new-entry-name') as HTMLInputElement).value.trim()
-  if (project === undefined || creating === undefined || name === '') {
+  if (project === undefined || name === '') {
+    stopCreating()
+    return
+  }
+  if (renaming !== undefined) {
+    const outcome = await window.pane.renameEntry(project.path, renaming, name)
+    if (!outcome.ok) {
+      report(outcome.reason)
+      return
+    }
+    const parent = parentOf(renaming)
+    stopCreating()
+    await afterChange(outcome, [parent])
+    return
+  }
+  if (creating === undefined) {
     stopCreating()
     return
   }

@@ -1,5 +1,8 @@
 import type { Project, TreeEntry } from './tree.ts'
 
+/** What an operation on one entry reports back. */
+export type OpResult = { ok: true; relative: string } | { ok: false; reason: string }
+
 /**
  * What the preload exposes to both of this app's own pages.
  *
@@ -16,6 +19,13 @@ declare global {
       openFile(root: string, relative: string): void
       createFile(root: string, relative: string): Promise<{ ok: true; relative: string } | { ok: false; reason: string }>
       createFolder(root: string, relative: string): Promise<{ ok: true; relative: string } | { ok: false; reason: string }>
+      treeMenu(target: { directory: boolean; pending: boolean }): Promise<string | undefined>
+      renameEntry(root: string, relative: string, name: string): Promise<OpResult>
+      deleteEntry(root: string, relative: string, directory: boolean): Promise<OpResult>
+      pasteEntry(root: string, relative: string, into: string, move: boolean): Promise<OpResult>
+      revealEntry(root: string, relative: string): void
+      copyPath(root: string, relative: string): void
+      addToChat(root: string, relative: string, directory: boolean): void
       closeEditor(): void
       openExternal(url: string): void
       readFile(root: string, relative: string): Promise<{ ok: true; text: string } | { ok: false; reason: string }>
