@@ -62,41 +62,62 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-.chrome {
-  position: fixed;
-  top: 38px;
-  left: 0;
-  right: 0;
-  z-index: 5;
-  padding: 28px 32px 0;
-  background: var(--bg);
+/* A settings window is two columns: the sections on the left, the section on
+   the right. A strip across the top worked at five sections and stops working
+   at eight, and it hid four of the five behind a horizontal scan every time
+   where a list shows all of them at once. */
+.shell {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  min-height: 0;
 }
 
-.chrome-inner {
-  max-width: 34rem;
-  margin: 0 auto;
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  /* Clears the traffic lights, which sit over this column. */
+  padding: 46px 12px 16px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
 }
 
-/* `.hint`'s negative top margin was tuned for the old grid-gap layout; inside
-   the fixed header there is no gap to pull back against, so it overlapped the
-   title. */
-.chrome-inner .hint {
-  margin: 2px 0 0;
+.brand {
+  padding: 0 10px;
+  display: grid;
+  gap: 2px;
 }
 
-.chrome-inner .tabs {
-  margin-top: 14px;
+.brand h1 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
+
+.brand .hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.content {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+}
+
+
 
 main {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
   overflow-y: auto;
-  /* Clears the fixed titlebar + header above and the Save bar below. */
-  padding: 172px 32px 96px;
+  /* Top padding clears the titlebar strip the window draws over this column. */
+  padding: 46px 28px 28px;
 }
 
 h1 {
@@ -129,6 +150,87 @@ section.group {
    layout and the tight 10px rhythm between the hint, the Add control, and
    the row list — the parts that relied on the card for grouping — while
    dropping only its border, background, and padding. */
+/* A setting is a row: what it is on the left, the control on the right. The
+   alternative — a label above a field spanning the window — makes every
+   setting the same size whatever it is worth, and gives a one-word answer the
+   same width as a path. Rows also leave somewhere to put the note that used
+   to hide behind an ⓘ. */
+.settings-list {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.setting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  align-items: start;
+  gap: 24px;
+  padding: 14px 16px;
+}
+
+.setting + .setting,
+.setting-error + .setting {
+  border-top: 1px solid var(--border);
+}
+
+.setting-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.setting-text label {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--label);
+}
+
+.setting-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--label-secondary);
+}
+
+.setting > input,
+.setting > select {
+  margin: 0;
+  width: 100%;
+}
+
+/* A row whose control is a switch: it needs none of the 300px the text
+   controls take, and sits at the far edge where a toggle is looked for. */
+.setting-switch > input[type='checkbox'] {
+  width: auto;
+  justify-self: end;
+  margin-top: 2px;
+}
+
+/* Said once, under the switches it qualifies, rather than under one scope's
+   server list where the other scope silently inherited it. */
+.mcp-saving {
+  margin: 0;
+}
+
+/* A row whose control is a button, which should not stretch to the column. */
+.setting-action > button {
+  justify-self: start;
+}
+
+/* Errors and check results belong to the row above, inside the card, indented
+   to the control they are about. */
+.setting-error:not(:empty) {
+  margin: 0;
+  padding: 0 16px 12px;
+}
+
+.setting-error:empty {
+  display: none;
+}
+
 /* A scope card: everything belonging to one place servers are stored — its
    name, where that is, the file, the servers, and the ways to add one. The MCP
    tab has two of these, and they carry identical controls; without the card
@@ -702,12 +804,10 @@ button:disabled {
 }
 
 /* The action bar stays put so Save is reachable without scrolling. */
+/* The save bar belongs to the content column, not to the window: laid across
+   the bottom it ran under the section list, which has nothing to save. */
 .actions {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 14px 32px;
+  padding: 12px 28px;
   background: var(--bg);
   border-top: 1px solid var(--border);
   display: flex;
@@ -723,48 +823,45 @@ button:disabled {
   gap: 4px;
 }
 
-/* Tab bar: an underline style, sized to each label rather than split into
-   equal columns — the segmented-control alternative clips "Notifications &
-   Shortcuts" at this window's width. The accent underline on the selected
-   tab reuses the same --accent the focus ring and radio fills already use,
-   so it reads as part of this window's system rather than a bolted-on
-   widget. */
+/* The section list: rows down a column, not an underlined strip across the
+   top. Selection is a filled row rather than an accent underline — in a
+   vertical list a 2px line under one word is a detail the eye has to hunt
+   for, where a filled row is read at a glance. */
 .tabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 2px;
 }
 
 .tab {
-  flex: 0 0 auto;
-  height: 34px;
-  padding: 0 4px;
-  margin-bottom: -1px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
   border: none;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  background: transparent;
+  border-radius: 7px;
+  background: none;
   color: var(--label-secondary);
   font: inherit;
   font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
+  text-align: left;
   cursor: pointer;
 }
 
 .tab:hover:not([aria-selected='true']) {
+  background: var(--surface-hover);
   color: var(--label);
 }
 
 .tab[aria-selected='true'] {
+  background: var(--input-fill);
   color: var(--label);
-  border-bottom-color: var(--accent);
+  font-weight: 500;
 }
 
 .tab:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 6px;
+  outline-offset: -2px;
 }
 
 /* A dot on a tab whose panel holds a field the last Save rejected, so an
@@ -779,7 +876,10 @@ button:disabled {
   vertical-align: middle;
 }
 
+/* Long prose in a settings pane is unreadable at the full width of a wide
+   window; the controls beside it stop at the same measure. */
 .panel {
+  max-width: 46rem;
   display: grid;
   gap: 20px;
 }

@@ -6,12 +6,13 @@
 <link rel="stylesheet" href="theme/design-platform.css">
 <link rel="stylesheet" href="settings.css">
 <div class="titlebar" aria-hidden="true"></div>
-<header class="chrome">
-  <div class="chrome-inner">
-  <h1>DeepSeek Harness</h1>
-  <p id="intro" class="hint"></p>
-
-  <div class="tabs" role="tablist" aria-label="Settings sections">
+<div class="shell">
+<nav class="sidebar">
+  <div class="brand">
+    <h1>DeepSeek Harness</h1>
+    <p id="intro" class="hint"></p>
+  </div>
+  <div class="tabs" role="tablist" aria-orientation="vertical" aria-label="Settings sections">
     <button type="button" role="tab" id="tab-harness" aria-controls="panel-harness" aria-selected="true" class="tab">
       Harness<span class="tab-error-dot" id="tab-harness-error-dot" aria-hidden="true" hidden></span>
     </button>
@@ -22,16 +23,15 @@
       MCP<span class="tab-error-dot" id="tab-mcp-error-dot" aria-hidden="true" hidden></span>
     </button>
     <button type="button" role="tab" id="tab-notifications" aria-controls="panel-notifications" aria-selected="false" tabindex="-1" class="tab">
-      Notifications &amp; Shortcuts<span class="tab-error-dot" id="tab-notifications-error-dot" aria-hidden="true" hidden></span>
+      Notifications<span class="tab-error-dot" id="tab-notifications-error-dot" aria-hidden="true" hidden></span>
     </button>
     <button type="button" role="tab" id="tab-advanced" aria-controls="panel-advanced" aria-selected="false" tabindex="-1" class="tab">
       Advanced<span class="tab-error-dot" id="tab-advanced-error-dot" aria-hidden="true" hidden></span>
     </button>
   </div>
+</nav>
 
-  </div>
-</header>
-
+<div class="content">
 <main>
   <section id="panel-harness" role="tabpanel" aria-labelledby="tab-harness" tabindex="0" class="panel">
     <p class="group-label" id="source-label">Where the harness runs from</p>
@@ -91,17 +91,25 @@
   </section>
 
   <section id="panel-mcp" role="tabpanel" aria-labelledby="tab-mcp" tabindex="0" class="panel" hidden>
-    <section class="group group-flat">
-      <label class="mcp-master"><input type="checkbox" id="mcp-enabled"> Connect to MCP servers</label>
-      <p class="hint">Each enabled server's tools become available to the agent under its own name. With this off, no server is contacted and nothing it offers reaches the model.</p>
-      <p class="hint"><strong>Adding or removing a server saves it straight away</strong>, to the <code>mcp.json</code> its scope names. The two switches on this tab are saved with the rest of the form.</p>
-    </section>
+    <div class="settings-list">
+      <div class="setting setting-switch">
+        <div class="setting-text">
+          <label for="mcp-enabled">Connect to MCP servers</label>
+          <p class="setting-note">Each enabled server's tools become available to the agent under its own name. With this off, no server is contacted and nothing it offers reaches the model.</p>
+        </div>
+        <input type="checkbox" id="mcp-enabled">
+      </div>
 
-    <p class="group-label" id="view-tools-label">This app's own views</p>
-    <section class="group group-flat" aria-labelledby="view-tools-label">
-      <label class="mcp-master"><input type="checkbox" id="view-tools"> Let the agent open files and pages in the side pane</label>
-      <p class="hint">Adds the view tools the agent can call: show a file in the editor, open a page in the Web tab, show a change it proposes before making it, read your selection, and drive the built-in browser.</p>
-    </section>
+      <div class="setting setting-switch" id="view-tools-label">
+        <div class="setting-text">
+          <label for="view-tools">Let the agent open files and pages in the side pane</label>
+          <p class="setting-note">Adds the view tools the agent can call: show a file in the editor, open a page in the Web tab, show a change it proposes before making it, read your selection, and drive the built-in browser.</p>
+        </div>
+        <input type="checkbox" id="view-tools">
+      </div>
+    </div>
+
+    <p class="hint mcp-saving"><strong>Adding or removing a server saves it straight away</strong>, to the <code>mcp.json</code> its scope names. The two switches above are saved with the rest of the form.</p>
 
     <section class="scope" aria-labelledby="mcp-servers-label">
       <header class="scope-header">
@@ -204,49 +212,75 @@
   </section>
 
   <section id="panel-notifications" role="tabpanel" aria-labelledby="tab-notifications" tabindex="0" class="panel" hidden>
-    <section class="group">
-      <label for="notifyPort">Notification port</label>
-      <input id="notifyPort" type="text" inputmode="numeric">
-      <p class="error" id="error-notifyPort"></p>
+    <div class="settings-list">
+      <div class="setting">
+        <div class="setting-text">
+          <label for="notifyPort">Notification port</label>
+          <p class="setting-note">The loopback port the harness posts notifications to. Change it only if something else on this machine already listens there.</p>
+        </div>
+        <input id="notifyPort" type="text" inputmode="numeric">
+      </div>
+      <p class="error setting-error" id="error-notifyPort"></p>
 
-      <label for="hotkey">Show/hide shortcut</label>
-      <input id="hotkey" type="text">
-      <p class="error" id="error-hotkey"></p>
-    </section>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="hotkey">Show/hide shortcut</label>
+          <p class="setting-note">Brings the window forward from anywhere, and hides it again. Written as <code>Cmd+Shift+D</code>.</p>
+        </div>
+        <input id="hotkey" type="text">
+      </div>
+      <p class="error setting-error" id="error-hotkey"></p>
+    </div>
   </section>
 
   <section id="panel-advanced" role="tabpanel" aria-labelledby="tab-advanced" tabindex="0" class="panel" hidden>
-    <section class="group">
-      <label for="pnpmPath">pnpm path</label>
-      <input id="pnpmPath" type="text" placeholder="found on PATH by default">
-      <p class="check-result" id="check-result-pnpm" role="status"></p>
-      <label for="npmPath">npm path</label>
-      <input id="npmPath" type="text" placeholder="found on PATH by default">
-      <p class="check-result" id="check-result-npm" role="status"></p>
-      <button type="button" id="check-binaries" class="check-binaries">Check</button>
-
-      <div class="field-label-row">
-        <label for="extraPath">Extra PATH entries</label>
-        <details class="field-info">
-          <summary aria-label="About extra PATH entries"><span aria-hidden="true">i</span></summary>
-          <p>Colon-separated directories added ahead of the PATH the agent's tools are found on. Normally unnecessary — the app reads your login shell's PATH automatically. Set this only when that fails.</p>
-        </details>
+    <div class="settings-list">
+      <div class="setting">
+        <div class="setting-text">
+          <label for="pnpmPath">pnpm path</label>
+          <p class="setting-note">Where pnpm is, when it is not on the PATH this app resolves.</p>
+        </div>
+        <input id="pnpmPath" type="text" placeholder="found on PATH by default">
       </div>
-      <input id="extraPath" type="text" placeholder="/opt/homebrew/bin:/usr/local/bin" spellcheck="false">
-      <p class="error" id="error-extraPath"></p>
+      <p class="check-result setting-error" id="check-result-pnpm" role="status"></p>
 
-      <div class="field-label-row">
-        <label for="terminalShell">Terminal shell</label>
-        <details class="field-info">
-          <summary aria-label="About the terminal shell"><span aria-hidden="true">i</span></summary>
-          <p>The shell the built-in terminal runs, as a full path. Left empty it uses your login shell, the one <code>$SHELL</code> names. Terminals already open keep the shell they started with.</p>
-        </details>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="npmPath">npm path</label>
+          <p class="setting-note">The same, for npm.</p>
+        </div>
+        <input id="npmPath" type="text" placeholder="found on PATH by default">
       </div>
-      <input id="terminalShell" type="text" placeholder="your login shell ($SHELL)" spellcheck="false">
-      <p class="error" id="error-terminalShell"></p>
-    </section>
+      <p class="check-result setting-error" id="check-result-npm" role="status"></p>
 
-    <p class="group-label" id="config-file-label">Config file</p>
+      <div class="setting">
+        <div class="setting-text">
+          <label for="extraPath">Extra PATH entries</label>
+          <p class="setting-note">Colon-separated directories put ahead of the PATH the agent's tools are found on. Normally unnecessary — this app reads your login shell's own PATH and follows it when a version manager moves the toolchain. Reach for this when that fails.</p>
+        </div>
+        <input id="extraPath" type="text" placeholder="/opt/homebrew/bin:/usr/local/bin" spellcheck="false">
+      </div>
+      <p class="error setting-error" id="error-extraPath"></p>
+
+      <div class="setting">
+        <div class="setting-text">
+          <label for="terminalShell">Terminal shell</label>
+          <p class="setting-note">The shell the built-in terminal runs, as a full path. Left empty it uses your login shell, the one <code>$SHELL</code> names. Terminals already open keep the shell they started with.</p>
+        </div>
+        <input id="terminalShell" type="text" placeholder="your login shell ($SHELL)" spellcheck="false">
+      </div>
+      <p class="error setting-error" id="error-terminalShell"></p>
+
+      <div class="setting setting-action">
+        <div class="setting-text">
+          <label>Check the package managers</label>
+          <p class="setting-note">Runs both paths above and reports what each one answers.</p>
+        </div>
+        <button type="button" id="check-binaries" class="check-binaries">Check</button>
+      </div>
+    </div>
+
+  <p class="group-label" id="config-file-label">Config file</p>
     <section class="group" aria-labelledby="config-file-label">
       <p class="hint">Opens <code>desktop.json</code> in your OS's default editor for it. This window keeps its own copy of the form while it is open: a hand edit will not appear here until you reopen Settings, and Save overwrites the whole file with what is currently in this form.</p>
       <button type="button" id="open-config-file" class="open-config-file">Open config file…</button>
@@ -261,5 +295,7 @@
     <pre class="progress" id="progress" role="status" hidden></pre>
   </div>
   <button id="save" type="button">Save</button>
+</div>
+</div>
 </div>
 <script src="settings.js"></script>

@@ -106,12 +106,11 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
   }
 
   settingsWindow = new BrowserWindow({
-    // Sized for the busiest tab without scrolling: a managed harness source
-    // with an update offered (its tallest state) measures ~546px of content;
-    // 640x720 clears that with room to spare in both themes, verified by
-    // rendering every tab (see docs/notes/settings-tabs.md).
-    width: 640,
-    height: 720,
+    // Landscape, because the sections moved into a column of their own: the
+    // list needs ~208px that the content no longer has to give up, and a
+    // settings window is read across rather than down.
+    width: 880,
+    height: 640,
     title: 'DeepSeek Harness Settings',
     // Genuinely frameless, matching the main window: this window owns its
     // markup, so it can carry a real drag strip (`.titlebar` in

@@ -1486,8 +1486,10 @@ for (const tab of TABS) {
   el(`tab-${tab}`).addEventListener('keydown', (event) => {
     const from = TABS.indexOf(tab)
     let target
-    if (event.key === 'ArrowRight') target = TABS[(from + 1) % TABS.length]
-    else if (event.key === 'ArrowLeft') target = TABS[(from - 1 + TABS.length) % TABS.length]
+    // The list runs down the window now, so Up/Down are the arrows that match
+    // it; Left/Right keep working for anyone who learned them on the strip.
+    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') target = TABS[(from + 1) % TABS.length]
+    else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') target = TABS[(from - 1 + TABS.length) % TABS.length]
     else if (event.key === 'Home') target = TABS[0]
     else if (event.key === 'End') target = TABS[TABS.length - 1]
     else return

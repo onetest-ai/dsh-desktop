@@ -12,6 +12,10 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
   node-pty's published tarball ships `spawn-helper` without its executable bit, and every pty spawns that binary. The build repairs it before packaging — a signed bundle cannot be repaired afterwards — and a smoke test asserts it on the packaged app.
 
+### Changed
+
+- **Settings is two columns**: the sections in a list down the left, the section itself on the right. A strip across the top worked at five sections and hid four of the five behind a horizontal scan every time. Each setting is now a row — what it is on the left, the control on the right — with the note that used to hide behind an ⓘ shown in full. The MCP tab's two scopes, global and per-project, each became a card carrying its own name, its file, and its own ways of adding a server; they previously appeared as five flat groups with identical controls and nothing saying which file each wrote to.
+
 ### Fixed
 
 - **Settings rendered white**, with its content scrolling through the fixed header: it mapped the harness's tokens on `:root`, one level above the `body` the vendored sheet defines them on, so every derived variable resolved to nothing.
