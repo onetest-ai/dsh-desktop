@@ -198,6 +198,8 @@ The browser can also be **driven**, through the Chrome DevTools protocol — the
 
 Alongside whatever it was asked to do, an action reports two things it did not: any dialog the page opened, and any page the browser moved to on its own. A run that is not told about a navigation cannot tell a lost form from a step that simply failed.
 
+The browser is driveable from the moment it opens, not from the first tool call: a page can open a dialog on its own, and one that opens while nothing is listening blocks the page until someone dismisses it by hand.
+
 Every action waits for its target to stop moving before acting on it. That is not caution about timing: a page whose adverts are still arriving moves its own controls by more than the height of one, and a click at a point measured a moment earlier lands on the button above the one that was asked for.
 
 Two limits worth knowing. `window.prompt` is replaced rather than intercepted, because Electron does not implement it — the substitute answers from the same policy, so a page calling `prompt` behaves as it would in Chrome instead of throwing. And where an item lands in a sortable can vary by a position, because the list reorders under the pointer as it moves — as it does for a person.

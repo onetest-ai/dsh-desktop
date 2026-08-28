@@ -95,6 +95,13 @@ export class BrowserSession {
    * @throws when there is no window to attach to.
    */
   private async attached(): Promise<Debuggee> {
+    // Detaching is not something this asks for, but it happens: opening the
+    // developer tools takes the session, and a view rebuilt under this leaves
+    // one behind. A cached attach that is no longer attached answers no
+    // dialogs, and an unanswered dialog blocks the page and everything after
+    // it — so the state is read every time rather than remembered.
+    const current = this.debuggee()
+    if (current !== undefined && !current.isAttached()) this.attaching = undefined
     // One attach at a time: several tool calls can arrive together, and each
     // enabling the domains again would race the first one's dialog handler
     // into place after the dialog it was meant to answer.
@@ -235,6 +242,25 @@ export class BrowserSession {
   private keep<T>(buffer: T[], entry: T): void {
     buffer.push(entry)
     if (buffer.length > LOG_LIMIT) buffer.splice(0, buffer.length - LOG_LIMIT)
+  }
+
+  /**
+   * Attach and make the page ready to be driven, before anything asks.
+   *
+   * Dialogs are the reason this is not left until the first tool call. A page
+   * opens them on its own — on load, on a timer, on a link the user followed —
+   * and one that opens while nothing is attached is never answered: it blocks
+   * the page, and every call after it, until someone dismisses it by hand.
+   * @returns resolution once the page can be driven, or when it cannot be.
+   */
+  async ready(): Promise<void> {
+    try {
+      await this.attached()
+    } catch {
+      // No window, or a view that will not take a debugger. The tools report
+      // that themselves when one of them is called; there is nothing to say
+      // about it in advance.
+    }
   }
 
   /**

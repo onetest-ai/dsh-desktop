@@ -1883,6 +1883,12 @@ if (!app.requestSingleInstanceLock()) {
     // Every navigation, wherever it came from — the address bar, a link in the
     // page, or the agent's own tool — reports back so the bar shows where the
     // browser actually is.
+    // Attached as soon as there is a page, not when a tool first asks: a
+    // dialog that opens while nothing is attached is never answered, and it
+    // blocks the browser column until someone dismisses it by hand.
+    views.web.webContents.on('dom-ready', () => {
+      void browser.ready()
+    })
     views.web.webContents.on('did-navigate', () => {
       pushWebState()
     })

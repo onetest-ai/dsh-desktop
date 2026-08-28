@@ -62,6 +62,41 @@ describe('BrowserSession', () => {
     expect(enabled).toBeLessThan(clicked)
   })
 
+  // reason: opening the developer tools takes the session, and a cached
+  // attach that is no longer attached answers no dialogs — which blocks the
+  // page and everything after it.
+  it('attaches again after something else detached it', async () => {
+    const { browser, fake } = session()
+    await browser.send('Runtime.evaluate')
+    fake.attached = false
+    fake.sent.length = 0
+    await browser.send('Runtime.evaluate')
+    expect(fake.attached).toBe(true)
+    expect(fake.sent.map((each) => each.method)).toContain('Page.enable')
+  })
+
+  it('does not attach again while it is still attached', async () => {
+    const { browser, fake } = session()
+    await browser.send('Runtime.evaluate')
+    fake.sent.length = 0
+    await browser.send('Runtime.evaluate')
+    expect(fake.sent.map((each) => each.method)).not.toContain('Page.enable')
+  })
+
+  // reason: a page opens dialogs on its own — on load, on a timer — and one
+  // that opens while nothing is attached is never answered.
+  it('can be made ready before any tool asks', async () => {
+    const { browser, fake } = session()
+    await browser.ready()
+    expect(fake.attached).toBe(true)
+    expect(fake.sent.map((each) => each.method)).toContain('Page.enable')
+  })
+
+  it('says nothing when there is no browser to make ready', async () => {
+    const browser = new BrowserSession(() => undefined)
+    await expect(browser.ready()).resolves.toBeUndefined()
+  })
+
   it('attaches once even when several calls arrive together', async () => {
     const { browser, fake } = session()
     await Promise.all([browser.send('Runtime.evaluate'), browser.send('Runtime.evaluate')])
