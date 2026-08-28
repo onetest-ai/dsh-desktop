@@ -128,46 +128,58 @@ h1 {
   margin: 0;
 }
 
+/* Explanatory text, at the size explanations are read at. Unsized it
+   inherited the body's, which put every note in the same voice as the
+   headings above them. */
 .hint {
-  margin: -14px 0 0;
+  margin: 0;
+  font-size: 12px;
+  line-height: 17px;
   color: var(--label-secondary);
 }
 
 /* Grouped rows, the way the harness groups settings into cards. */
+/* Grouped by space and a heading rather than by a border. The card was doing
+   the same job the section label above it already does, twice over. */
 section.group {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  padding: 16px;
   margin: 0;
+  padding: 0;
   display: grid;
   gap: 10px;
 }
 
-/* The Plugins tab's group has no card of its own: every row inside
-   `.plugin-rows` is already its own card, and wrapping those in a second,
-   outer card read as nested boxes. This keeps the caption-above-content
-   layout and the tight 10px rhythm between the hint, the Add control, and
-   the row list — the parts that relied on the card for grouping — while
-   dropping only its border, background, and padding. */
 /* A setting is a row: what it is on the left, the control on the right. The
    alternative — a label above a field spanning the window — makes every
    setting the same size whatever it is worth, and gives a one-word answer the
    same width as a path. Rows also leave somewhere to put the note that used
-   to hide behind an ⓘ. */
+   to hide behind an ⓘ.
+ *
+ * Grouped by a hairline between rows rather than by a box around them. A card
+ * per group, with cards inside it for the rows, spends the reader's attention
+ * on the boxes: at this density the eye follows the borders instead of the
+ * settings. One rule between two rows says the same thing. */
 .settings-list {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  overflow: hidden;
+  border-top: 1px solid var(--border);
+}
+
+.panel > .settings-list:first-child {
+  border-top: none;
 }
 
 .setting {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
+  /* The control takes what it needs, not a fixed share: a checkbox given a
+     300px column left its description wrapping in half the width while the
+     other half stayed empty. */
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 24px;
-  padding: 14px 16px;
+  padding: 14px 2px;
+}
+
+.setting > input[type='text'],
+.setting > select {
+  width: 280px;
 }
 
 .setting + .setting,
@@ -184,6 +196,7 @@ section.group {
 .setting-text label {
   margin: 0;
   font-size: 13px;
+  line-height: 18px;
   font-weight: 500;
   color: var(--label);
 }
@@ -201,10 +214,8 @@ section.group {
   width: 100%;
 }
 
-/* A row whose control is a switch: it needs none of the 300px the text
-   controls take, and sits at the far edge where a toggle is looked for. */
+/* A switch sits at the far edge, where a toggle is looked for. */
 .setting-switch > input[type='checkbox'] {
-  width: auto;
   justify-self: end;
   margin-top: 2px;
 }
@@ -220,29 +231,28 @@ section.group {
   justify-self: start;
 }
 
-/* Errors and check results belong to the row above, inside the card, indented
-   to the control they are about. */
+/* Errors and check results belong to the row above. */
 .setting-error:not(:empty) {
   margin: 0;
-  padding: 0 16px 12px;
+  padding: 0 2px 12px;
 }
 
 .setting-error:empty {
   display: none;
 }
 
-/* A scope card: everything belonging to one place servers are stored — its
-   name, where that is, the file, the servers, and the ways to add one. The MCP
-   tab has two of these, and they carry identical controls; without the card
-   the two sets read as one long list and it is not clear which file an "Add a
-   server by hand" writes to. */
+/* A scope: everything belonging to one place servers are stored — its name,
+   where that is, the file, the servers, and the ways to add one. The MCP tab
+   has two, carrying identical controls; the heading and the rule under it are
+   what separate them, so an "Add a server by hand" is visibly this scope's. */
 .scope {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  padding: 16px;
   display: grid;
   gap: 12px;
+  padding-top: 4px;
+}
+
+.scope + .scope {
+  margin-top: 12px;
 }
 
 .scope-header {
@@ -250,6 +260,8 @@ section.group {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
 }
 
 .scope-heading {
@@ -316,17 +328,11 @@ section.group {
   border-top: 1px solid var(--border);
 }
 
-.group-flat {
-  border: none;
-  background: none;
-  padding: 0;
-}
-
 /* The caption sits above its card rather than inside it: a native fieldset
    legend cuts a notch through the card's top border. Grouping for assistive
    tech comes from role="radiogroup" + aria-labelledby instead. */
 .group-label {
-  margin: 0 0 -10px;
+  margin: 4px 0 0;
   color: var(--label-secondary);
   font-size: 12px;
   line-height: 18px;
@@ -515,9 +521,8 @@ button:disabled {
   padding: 0 10px;
 }
 
-/* Row-based plugin list: each entry is its own card, sized and colored from
-   the same tokens the rest of this window's controls use, sitting directly
-   on the panel (see `.group-flat`) rather than inside a second, outer one. */
+/* Row-based plugin list: entries separated by a rule, sitting directly on the
+   panel. */
 .plugin-rows {
   list-style: none;
   margin: 0;
@@ -532,15 +537,18 @@ button:disabled {
   gap: 8px;
 }
 
+/* A row, not a card: these sit inside a section that is already grouped, and
+   a bordered box per row turned a list of three servers into three panels. */
 .plugin-row {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--input-fill);
+  padding: 10px 2px;
+}
+
+.plugin-row + .plugin-row {
+  border-top: 1px solid var(--border);
 }
 
 /* A plugin the running harness dropped: the card itself reads as a problem
@@ -638,8 +646,7 @@ button:disabled {
    summary, so "something is configured here" is visible without expanding
    every row in the list. */
 .plugin-config {
-  border-top: 1px solid var(--border);
-  padding-top: 6px;
+  padding-top: 2px;
 }
 
 .plugin-config summary {

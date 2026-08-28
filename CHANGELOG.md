@@ -14,7 +14,7 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 ### Changed
 
-- **Settings is two columns**: the sections in a list down the left, the section itself on the right. A strip across the top worked at five sections and hid four of the five behind a horizontal scan every time. Each setting is now a row — what it is on the left, the control on the right — with the note that used to hide behind an ⓘ shown in full. The MCP tab's two scopes, global and per-project, each became a card carrying its own name, its file, and its own ways of adding a server; they previously appeared as five flat groups with identical controls and nothing saying which file each wrote to.
+- **Settings is two columns and flat**: the sections in a list down the left, the section itself on the right, grouped by hairlines rather than by boxes. Cards inside cards inside cards spent attention on the borders instead of the settings. A strip across the top worked at five sections and hid four of the five behind a horizontal scan every time. Each setting is now a row — what it is on the left, the control on the right — with the note that used to hide behind an ⓘ shown in full. The MCP tab's two scopes, global and per-project, each became a card carrying its own name, its file, and its own ways of adding a server; they previously appeared as five flat groups with identical controls and nothing saying which file each wrote to.
 
 ### Fixed
 
