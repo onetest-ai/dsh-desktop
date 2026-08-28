@@ -11,7 +11,7 @@ import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { mcpConfigPath, readMcpConfig, writeMcpConfig, type McpServerEntry } from './mcp-config'
 import { migrateMcpConfig } from './mcp-migrate'
 import { createMcpProber } from './mcp-probe'
-import { ensureDefaultPlugins } from './plugin-defaults'
+import { alignDefaultPlugins, ensureDefaultPlugins } from './plugin-defaults'
 import { repairablePlugins, runHealthcheck, type Finding } from './healthcheck'
 import { repairPlugins } from './repair'
 import { closeStartup, pushFindings, pushPhase, pushProgress, showStartup } from './startup-window'
@@ -1618,6 +1618,9 @@ if (!app.requestSingleInstanceLock()) {
     // Offers each shipped default once, recorded by generation so a default
     // the user removes stays removed.
     ensureDefaultPlugins(DSH_HOME)
+    // A default this build pins newer than what is installed moves forward
+    // here, before the healthcheck reads the config and repairs what it finds.
+    alignDefaultPlugins(DSH_HOME)
     installMenu(showSettings, {
       toggleFiles: () => {
         toggleColumn('files')

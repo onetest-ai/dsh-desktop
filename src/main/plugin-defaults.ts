@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { writeFileAtomic } from './atomic-write'
 import { parseSpec, type PluginEntry } from './plugin-entries'
+import { isOlder } from './version-order'
 
 /**
  * The per-project MCP bridge, shipped by default.
@@ -54,6 +55,57 @@ export const DEFAULT_PLUGIN_SPECS: readonly string[] = [PROJECT_MCP_BRIDGE, DESK
  * means raising this number.
  */
 export const DEFAULTS_GENERATION = 2
+
+/**
+ * Move a default plugin forward when this build ships a newer pin.
+ *
+ * A default is part of the app: the app decides which version of it belongs
+ * with this build, the way it decides which version of the MCP client does.
+ * Without this, an install that already has the plugin keeps whatever version
+ * it first got, because `ensureDefaultPlugins` only ever adds a missing one.
+ *
+ * Only ever forward, and only for a version this app itself pins: an entry
+ * already ahead of the shipped pin is left alone, so someone who moved
+ * deliberately is not dragged back. The recorded version is cleared with the
+ * spec so the startup repair installs what the new spec names.
+ *
+ * Never throws — an unreadable or unwritable config leaves the install
+ * exactly as it was.
+ * @param dshHome - the resolved `$DSH_HOME` directory.
+ * @returns whether the config was changed.
+ */
+export function alignDefaultPlugins(dshHome: string): boolean {
+  const file = join(dshHome, 'desktop.json')
+  let config: Record<string, unknown>
+  try {
+    config = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  } catch {
+    // No config yet, or one this app may not read: nothing to move forward.
+    return false
+  }
+  const entries = Array.isArray(config.plugins) ? (config.plugins as PluginEntry[]) : []
+  let changed = false
+  const aligned = entries.map((entry) => {
+    const { package: pkg, pinnedVersion } = parseSpec(entry.spec)
+    const shipped = DEFAULT_PLUGIN_SPECS.map(parseSpec).find((candidate) => candidate.package === pkg)
+    if (shipped?.pinnedVersion === undefined || pinnedVersion === undefined) return entry
+    if (!isOlder(pinnedVersion, shipped.pinnedVersion)) return entry
+    changed = true
+    // The version comes off with the spec: what is installed is the old one,
+    // and leaving it recorded would report the new spec as already satisfied.
+    const { version: _version, ...rest } = entry
+    return { ...rest, spec: `${pkg}@${shipped.pinnedVersion}` }
+  })
+  if (!changed) return false
+  try {
+    writeFileAtomic(file, `${JSON.stringify({ ...config, plugins: aligned }, undefined, 2)}\n`)
+  } catch {
+    // An unwritable config leaves the install as it was; the next launch
+    // tries again.
+    return false
+  }
+  return true
+}
 
 /**
  * Add any default plugin this install has not seen yet.
