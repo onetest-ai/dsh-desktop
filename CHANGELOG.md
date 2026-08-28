@@ -4,7 +4,9 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 ## [Unreleased]
 
-Nothing here has shipped in a downloadable build yet. The `v0.1.0` DMG still stores MCP tokens in the OS keychain, so anyone using it meets the login-password prompt described below until a release carries these changes.
+## [0.2.0] - 2026-08-28
+
+The first build to carry everything below. `v0.1.0` stored MCP tokens in the OS keychain and met users with a login-password prompt; this release stores them in a file at mode `0600` instead, and adds the side pane, the browser the agent can drive, and the file tree.
 
 ### Added
 
