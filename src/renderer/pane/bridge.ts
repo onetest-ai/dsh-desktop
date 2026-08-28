@@ -15,6 +15,7 @@ declare global {
       showWebView(visible: boolean): void
       askProject(): void
       onProject(listener: (project: Project | undefined) => void): void
+      onProjectChanged(listener: (root: string, relative: string) => void): void
       listDirectory(root: string, relative: string): Promise<TreeEntry[]>
       openFile(root: string, relative: string): void
       createFile(root: string, relative: string): Promise<{ ok: true; relative: string } | { ok: false; reason: string }>

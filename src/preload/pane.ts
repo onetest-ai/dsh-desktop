@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('pane', {
     )
   },
   listDirectory: (root: string, relative: string) => ipcRenderer.invoke('pane:list-directory', root, relative),
+  onProjectChanged: (listener: (root: string, relative: string) => void) => {
+    ipcRenderer.on('pane:project-changed', (_event, root: string, relative: string) => listener(root, relative))
+  },
   openFile: (root: string, relative: string) => ipcRenderer.send('pane:open-file', root, relative),
   createFile: (root: string, relative: string) => ipcRenderer.invoke('pane:create-file', root, relative),
   createFolder: (root: string, relative: string) => ipcRenderer.invoke('pane:create-folder', root, relative),

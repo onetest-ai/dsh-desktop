@@ -45,7 +45,7 @@ import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, cr
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
 import { DIVIDER_WIDTH, RAIL_WIDTH, type Columns } from './layout'
-import { serveViewTools, VIEW_SERVER_NAME, type PageText, type ViewServer } from './view-mcp'
+import { serveViewTools, VIEW_SERVER_NAME, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
 import { loadableUrl } from './view-tools'
@@ -54,6 +54,20 @@ import { createFile, createFolder } from './file-create'
 import { deleteEntry, pasteEntry, renameEntry } from './file-ops'
 import { treeMenu, type TreeAction } from './tree-menu'
 import { resolveInRoot } from './file-tree'
+import { watchProject, type ProjectWatch } from './project-watch'
+import { BrowserSession } from './browser-cdp'
+import {
+  click as clickElement,
+  drag as dragElement,
+  hover as hoverElement,
+  press as pressKey,
+  readPage as readBrowserPage,
+  resizeViewport,
+  screenshot as capturePage,
+  selectOption as chooseOption,
+  type as typeText,
+  uploadFile as attachFile,
+} from './browser-actions'
 import { harnessTheme, settingsPath } from './harness-theme'
 import { workspacesPath } from './workspaces'
 import type { ServerStatus } from './status'
@@ -172,6 +186,15 @@ let themeWatcher: FSWatcher | undefined
 /** Watches its workspace list for the project the tree should show; closed on quit. */
 let workspaceWatcher: FSWatcher | undefined
 
+/**
+ * The watch over the project the file tree is showing.
+ *
+ * One at a time: the tree shows one project, and a watch over a project
+ * nobody is looking at would report changes into a listing that no longer
+ * exists.
+ */
+let projectWatcher: ProjectWatch | undefined
+
 /** This app's own MCP server, serving the view tools; undefined when switched off. */
 let viewServer: ViewServer | undefined
 
@@ -194,12 +217,50 @@ async function startViewTools(config: DesktopConfig): Promise<void> {
       selection: readPaneSelection,
       fetchPage: fetchPageText,
       readPage: readPageText,
+      browser: browserAutomation,
     })
   } catch (error) {
     // A port already taken costs the user the view tools and nothing else:
     // the harness boots, and every other tool it has still works.
     console.warn(`dsh-desktop: the view tools could not start: ${(error as Error).message}`)
   }
+}
+
+/**
+ * The protocol session over the browser column.
+ *
+ * One for the life of the app: it attaches on first use and survives every
+ * navigation after that, so the console and dialog buffers span a whole task
+ * rather than a single page.
+ */
+const browser = new BrowserSession(() =>
+  views === undefined || views.window.isDestroyed() ? undefined : views.web.webContents.debugger,
+)
+
+/**
+ * The browser tools, bound to that session.
+ *
+ * A thin binding on purpose: each verb is implemented against the protocol in
+ * `browser-actions`, which is where the behaviour is tested, and this only
+ * says which session they run on.
+ */
+const browserAutomation: BrowserAutomation = {
+  readPage: () => readBrowserPage(browser),
+  click: (target, options) => clickElement(browser, target, options),
+  hover: (target) => hoverElement(browser, target),
+  type: (target, text, clear) => typeText(browser, target, text, clear),
+  press: (key) => pressKey(browser, key),
+  selectOption: (target, value) => chooseOption(browser, target, value),
+  drag: (from, to) => dragElement(browser, from, to),
+  evaluate: (expression) => browser.evaluate(expression),
+  uploadFile: (target, path) => attachFile(browser, target, [path]),
+  resize: (width, height) => resizeViewport(browser, width, height),
+  screenshot: () => capturePage(browser),
+  setDialogPolicy: (policy) => {
+    browser.setDialogPolicy(policy)
+  },
+  takeConsole: () => browser.takeConsole(),
+  takeDialogs: () => browser.takeDialogs(),
 }
 
 /**
@@ -224,7 +285,12 @@ async function fetchPageText(url: string): Promise<PageText> {
       resolve(ok)
     }
     const onLoad = (): void => done(true)
-    const onFail = (): void => done(false)
+    // Only the main frame: an advert or a tracker in an iframe fails on a
+    // great many perfectly good pages, and treating that as the page failing
+    // is what made this report pages it had in fact loaded.
+    const onFail = (_event: unknown, _code: number, _description: string, _url: string, isMainFrame: boolean): void => {
+      if (isMainFrame) done(false)
+    }
     const timer = setTimeout(() => done(false), PAGE_LOAD_TIMEOUT_MS)
     webContents.on('did-finish-load', onLoad)
     webContents.on('did-fail-load', onFail)
@@ -258,11 +324,13 @@ async function readPageText(): Promise<PageText> {
 /**
  * How long a page gets to finish loading before the agent is told it did not.
  *
- * Long enough for a slow page on a slow connection, short enough that a tool
- * call does not sit there: a page still loading after this is one the agent
- * should hear about rather than wait on.
+ * The wait itself is for the document's own load event, which is what a
+ * browser automation library waits for by default; this only bounds it.
+ * Generous, because the cost of being wrong in one direction is a page the
+ * agent reports as broken when it was merely slow, and in the other a tool
+ * call that takes a minute to say so.
  */
-const PAGE_LOAD_TIMEOUT_MS = 30_000
+const PAGE_LOAD_TIMEOUT_MS = 60_000
 
 /**
  * Tell the browser's address bar where the page is and where it can go.
@@ -355,9 +423,30 @@ let currentProject: { path: string; title: string } | undefined
 function showProject(project?: { path: string; title: string }): void {
   const next = project ?? currentProject ?? readWorkspaces(DSH_HOME)[0]
   if (next === undefined) return
+  const moved = currentProject?.path !== next.path
   currentProject = { path: next.path, title: next.title }
+  if (moved) watchCurrentProject()
   if (views === undefined || views.window.isDestroyed()) return
   views.files.webContents.send('pane:project', currentProject)
+}
+
+/**
+ * Watch the current project, so the tree shows files the user did not add
+ * through it.
+ *
+ * Most of what appears in a project here is written by the agent, not by the
+ * tree's own New File — without this, the tree shows the project as it was
+ * when it was opened until something makes it reload.
+ */
+function watchCurrentProject(): void {
+  projectWatcher?.close()
+  projectWatcher = undefined
+  const root = currentProject?.path
+  if (root === undefined) return
+  projectWatcher = watchProject(root, (relative) => {
+    if (views === undefined || views.window.isDestroyed()) return
+    views.files.webContents.send('pane:project-changed', root, relative)
+  })
 }
 
 /**
@@ -1512,6 +1601,8 @@ async function shutdown(): Promise<void> {
   themeWatcher = undefined
   workspaceWatcher?.close()
   workspaceWatcher = undefined
+  projectWatcher?.close()
+  projectWatcher = undefined
   // The install child is reaped first and unconditionally: it is in neither
   // the lifecycle chain nor `child`, so nothing below would ever find it, and
   // an unreaped `npm` keeps writing into $DSH_HOME after Electron is gone.

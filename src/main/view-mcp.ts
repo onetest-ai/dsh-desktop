@@ -2,6 +2,8 @@ import { createServer, type Server } from 'node:http'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
+import type { ActionResult } from './browser-actions'
+import type { ConsoleEntry, DialogRecord, Evaluated } from './browser-cdp'
 import { loadableUrl, locate } from './view-tools'
 
 /** What the tools need from the app. */
@@ -27,6 +29,45 @@ export interface ViewDeps {
    * @returns the page, or why it could not be read.
    */
   readPage(): Promise<PageText>
+  /** Driving the built-in browser. */
+  browser: BrowserAutomation
+}
+
+/**
+ * Driving the built-in browser, as the tools use it.
+ *
+ * Every element is named the way `browser_read_page` numbered it, or by CSS
+ * selector, or by `text=`; the implementation resolves all three.
+ */
+export interface BrowserAutomation {
+  /** Number the page's interactive elements and describe them. */
+  readPage(): Promise<ActionResult>
+  /** Click an element. */
+  click(target: string, options: { button?: 'left' | 'right' | 'middle'; count?: number }): Promise<ActionResult>
+  /** Move the pointer onto an element. */
+  hover(target: string): Promise<ActionResult>
+  /** Type into a field, optionally emptying it first. */
+  type(target: string, text: string, clear: boolean): Promise<ActionResult>
+  /** Press one key wherever focus is. */
+  press(key: string): Promise<ActionResult>
+  /** Choose an option in a native select. */
+  selectOption(target: string, value: string): Promise<ActionResult>
+  /** Drag one element onto another. */
+  drag(from: string, to: string): Promise<ActionResult>
+  /** Run an expression in the page. */
+  evaluate(expression: string): Promise<Evaluated>
+  /** Put a file on a file input; the path is checked by the caller. */
+  uploadFile(target: string, path: string): Promise<ActionResult>
+  /** Give the page a viewport of a chosen size, or 0 to stop overriding it. */
+  resize(width: number, height: number): Promise<ActionResult>
+  /** Capture the page as a base64 PNG. */
+  screenshot(): Promise<{ ok: true; png: string } | { ok: false; reason: string }>
+  /** Decide what happens to native dialogs from now on. */
+  setDialogPolicy(policy: { accept: boolean; promptText?: string }): void
+  /** Read and empty what the page logged. */
+  takeConsole(): ConsoleEntry[]
+  /** Read and empty the dialogs that opened. */
+  takeDialogs(): DialogRecord[]
 }
 
 /** A page as the agent reads it. */
@@ -129,7 +170,7 @@ function buildServer(deps: ViewDeps): McpServer {
     {
       title: 'Read a web page in the desktop browser',
       description:
-        "Open a URL in the desktop app's browser and read the page as text. Use this to read something on the web: it is a real browser with the user's session, so it renders pages that a plain fetch returns empty, and the user watches it load. This does not automate a site — it does not click, type, or fill forms.",
+        "Open a URL in the desktop app's built-in browser and read the page as text. Use this to read something on the web: it is a real browser with the user's session, so it renders pages that a plain fetch returns empty, and the user watches it load. It waits for the page's own load event. To act on the page once it is open — click, type, drag, upload — use the browser_* tools, which drive this same browser.",
       inputSchema: { url: z.string().describe('The http or https URL to read.') },
     },
     async ({ url }) => {
@@ -144,12 +185,217 @@ function buildServer(deps: ViewDeps): McpServer {
     {
       title: 'Read the page the desktop browser is showing',
       description:
-        "Read whatever page the desktop app's browser is currently showing as text — including one the user navigated to themselves. Use `browse_page` to open a URL of your own.",
+        "Read whatever page the desktop app's built-in browser is currently showing as text — including one the user navigated to themselves. Use `browse_page` to open a URL of your own, and `browser_read_page` when you need the page's controls rather than its prose.",
       inputSchema: {},
     },
     async () => {
       const page = await deps.readPage()
       return page.ok ? done(`# ${page.title}\n${page.url}\n\n${page.text}`) : refuse(page.reason)
+    },
+  )
+
+  /**
+   * Report an action, with anything the page popped up while it ran.
+   *
+   * Dialogs are answered as they open — a page left blocked on one would hang
+   * every call after it — so the only place they can be reported is alongside
+   * whatever caused them.
+   * @param result - what the action reported.
+   * @returns the tool result.
+   */
+  function acted(result: ActionResult): { content: { type: 'text'; text: string }[]; isError?: true } {
+    const dialogs = deps.browser
+      .takeDialogs()
+      .map((each) => `A ${each.kind} said ${JSON.stringify(each.message)} and was ${each.accepted ? 'accepted' : 'dismissed'}.`)
+    const trailer = dialogs.length === 0 ? '' : `\n${dialogs.join('\n')}`
+    return result.ok ? done(result.message + trailer) : refuse(result.reason + trailer)
+  }
+
+  const target = z
+    .string()
+    .describe(
+      'The element: `ref=N` from browser_read_page, a CSS selector, or `text=Some visible text`.',
+    )
+
+  server.registerTool(
+    'browser_read_page',
+    {
+      title: 'List what can be acted on in the built-in browser',
+      description:
+        "Number every interactive element on the page the desktop app's built-in browser is showing, with its role, name, id, and value. Call this before acting on a page and after anything changes it: the numbers it returns (`ref=N`) are how the other browser_* tools name an element, and they are more reliable than a CSS selector guessed from memory. Use `read_open_page` instead when you want the page's prose rather than its controls.",
+      inputSchema: {},
+    },
+    async () => acted(await deps.browser.readPage()),
+  )
+
+  server.registerTool(
+    'browser_click',
+    {
+      title: 'Click in the built-in browser',
+      description:
+        "Click an element in the desktop app's built-in browser. The click is dispatched through the DevTools protocol, so the page cannot tell it from the user's own — it opens native dialogs, works on file inputs, and triggers handlers that ignore scripted events. Any dialog the click opens is answered and reported back; set `browser_handle_dialogs` first to decide how.",
+      inputSchema: {
+        target,
+        button: z.enum(['left', 'right', 'middle']).optional().describe('Which button; left by default.'),
+        count: z.number().int().min(1).max(3).optional().describe('1 for a click, 2 for a double click.'),
+      },
+    },
+    async ({ target: element, button, count }) => acted(await deps.browser.click(element, { button, count })),
+  )
+
+  server.registerTool(
+    'browser_hover',
+    {
+      title: 'Hover in the built-in browser',
+      description:
+        "Move the pointer onto an element in the desktop app's built-in browser, without pressing anything. Use this for a menu or tooltip that only appears under the pointer.",
+      inputSchema: { target },
+    },
+    async ({ target: element }) => acted(await deps.browser.hover(element)),
+  )
+
+  server.registerTool(
+    'browser_type',
+    {
+      title: 'Type into a field in the built-in browser',
+      description:
+        "Type into a field in the desktop app's built-in browser, one key at a time, so a date picker, autocomplete, or masked field reacts the way it does for a person. Clears the field first unless told otherwise.",
+      inputSchema: {
+        target,
+        text: z.string().describe('What to type.'),
+        clear: z.boolean().optional().describe('Empty the field first; true by default.'),
+      },
+    },
+    async ({ target: element, text, clear }) => acted(await deps.browser.type(element, text, clear !== false)),
+  )
+
+  server.registerTool(
+    'browser_press_key',
+    {
+      title: 'Press a key in the built-in browser',
+      description:
+        "Press one key wherever focus is in the desktop app's built-in browser — `Enter`, `Tab`, `Escape`, `ArrowDown`, or a shortcut such as `Control+a`. Use this to commit a value a picker is holding open.",
+      inputSchema: { key: z.string().describe('The key, as the DOM names it, optionally as `Modifier+Key`.') },
+    },
+    async ({ key }) => acted(await deps.browser.press(key)),
+  )
+
+  server.registerTool(
+    'browser_select_option',
+    {
+      title: 'Choose an option in the built-in browser',
+      description:
+        "Choose an option in a native `<select>` in the desktop app's built-in browser, by its value or by the label the user reads. A custom combobox is not a `<select>`: click it open and click the option instead.",
+      inputSchema: { target, value: z.string().describe("The option's value or its visible label.") },
+    },
+    async ({ target: element, value }) => acted(await deps.browser.selectOption(element, value)),
+  )
+
+  server.registerTool(
+    'browser_drag',
+    {
+      title: 'Drag in the built-in browser',
+      description:
+        "Drag one element onto another in the desktop app's built-in browser. The pointer is pressed, moved across in steps, and released — which is what a sortable list, a resize handle, and an HTML5 drop target all wait for; a single jump from one point to the other does nothing.",
+      inputSchema: { from: target, to: target },
+    },
+    async ({ from, to }) => acted(await deps.browser.drag(from, to)),
+  )
+
+  server.registerTool(
+    'browser_evaluate',
+    {
+      title: 'Run JavaScript in the built-in browser',
+      description:
+        "Run a JavaScript expression in the page the desktop app's built-in browser is showing, and read what it returns. Use it to check state the rendered text does not show — an input's `.value`, a checkbox's `.checked`, a class, `getBoundingClientRect()`. Prefer the other browser_* tools for acting on the page: an event this dispatches is untrusted, and much of the web ignores it.",
+      inputSchema: { expression: z.string().describe('The expression; a promise is awaited.') },
+    },
+    async ({ expression }) => {
+      const out = await deps.browser.evaluate(expression)
+      return out.ok ? done(JSON.stringify(out.value ?? null, null, 2)) : refuse(out.reason)
+    },
+  )
+
+  server.registerTool(
+    'browser_upload_file',
+    {
+      title: 'Attach a file in the built-in browser',
+      description:
+        "Put a file on a file input in the desktop app's built-in browser, without opening a file chooser. The file must be inside a project the user has opened.",
+      inputSchema: {
+        target,
+        path: z.string().describe('Absolute path to the file to attach.'),
+      },
+    },
+    async ({ target: element, path }) => {
+      const found = locate(path, deps.roots())
+      if (found === undefined) return refuse(`${path} is not inside a project the user has open.`)
+      return acted(await deps.browser.uploadFile(element, path))
+    },
+  )
+
+  server.registerTool(
+    'browser_handle_dialogs',
+    {
+      title: 'Decide what happens to dialogs in the built-in browser',
+      description:
+        "Say what the desktop app's built-in browser should do with the native dialogs a page opens — `alert`, `confirm`, `prompt`, and the leave-page warning — from now on. They are dismissed by default and always answered at once, because a dialog left open blocks the page and everything after it. Whatever appeared is reported with the action that caused it.",
+      inputSchema: {
+        action: z.enum(['accept', 'dismiss']).describe('What to do with each dialog.'),
+        prompt_text: z.string().optional().describe('What to type into a `prompt` when accepting one.'),
+      },
+    },
+    ({ action, prompt_text }) => {
+      deps.browser.setDialogPolicy({ accept: action === 'accept', promptText: prompt_text })
+      return done(`Dialogs will be ${action === 'accept' ? 'accepted' : 'dismissed'} from now on.`)
+    },
+  )
+
+  server.registerTool(
+    'browser_read_console',
+    {
+      title: "Read the built-in browser's console",
+      description:
+        "Read what the page logged in the desktop app's built-in browser — console messages, uncaught exceptions, and failed loads — since the last time this was read. Use it to check that an interaction produced no error, or to see the error it produced.",
+      inputSchema: {},
+    },
+    () => {
+      const entries = deps.browser.takeConsole()
+      return done(
+        entries.length === 0
+          ? 'Nothing has been logged since the last read.'
+          : entries.map((each) => `[${each.level}] ${each.text}`).join('\n'),
+      )
+    },
+  )
+
+  server.registerTool(
+    'browser_resize',
+    {
+      title: 'Set the viewport of the built-in browser',
+      description:
+        "Change the viewport the page measures in the desktop app's built-in browser, without moving the window the user arranged. Use it when a layout depends on width — a table that collapses, an advert that overlaps a control. Pass 0 for both to go back to the real column width.",
+      inputSchema: {
+        width: z.number().int().min(0).max(10_000).describe('Width in CSS pixels, or 0 to stop overriding.'),
+        height: z.number().int().min(0).max(10_000).describe('Height in CSS pixels.'),
+      },
+    },
+    async ({ width, height }) => acted(await deps.browser.resize(width, height)),
+  )
+
+  server.registerTool(
+    'browser_screenshot',
+    {
+      title: 'Photograph the built-in browser',
+      description:
+        "Capture what the desktop app's built-in browser is showing, as a PNG. Use it as evidence of a state, or to see a layout that the page's text does not describe.",
+      inputSchema: {},
+    },
+    async () => {
+      const shot = await deps.browser.screenshot()
+      return shot.ok
+        ? { content: [{ type: 'image' as const, data: shot.png, mimeType: 'image/png' }] }
+        : refuse(shot.reason)
     },
   )
 

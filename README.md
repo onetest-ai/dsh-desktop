@@ -168,7 +168,7 @@ Right-click any row in the tree for **New File**, **New Folder**, **Rename**, **
 
 All of it draws in the harness's own design tokens and follows the harness's own **Appearance** setting — set dark there and these columns turn dark with it, without a restart.
 
-The agent can drive these views through four tools, served over MCP on `127.0.0.1` for as long as the app is running:
+The agent can drive these views through a set of tools, served over MCP on `127.0.0.1` for as long as the app is running:
 
 | Tool | What it does |
 | --- | --- |
@@ -179,7 +179,23 @@ The agent can drive these views through four tools, served over MCP on `127.0.0.
 | `view_show_diff` | Shows a file beside the text the agent proposes for it, before anything is written. |
 | `view_get_selection` | Reads what you have selected in the editor. |
 
-The browser is a **reading** surface, not an automation one: nothing here clicks, types, or fills forms. That is deliberate — it is the agent's way to fetch web content through a browser that renders JavaScript and carries your session, while driving a site remains Playwright's job. The tool descriptions say so, so the model does not reach for the wrong one.
+The browser can also be **driven**, through the Chrome DevTools protocol — the same protocol Playwright speaks — so a page cannot tell the input from your own:
+
+| Tool | What it does |
+| --- | --- |
+| `browser_read_page` | Numbers every interactive element with its role, name, id, and value. The numbers (`ref=N`) are how the tools below name an element, and they beat a CSS selector guessed from memory. |
+| `browser_click`, `browser_hover` | Clicks or hovers, at the element's place on screen. |
+| `browser_type`, `browser_press_key` | Types key by key, so pickers and autocompletes react; presses `Enter`, `Tab`, `Control+a`. |
+| `browser_select_option` | Chooses in a native `<select>`, by value or by the label you read. |
+| `browser_drag` | Presses, moves across in steps, releases — what a sortable list or a resize handle actually waits for. |
+| `browser_upload_file` | Puts a file on a file input without a chooser. The file must be inside an open project. |
+| `browser_handle_dialogs` | Decides what happens to `alert`, `confirm`, and `prompt`. They are dismissed by default and always answered at once, since a dialog left open blocks the page; whatever appeared is reported with the action that caused it. |
+| `browser_evaluate` | Runs an expression in the page — for state the rendered text does not show, such as an input's `.value` or a `getBoundingClientRect()`. |
+| `browser_read_console` | Reads what the page logged, uncaught exceptions included. |
+| `browser_resize` | Overrides the viewport the page measures, without moving the window you arranged. |
+| `browser_screenshot` | Captures the page as a PNG. |
+
+There are two browsers in reach, and their tools carry the same names: these drive **this app's** browser, the one on your screen, while Playwright's MCP server drives a separate headless one. Every description here says which, so the model does not reach for the wrong one.
 
 Every path argument is checked against the projects the harness has opened, and a path outside them is refused with a reason the model can read. Nothing is written to `mcp.json`: the server entry is built per launch, so it cannot linger when the app is not running. Switch the whole thing off on the **MCP** tab.
 

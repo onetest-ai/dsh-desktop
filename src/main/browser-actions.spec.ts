@@ -1,0 +1,513 @@
+import { describe, expect, it } from 'vitest'
+import type { BrowserSession, Evaluated } from './browser-cdp'
+import {
+  TYPE_LIMIT,
+  click,
+  cssFor,
+  drag,
+  hover,
+  press,
+  readPage,
+  resizeViewport,
+  screenshot,
+  selectOption,
+  type,
+  uploadFile,
+} from './browser-actions'
+
+/** One command the actions sent. */
+interface Sent {
+  method: string
+  params?: Record<string, unknown>
+}
+
+/**
+ * A session that records commands and answers evaluations from a queue.
+ *
+ * The last answer repeats once the queue runs out, so a test that cares about
+ * one step does not have to enumerate every read the action makes.
+ * @param answers - what each `evaluate` returns, in order.
+ * @param replies - what each protocol command returns, by method.
+ * @returns the stand-in session and the commands it received.
+ */
+function fakeSession(
+  answers: Evaluated[] = [],
+  replies: Record<string, unknown> = {},
+  events: Record<string, Record<string, unknown> | undefined> = {},
+): { session: BrowserSession; sent: Sent[] } {
+  const sent: Sent[] = []
+  const queue = [...answers]
+  const session = {
+    evaluate: async (expression: string) => {
+      sent.push({ method: 'evaluate', params: { expression } })
+      return (queue.length > 1 ? queue.shift() : queue[0]) ?? { ok: true, value: undefined }
+    },
+    send: async (method: string, params?: Record<string, unknown>) => {
+      sent.push({ method, params })
+      const reply = replies[method]
+      if (reply instanceof Error) throw reply
+      return reply ?? {}
+    },
+    // No page starts a native drag unless a test says one does.
+    next: async (method: string) => events[method],
+  } as unknown as BrowserSession
+  return { session, sent }
+}
+
+/**
+ * A session that answers each `evaluate` by which element it asks about.
+ *
+ * Drag reads its two ends several times over — scrolling, settling,
+ * re-reading where the target ended up — so a queue of answers in call order
+ * would have to be re-counted every time that sequence changes.
+ * @param byTarget - the answer for an expression naming each target.
+ * @param replies - what each protocol command returns, by method.
+ * @param events - what `next` resolves to, by event name.
+ * @returns the stand-in session and the commands it received.
+ */
+function targetedSession(
+  byTarget: Record<string, Evaluated>,
+  replies: Record<string, unknown> = {},
+  events: Record<string, Record<string, unknown> | undefined> = {},
+): { session: BrowserSession; sent: Sent[] } {
+  const sent: Sent[] = []
+  const session = {
+    evaluate: async (expression: string) => {
+      sent.push({ method: 'evaluate', params: { expression } })
+      const match = Object.keys(byTarget).find((target) => expression.includes(JSON.stringify(target)))
+      if (match === undefined) throw new Error(`no answer for ${expression.slice(0, 60)}`)
+      return byTarget[match]
+    },
+    send: async (method: string, params?: Record<string, unknown>) => {
+      sent.push({ method, params })
+      const reply = replies[method]
+      if (reply instanceof Error) throw reply
+      return reply ?? {}
+    },
+    next: async (method: string) => events[method],
+  } as unknown as BrowserSession
+  return { session, sent }
+}
+
+/** An element the page reports as found, at a fixed point. */
+const AT = { ok: true as const, value: { found: true, x: 30, y: 40, tag: 'button', type: '', text: 'Go' } }
+
+/** A second element, somewhere else on the page. */
+const ELSEWHERE = { ok: true as const, value: { found: true, x: 200, y: 300, tag: 'div', type: '', text: 'Drop' } }
+
+/** What the page reports when nothing matches. */
+const MISSING = { ok: true as const, value: { found: false, reason: 'no element matches' } }
+
+describe('cssFor', () => {
+  it('turns a reference into the attribute a snapshot wrote', () => {
+    expect(cssFor('ref=7')).toBe('[data-dsh-ref="7"]')
+  })
+
+  it('passes a CSS selector through', () => {
+    expect(cssFor('#submit')).toBe('#submit')
+  })
+
+  it('has no selector for a text match', () => {
+    expect(cssFor('text=Submit')).toBeUndefined()
+  })
+})
+
+describe('click', () => {
+  it('presses and releases at the element, after moving there', async () => {
+    const { session, sent } = fakeSession([AT])
+    expect(await click(session, '#go')).toEqual({ ok: true, message: 'Clicked button "Go".' })
+    expect(sent.slice(1).map((each) => each.params?.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased'])
+    expect(sent[2].params).toMatchObject({ x: 30, y: 40, button: 'left', clickCount: 1 })
+  })
+
+  it('clicks with another button and count when asked', async () => {
+    const { session, sent } = fakeSession([AT])
+    await click(session, '#go', { button: 'right', count: 2 })
+    expect(sent[2].params).toMatchObject({ button: 'right', clickCount: 2 })
+  })
+
+  it('sends no input when the element is not there', async () => {
+    const { session, sent } = fakeSession([MISSING])
+    expect(await click(session, '#go')).toEqual({ ok: false, reason: '#go: no element matches' })
+    expect(sent.filter((each) => each.method === 'Input.dispatchMouseEvent')).toEqual([])
+  })
+
+  it('passes on an error the page raised while locating', async () => {
+    const { session } = fakeSession([{ ok: false, reason: 'target closed' }])
+    expect(await click(session, '#go')).toEqual({ ok: false, reason: 'target closed' })
+  })
+})
+
+describe('hover', () => {
+  it('moves the pointer with no button held', async () => {
+    const { session, sent } = fakeSession([AT])
+    expect(await hover(session, '#go')).toMatchObject({ ok: true })
+    expect(sent[1].params).toEqual({ type: 'mouseMoved', x: 30, y: 40, buttons: 0 })
+  })
+})
+
+describe('type', () => {
+  const focused = { ok: true as const, value: { found: true, focused: true } }
+
+  it('sends a key down and up per character', async () => {
+    const { session, sent } = fakeSession([focused])
+    expect(await type(session, '#name', 'ab', false)).toEqual({ ok: true, message: 'Typed "ab".' })
+    const keys = sent.filter((each) => each.method === 'Input.dispatchKeyEvent')
+    expect(keys.map((each) => [each.params?.type, each.params?.key])).toEqual([
+      ['keyDown', 'a'],
+      ['keyUp', 'a'],
+      ['keyDown', 'b'],
+      ['keyUp', 'b'],
+    ])
+  })
+
+  it('asks the page to clear the field when told to', async () => {
+    const { session, sent } = fakeSession([focused])
+    await type(session, '#name', 'x', true)
+    expect(sent[0].params?.expression).toContain('true')
+  })
+
+  // reason: typing lands wherever focus is, so typing into something that
+  // did not take focus writes into whatever did.
+  it('refuses when the element did not take focus', async () => {
+    const { session, sent } = fakeSession([{ ok: true, value: { found: true, focused: false } }])
+    expect(await type(session, 'div', 'x', false)).toMatchObject({ ok: false })
+    expect(sent.filter((each) => each.method === 'Input.dispatchKeyEvent')).toEqual([])
+  })
+
+  it('refuses a field it cannot find', async () => {
+    const { session } = fakeSession([MISSING])
+    expect(await type(session, '#name', 'x', false)).toEqual({ ok: false, reason: '#name: no element matches' })
+  })
+
+  it('refuses more text than one call sends', async () => {
+    const { session, sent } = fakeSession([focused])
+    expect(await type(session, '#name', 'x'.repeat(TYPE_LIMIT + 1), false)).toMatchObject({ ok: false })
+    expect(sent).toEqual([])
+  })
+
+  it('inserts a character that has no key of its own', async () => {
+    const { session, sent } = fakeSession([focused])
+    await type(session, '#name', '✅', false)
+    expect(sent.filter((each) => each.method === 'Input.insertText')).toHaveLength(1)
+  })
+})
+
+describe('press', () => {
+  it('sends a raw press for a key that inserts nothing', async () => {
+    const { session, sent } = fakeSession()
+    expect(await press(session, 'Escape')).toEqual({ ok: true, message: 'Pressed Escape.' })
+    expect(sent.map((each) => each.params?.type)).toEqual(['rawKeyDown', 'keyUp'])
+  })
+
+  it('sends a text-carrying press for a key that inserts one', async () => {
+    const { session, sent } = fakeSession()
+    await press(session, 'Enter')
+    expect(sent[0].params).toMatchObject({ type: 'keyDown', text: '\r' })
+  })
+
+  it('refuses a name that is not a key', async () => {
+    const { session, sent } = fakeSession()
+    expect(await press(session, 'Retrun')).toEqual({ ok: false, reason: 'Retrun is not a key.' })
+    expect(sent).toEqual([])
+  })
+})
+
+describe('drag', () => {
+  const both = { '#from': AT, '#to': ELSEWHERE }
+
+  it('presses, moves in steps with the button held, then releases at the target', async () => {
+    const { session, sent } = targetedSession(both)
+    expect(await drag(session, '#from', '#to')).toEqual({ ok: true, message: 'Dragged button onto div.' })
+    const mouse = sent.filter((each) => each.method === 'Input.dispatchMouseEvent')
+    expect(mouse[0].params).toMatchObject({ type: 'mouseMoved', buttons: 0 })
+    expect(mouse[1].params).toMatchObject({ type: 'mousePressed', x: 30, y: 40 })
+    const moves = mouse.slice(2, -1)
+    // reason: a press and a release at two points is not a drag — the
+    // libraries under test start only once the pointer has moved.
+    expect(moves.length).toBeGreaterThan(4)
+    expect(moves.every((each) => each.params?.buttons === 1)).toBe(true)
+    expect(mouse.at(-1)?.params).toMatchObject({ type: 'mouseReleased', x: 200, y: 300 })
+  })
+
+  it('interpolates between the two points rather than jumping', async () => {
+    const { session, sent } = targetedSession(both)
+    await drag(session, '#from', '#to')
+    const xs = sent
+      .filter((each) => each.method === 'Input.dispatchMouseEvent' && each.params?.type === 'mouseMoved')
+      .map((each) => each.params?.x as number)
+    expect(xs.at(-1)).toBe(200)
+    expect(xs.some((x) => x > 30 && x < 200)).toBe(true)
+  })
+
+  it('reads both ends in one scroll position', async () => {
+    const { session, sent } = targetedSession(both)
+    await drag(session, '#from', '#to')
+    const reads = sent.filter((each) => each.method === 'evaluate')
+    // Scroll to the source once, then measure everything without scrolling
+    // again — including the source, which late content may have moved.
+    expect(reads[0].params?.expression).toContain('true) element.scrollIntoView')
+    for (const read of reads.slice(1)) {
+      expect(read.params?.expression).toContain('false) element.scrollIntoView')
+    }
+  })
+
+  // reason: a page still loading adverts moves everything below them, and an
+  // element measured mid-shift is measured where the page is about to stop
+  // drawing it — so the press lands on nothing and the drag silently does
+  // nothing at all.
+  it('waits for the source to stop moving before pressing on it', async () => {
+    const places = [100, 200, 300, 300, 300]
+    let read = 0
+    const { session, sent } = targetedSession(both)
+    const original = session.evaluate.bind(session)
+    session.evaluate = async (expression: string) => {
+      const answer = await original(expression)
+      if (!expression.includes('"#from"')) return answer
+      const y = places[Math.min(read, places.length - 1)]
+      read += 1
+      return { ok: true, value: { found: true, x: 30, y, tag: 'div', type: '', text: '' } }
+    }
+    await drag(session, '#from', '#to')
+    expect(sent.find((each) => each.params?.type === 'mousePressed')?.params?.y).toBe(300)
+  })
+
+  // reason: late content arrives in bursts, and two reads taken between two
+  // bursts agree with each other while the page is still moving.
+  it('does not believe a single pair of agreeing reads', async () => {
+    const places = [100, 100, 400, 400, 400]
+    let read = 0
+    const { session, sent } = targetedSession(both)
+    const original = session.evaluate.bind(session)
+    session.evaluate = async (expression: string) => {
+      const answer = await original(expression)
+      if (!expression.includes('"#from"')) return answer
+      const y = places[Math.min(read, places.length - 1)]
+      read += 1
+      return { ok: true, value: { found: true, x: 30, y, tag: 'div', type: '', text: '' } }
+    }
+    await drag(session, '#from', '#to')
+    expect(sent.find((each) => each.params?.type === 'mousePressed')?.params?.y).toBe(400)
+  })
+
+  it('drags from the last known place rather than waiting forever', async () => {
+    let y = 0
+    const session = {
+      evaluate: async () => {
+        y += 10
+        return { ok: true as const, value: { found: true, x: 30, y, tag: 'div', type: '', text: '' } }
+      },
+      send: async () => ({}),
+      next: async () => undefined,
+    } as unknown as BrowserSession
+    await expect(drag(session, '#from', '#to')).resolves.toMatchObject({ ok: true })
+  })
+
+  // reason: a page whose adverts finish loading mid-drag moves everything
+  // under the pointer, and the point measured beforehand is then on whatever
+  // took the target's place.
+  it('releases where the target is by the end, not where it started', async () => {
+    let read = 0
+    const { session, sent } = targetedSession(both)
+    const original = session.evaluate.bind(session)
+    session.evaluate = async (expression: string) => {
+      if (!expression.includes('"#to"')) return await original(expression)
+      read += 1
+      return read === 1
+        ? ELSEWHERE
+        : { ok: true, value: { found: true, x: 200, y: 500, tag: 'div', type: '', text: 'Drop' } }
+    }
+    await drag(session, '#from', '#to')
+    const mouse = sent.filter((each) => each.method === 'Input.dispatchMouseEvent')
+    expect(mouse.at(-1)?.params).toMatchObject({ type: 'mouseReleased', x: 200, y: 500 })
+  })
+
+  it('releases where it aimed when the target can no longer be found', async () => {
+    let read = 0
+    const { session, sent } = targetedSession(both)
+    const original = session.evaluate.bind(session)
+    session.evaluate = async (expression: string) => {
+      if (!expression.includes('"#to"')) return await original(expression)
+      read += 1
+      return read === 1 ? ELSEWHERE : MISSING
+    }
+    expect(await drag(session, '#from', '#to')).toMatchObject({ ok: true })
+    const mouse = sent.filter((each) => each.method === 'Input.dispatchMouseEvent')
+    expect(mouse.at(-1)?.params).toMatchObject({ type: 'mouseReleased', x: 200, y: 300 })
+  })
+
+  it('says both ends have to be visible at once when the target is off screen', async () => {
+    const { session } = targetedSession({
+      '#from': AT,
+      '#to': { ok: true, value: { found: false, reason: 'the element is off screen even after scrolling to it' } },
+    })
+    const result = await drag(session, '#from', '#to')
+    expect(result).toMatchObject({ ok: false })
+    expect(result.ok ? '' : result.reason).toContain('both ends of a drag have to be visible at once')
+  })
+
+  it('presses nothing when the drop target is missing', async () => {
+    const { session, sent } = targetedSession({ '#from': AT, '#to': MISSING })
+    expect(await drag(session, '#from', '#to')).toMatchObject({ ok: false })
+    expect(sent.filter((each) => each.method === 'Input.dispatchMouseEvent')).toEqual([])
+  })
+
+  // reason: a page using the HTML5 drag API — react-dnd, and most React
+  // sortables — hands the pointer to Chromium on the first move, and every
+  // mouse event after that is swallowed. The rest of the path has to be sent
+  // as drag events or nothing arrives at the drop target.
+  describe('when the page starts a native drag', () => {
+    const intercept = { 'Input.dragIntercepted': { data: { items: [] } } }
+
+    it('carries the path across as drag events and drops at the target', async () => {
+      const { session, sent } = targetedSession(both, {}, intercept)
+      expect(await drag(session, '#from', '#to')).toEqual({
+        ok: true,
+        message: 'Dragged button onto div, as an HTML5 drag.',
+      })
+      const drags = sent.filter((each) => each.method === 'Input.dispatchDragEvent')
+      expect(drags[0].params).toMatchObject({ type: 'dragEnter', data: { items: [] } })
+      // reason: a drop target registers itself on `dragenter` and only then
+      // reads `dragover`, so entering once at the start means every element
+      // the path crosses afterwards is never listening.
+      expect(drags.filter((each) => each.params?.type === 'dragEnter').length).toBeGreaterThan(4)
+      expect(drags.filter((each) => each.params?.type === 'dragOver').length).toBeGreaterThan(4)
+      expect(drags.at(-1)?.params).toMatchObject({ type: 'drop', x: 200, y: 300 })
+    })
+
+    it('never releases the mouse, since Chromium owns the pointer', async () => {
+      const { session, sent } = targetedSession(both, {}, intercept)
+      await drag(session, '#from', '#to')
+      expect(sent.filter((each) => each.params?.type === 'mouseReleased')).toEqual([])
+    })
+
+    // reason: left on, the next drag on the page is caught and never
+    // completed — including one the user makes with their own mouse.
+    it('stops intercepting afterwards', async () => {
+      const { session, sent } = targetedSession(both, {}, intercept)
+      await drag(session, '#from', '#to')
+      expect(sent.filter((each) => each.method === 'Input.setInterceptDrags').map((each) => each.params)).toEqual([
+        { enabled: true },
+        { enabled: false },
+      ])
+    })
+
+    it('stops intercepting even when the drop fails', async () => {
+      const { session, sent } = targetedSession(
+        both,
+        { 'Input.dispatchDragEvent': new Error('target closed') },
+        intercept,
+      )
+      await expect(drag(session, '#from', '#to')).rejects.toThrow('target closed')
+      expect(sent.at(-1)).toEqual({ method: 'Input.setInterceptDrags', params: { enabled: false } })
+    })
+  })
+
+  it('uses the pointer when the page starts no native drag, and stops intercepting', async () => {
+    const { session, sent } = targetedSession(both)
+    await drag(session, '#from', '#to')
+    expect(sent.some((each) => each.method === 'Input.dispatchDragEvent')).toBe(false)
+    expect(sent.some((each) => each.params?.type === 'mouseReleased')).toBe(true)
+    expect(sent.filter((each) => each.method === 'Input.setInterceptDrags').map((each) => each.params)).toEqual([
+      { enabled: true },
+      { enabled: false },
+    ])
+  })
+})
+
+describe('selectOption', () => {
+  it('reports what the page selected', async () => {
+    const { session } = fakeSession([{ ok: true, value: { ok: true, selected: 'Show 20' } }])
+    expect(await selectOption(session, '#rows', 'Show 20')).toEqual({ ok: true, message: 'Selected "Show 20".' })
+  })
+
+  it('passes on the reason the page gave for refusing', async () => {
+    const { session } = fakeSession([{ ok: true, value: { ok: false, reason: 'no such option' } }])
+    expect(await selectOption(session, '#rows', 'Show 50')).toEqual({ ok: false, reason: '#rows: no such option' })
+  })
+})
+
+describe('uploadFile', () => {
+  it('sets the files on the node the selector matches', async () => {
+    const { session, sent } = fakeSession([], {
+      'DOM.getDocument': { root: { nodeId: 1 } },
+      'DOM.querySelector': { nodeId: 9 },
+    })
+    expect(await uploadFile(session, '#uploadPicture', ['/tmp/a.png'])).toEqual({
+      ok: true,
+      message: 'Attached /tmp/a.png.',
+    })
+    expect(sent.at(-1)).toEqual({
+      method: 'DOM.setFileInputFiles',
+      params: { files: ['/tmp/a.png'], nodeId: 9 },
+    })
+  })
+
+  it('resolves a reference to the attribute the snapshot wrote', async () => {
+    const { session, sent } = fakeSession([], {
+      'DOM.getDocument': { root: { nodeId: 1 } },
+      'DOM.querySelector': { nodeId: 9 },
+    })
+    await uploadFile(session, 'ref=4', ['/tmp/a.png'])
+    expect(sent[2].params?.selector).toBe('[data-dsh-ref="4"]')
+  })
+
+  it('attaches nothing when the selector matches nothing', async () => {
+    const { session, sent } = fakeSession([], {
+      'DOM.getDocument': { root: { nodeId: 1 } },
+      'DOM.querySelector': { nodeId: 0 },
+    })
+    expect(await uploadFile(session, '#absent', ['/tmp/a.png'])).toMatchObject({ ok: false })
+    expect(sent.some((each) => each.method === 'DOM.setFileInputFiles')).toBe(false)
+  })
+
+  it('refuses a target it cannot write as a selector', async () => {
+    const { session, sent } = fakeSession()
+    expect(await uploadFile(session, 'text=Choose', ['/tmp/a.png'])).toMatchObject({ ok: false })
+    expect(sent).toEqual([])
+  })
+})
+
+describe('resizeViewport', () => {
+  it('overrides what the page measures', async () => {
+    const { session, sent } = fakeSession()
+    expect(await resizeViewport(session, 1600, 900)).toEqual({
+      ok: true,
+      message: 'The page now measures 1600×900.',
+    })
+    expect(sent[0]).toEqual({
+      method: 'Emulation.setDeviceMetricsOverride',
+      params: { width: 1600, height: 900, deviceScaleFactor: 1, mobile: false },
+    })
+  })
+
+  it('clears the override when given no size', async () => {
+    const { session, sent } = fakeSession()
+    await resizeViewport(session, 0, 0)
+    expect(sent[0].method).toBe('Emulation.clearDeviceMetricsOverride')
+  })
+})
+
+describe('screenshot', () => {
+  it('returns the image the protocol captured', async () => {
+    const { session } = fakeSession([], { 'Page.captureScreenshot': { data: 'iVBOR' } })
+    expect(await screenshot(session)).toEqual({ ok: true, png: 'iVBOR' })
+  })
+
+  it('reports a capture that failed', async () => {
+    const { session } = fakeSession([], { 'Page.captureScreenshot': new Error('no target') })
+    expect(await screenshot(session)).toEqual({ ok: false, reason: 'no target' })
+  })
+})
+
+describe('readPage', () => {
+  it('returns the numbered elements under the page it read', async () => {
+    const { session } = fakeSession([
+      { ok: true, value: { url: 'https://demoqa.com/', title: 'Demo', elements: 'ref=1 button "Go"' } },
+    ])
+    expect(await readPage(session)).toEqual({
+      ok: true,
+      message: '# Demo\nhttps://demoqa.com/\n\nref=1 button "Go"',
+    })
+  })
+})

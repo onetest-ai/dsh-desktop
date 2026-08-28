@@ -15,7 +15,7 @@ export interface TreeEntry {
  * user did not create. Every other dotfile is shown — a project's `.dsh` and
  * `.env` are exactly what someone opens this tree to find.
  */
-const IGNORED = new Set(['.git', 'node_modules', '.DS_Store'])
+export const IGNORED = new Set(['.git', 'node_modules', '.DS_Store'])
 
 /**
  * Resolve a path inside a root, or undefined when it escapes.

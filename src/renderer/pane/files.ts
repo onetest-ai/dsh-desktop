@@ -360,4 +360,14 @@ window.pane.onProject((project) => {
   void showProject(project)
 })
 
+// Files arrive in a project from the agent and from the user's own editor,
+// not only from this tree; a listing this page never re-reads is one that
+// stops matching the disk within a minute of anyone working.
+window.pane.onProjectChanged((root, relative) => {
+  if (tree.root?.path !== root) return
+  void tree.refresh(relative).then(() => {
+    drawTree('', el('file-tree'))
+  })
+})
+
 window.pane.askProject()
