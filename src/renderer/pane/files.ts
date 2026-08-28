@@ -1,6 +1,6 @@
 import { Tree, type Project, type TreeEntry } from './tree.ts'
 import { fileIcon } from './file-icon.ts'
-import { icon } from './icons.ts'
+import { badgedIcon, icon } from './icons.ts'
 import './bridge.ts'
 import { followHarnessTheme } from './theme.ts'
 
@@ -8,8 +8,8 @@ import { followHarnessTheme } from './theme.ts'
 // tokens, so nothing here needs the answer.
 followHarnessTheme(() => {})
 
-el('new-file').append(icon('newFile', 14))
-el('new-folder').append(icon('newFolder', 14))
+el('new-file').append(badgedIcon('document'))
+el('new-folder').append(badgedIcon('folderClosed'))
 
 /**
  * One element by id.

@@ -97,15 +97,7 @@ export const GLYPHS = {
       "M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.90706 8.21562 9.13382 8.01172 9.29785C7.79912 9.46883 7.55595 9.61756 7.25 9.66602C7.08435 9.69222 6.91565 9.69222 6.75 9.66602C6.44405 9.61756 6.20088 9.46883 5.98828 9.29785C5.78438 9.13382 5.55843 8.90706 5.30273 8.65137L2.57617 5.92383L2.15137 5.5L3 4.65137L3.42383 5.07617L6.15137 7.80273C6.42595 8.07732 6.59876 8.24849 6.74023 8.3623C6.87291 8.46904 6.92272 8.47813 6.9375 8.48047C6.97895 8.48703 7.02105 8.48703 7.0625 8.48047C7.07728 8.47813 7.12709 8.46904 7.25977 8.3623C7.40124 8.24849 7.57405 8.07732 7.84863 7.80273L10.5762 5.07617L11 4.65137L11.8486 5.5Z"
     ]
   },
-  "newFile": {
-    "source": "IconProjectAddOutline16",
-    "viewBox": "0 0 16 16",
-    "paths": [
-      "M3.55246 0L3.55246 2.44252L6 2.44252L6 3.55748L3.55246 3.55748L3.55246 6L2.43834 6L2.43834 3.55748L0 3.55748L0 2.44252L2.43834 2.44252L2.43834 0L3.55246 0Z",
-      "M4.76367 0C5.36861 1.80598e-05 5.93113 0.310294 6.25488 0.821289L6.78027 1.64941C6.79685 1.67558 6.81791 1.69775 6.83887 1.71973C6.72186 2.15521 6.65702 2.61192 6.65137 3.08301C6.25601 2.96045 5.90909 2.70478 5.68164 2.3457L5.15723 1.5166C5.07183 1.38189 4.92318 1.3008 4.76367 1.30078L2.32422 1.30078C1.7589 1.30078 1.30078 1.7589 1.30078 2.32422L1.30078 10.1338C1.30078 10.6991 1.7589 11.1572 2.32422 11.1572L11.9766 11.1572C12.5419 11.1572 13 10.6991 13 10.1338L13 8.58398C13.4545 8.5135 13.8903 8.38748 14.3008 8.21289L14.3008 10.1338C14.3008 11.4171 13.2598 12.458 11.9766 12.458L2.32422 12.458C1.04093 12.458 0 11.4171 0 10.1338L0 2.32422C0 1.04093 1.04093 0 2.32422 0L4.76367 0Z"
-    ]
-  },
-  "newFolder": {
+  "plus": {
     "source": "IconPlusOutline16",
     "viewBox": "0 0 16 16",
     "paths": [
@@ -136,4 +128,25 @@ export function icon(name: keyof typeof GLYPHS, size = 16): SVGElement {
     svg.append(path)
   }
   return svg
+}
+
+/**
+ * A glyph with a small plus over its corner.
+ *
+ * The harness's set has no "new file" or "new folder" of its own, and a bare
+ * plus says nothing about what is being created. Composed rather than drawn:
+ * two of its own glyphs, in its own vocabulary, which is how every editor
+ * draws these.
+ * @param name - the glyph to badge.
+ * @param size - the base glyph's edge length in pixels.
+ * @returns the element, ready to append.
+ */
+export function badgedIcon(name: keyof typeof GLYPHS, size = 14): HTMLElement {
+  const stack = document.createElement('span')
+  stack.className = 'icon-stack'
+  stack.append(icon(name, size))
+  const plus = icon('plus', Math.round(size * 0.62))
+  plus.classList.add('icon-badge')
+  stack.append(plus)
+  return stack
 }

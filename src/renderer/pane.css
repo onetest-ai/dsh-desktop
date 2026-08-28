@@ -568,3 +568,22 @@ body {
   color: var(--dsw-alias-state-error-primary);
   font-size: 11px;
 }
+
+/* A glyph with a plus over its corner: what "new file" and "new folder" look
+   like everywhere, composed here because the harness's set has neither. The
+   badge sits on the page's own ground so it reads as an overlay rather than
+   as part of the glyph beneath it. */
+.icon-stack {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  border-radius: 50%;
+  background: var(--dsw-specific-sidebar-fill);
+}
