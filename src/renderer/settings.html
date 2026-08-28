@@ -93,98 +93,113 @@
   <section id="panel-mcp" role="tabpanel" aria-labelledby="tab-mcp" tabindex="0" class="panel" hidden>
     <section class="group group-flat">
       <label class="mcp-master"><input type="checkbox" id="mcp-enabled"> Connect to MCP servers</label>
-      <p class="hint">Each enabled server's tools become available to the agent under its own name. With this off, no server is contacted and nothing is added to the agent's context.</p>
-      <p class="hint">Servers here are <strong>global</strong>: one process shared by every session, so a server that writes files uses one directory for all of them. For a server that should follow the project — Playwright, filesystem — put it in <code>&lt;project&gt;/.dsh/mcp.json</code> instead, where each session gets its own process in its own directory. A global server of the same name wins unless that entry sets <code>"override": true</code>.</p>
+      <p class="hint">Each enabled server's tools become available to the agent under its own name. With this off, no server is contacted and nothing it offers reaches the model.</p>
+      <p class="hint"><strong>Adding or removing a server saves it straight away</strong>, to the <code>mcp.json</code> its scope names. The two switches on this tab are saved with the rest of the form.</p>
     </section>
 
     <p class="group-label" id="view-tools-label">This app's own views</p>
     <section class="group group-flat" aria-labelledby="view-tools-label">
       <label class="mcp-master"><input type="checkbox" id="view-tools"> Let the agent open files and pages in the side pane</label>
-      <p class="hint">Adds four tools the agent can call: show a file in the editor, open a page in the Web tab, show a change it proposes before making it, and read what you have selected. Served on this machine only, and only while the app is running — nothing is written to <code>mcp.json</code>. They reach the agent over MCP, so <strong>Connect to MCP servers</strong> above must be on.</p>
+      <p class="hint">Adds the view tools the agent can call: show a file in the editor, open a page in the Web tab, show a change it proposes before making it, read your selection, and drive the built-in browser.</p>
     </section>
 
-    <p class="group-label" id="mcp-add-label">Add a server</p>
-    <section class="group group-flat" aria-labelledby="mcp-add-label">
-      <div class="row">
-        <select id="mcp-preset" aria-label="Server to add"></select>
-        <button id="add-mcp-preset" type="button">Add</button>
-      </div>
-      <p class="hint" id="mcp-preset-note"></p>
+    <section class="scope" aria-labelledby="mcp-servers-label">
+      <header class="scope-header">
+        <div class="scope-heading">
+          <h2 class="scope-title" id="mcp-servers-label">Global servers</h2>
+          <p class="scope-where">One process shared by every session, so a server that writes files uses one directory for all of them. Kept in <code>~/.dsh/mcp.json</code>.</p>
+        </div>
+        <button type="button" id="open-mcp-config-file" class="scope-action">Open file…</button>
+      </header>
+      <p class="check-result" id="open-mcp-config-file-result" role="status"></p>
 
-      <details class="mcp-custom">
-        <summary>Add a server by hand</summary>
-        <label for="mcp-custom-name">Name</label>
-        <input id="mcp-custom-name" type="text" placeholder="my-server" spellcheck="false">
-        <label for="mcp-custom-command">Command <span class="hint-inline">(for a local server)</span></label>
-        <input id="mcp-custom-command" type="text" placeholder="npx" spellcheck="false">
-        <label for="mcp-custom-args">Arguments <span class="hint-inline">(space separated)</span></label>
-        <input id="mcp-custom-args" type="text" placeholder="-y @playwright/mcp@latest" spellcheck="false">
-        <label for="mcp-custom-url">URL <span class="hint-inline">(for a remote server instead)</span></label>
-        <input id="mcp-custom-url" type="text" placeholder="https://example.com/mcp" spellcheck="false">
-        <button id="add-mcp-custom" type="button">Add</button>
-        <p class="error" id="error-mcp-custom"></p>
-      </details>
-
-      <details class="mcp-custom">
-        <summary>Paste a configuration block</summary>
-        <p class="hint">Paste the <code>mcpServers</code> block from any server's README — the same JSON Claude Desktop and Cursor take.</p>
-        <textarea id="mcp-paste" rows="6" spellcheck="false" placeholder='{ "mcpServers": { "memory": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"] } } }'></textarea>
-        <button id="paste-mcp-block" type="button">Add from JSON</button>
-        <p class="error" id="error-mcp-paste"></p>
-      </details>
-    </section>
-
-    <p class="group-label" id="mcp-servers-label">Servers</p>
-    <section class="group group-flat" aria-labelledby="mcp-servers-label">
-      <p class="mcp-off-warning" id="mcp-off-warning" role="status" hidden>MCP is switched off, so none of these servers are connected. Tick <strong>Connect to MCP servers</strong> above and save.</p>
+      <p class="mcp-off-warning" id="mcp-off-warning" role="status" hidden>MCP is switched off, so none of these servers are connected. Tick <strong>Connect to MCP servers</strong> above.</p>
       <p class="hint" id="mcp-status" role="status"></p>
       <pre class="progress" id="mcp-progress" role="status" hidden></pre>
       <ul id="mcp-rows" class="plugin-rows"></ul>
       <p class="error" id="error-mcp"></p>
       <button type="button" id="mcp-add-anyway" class="mcp-add-anyway" hidden>Add it anyway</button>
-      <p class="hint">Servers are saved as soon as you change them, in <code>mcp.json</code>. The switch above is saved with the rest of the form.</p>
-      <button type="button" id="open-mcp-config-file" class="open-config-file">Open mcp.json…</button>
-      <p class="check-result" id="open-mcp-config-file-result" role="status"></p>
+
+      <div class="scope-add">
+        <div class="row">
+          <select id="mcp-preset" aria-label="Server to add"></select>
+          <button id="add-mcp-preset" type="button">Add</button>
+        </div>
+        <p class="hint" id="mcp-preset-note"></p>
+
+        <details class="mcp-custom">
+          <summary>Add a server by hand</summary>
+          <label for="mcp-custom-name">Name</label>
+          <input id="mcp-custom-name" type="text" placeholder="my-server" spellcheck="false">
+          <label for="mcp-custom-command">Command <span class="hint-inline">(for a local server)</span></label>
+          <input id="mcp-custom-command" type="text" placeholder="npx" spellcheck="false">
+          <label for="mcp-custom-args">Arguments <span class="hint-inline">(space separated)</span></label>
+          <input id="mcp-custom-args" type="text" placeholder="-y @playwright/mcp@latest" spellcheck="false">
+          <label for="mcp-custom-url">URL <span class="hint-inline">(for a remote server instead)</span></label>
+          <input id="mcp-custom-url" type="text" placeholder="https://example.com/mcp" spellcheck="false">
+          <button id="add-mcp-custom" type="button">Add</button>
+          <p class="error" id="error-mcp-custom"></p>
+        </details>
+
+        <details class="mcp-custom">
+          <summary>Paste a configuration block</summary>
+          <p class="hint">Paste the <code>mcpServers</code> block from any server's README — the same JSON Claude Desktop and Cursor take.</p>
+          <textarea id="mcp-paste" rows="6" spellcheck="false" placeholder='{ "mcpServers": { "memory": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"] } } }'></textarea>
+          <button id="paste-mcp-block" type="button">Add from JSON</button>
+          <p class="error" id="error-mcp-paste"></p>
+        </details>
+      </div>
     </section>
 
-    <p class="group-label" id="mcp-project-label">Per-project servers</p>
-    <section class="group group-flat" aria-labelledby="mcp-project-label">
-      <p class="hint">What each project declares in its own <code>&lt;project&gt;/.dsh/mcp.json</code>, loaded per session by <code>dsh-project-mcp-bridge</code>. Changes take effect in about a second — no restart.</p>
-      <select id="mcp-workspace" aria-label="Project"></select>
+    <section class="scope" aria-labelledby="mcp-project-label">
+      <header class="scope-header">
+        <div class="scope-heading">
+          <h2 class="scope-title" id="mcp-project-label">Servers for one project</h2>
+          <p class="scope-where">Loaded per session by <code>dsh-project-mcp-bridge</code> from that project's own <code>.dsh/mcp.json</code>. Changes take effect in about a second — no restart.</p>
+          <p class="scope-file" id="mcp-project-file" hidden></p>
+        </div>
+        <button type="button" id="open-project-mcp-file" class="scope-action">Open file…</button>
+      </header>
+      <p class="check-result" id="open-project-mcp-file-result" role="status"></p>
 
-      <div class="row">
-        <select id="mcp-project-preset" aria-label="Server to add to this project"></select>
-        <button id="add-mcp-project-preset" type="button">Add</button>
+      <div class="scope-picker">
+        <label class="scope-picker-label" for="mcp-workspace">Project</label>
+        <select id="mcp-workspace"></select>
       </div>
-      <p class="hint" id="mcp-project-preset-note"></p>
-
-      <details class="mcp-custom">
-        <summary>Add a server by hand</summary>
-        <label for="mcp-project-custom-name">Name</label>
-        <input id="mcp-project-custom-name" type="text" placeholder="my-server" spellcheck="false">
-        <label for="mcp-project-custom-command">Command <span class="hint-inline">(for a local server)</span></label>
-        <input id="mcp-project-custom-command" type="text" placeholder="npx" spellcheck="false">
-        <label for="mcp-project-custom-args">Arguments <span class="hint-inline">(space separated)</span></label>
-        <input id="mcp-project-custom-args" type="text" placeholder="-y @playwright/mcp@latest" spellcheck="false">
-        <label for="mcp-project-custom-url">URL <span class="hint-inline">(for a remote server instead)</span></label>
-        <input id="mcp-project-custom-url" type="text" placeholder="https://example.com/mcp" spellcheck="false">
-        <button id="add-mcp-project-custom" type="button">Add</button>
-        <p class="error" id="error-mcp-project-custom"></p>
-      </details>
-
-      <details class="mcp-custom">
-        <summary>Paste a configuration block</summary>
-        <p class="hint">The same <code>mcpServers</code> JSON, written into this project's file.</p>
-        <textarea id="mcp-project-paste" rows="6" spellcheck="false" placeholder='{ "mcpServers": { "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@latest"] } } }'></textarea>
-        <button id="paste-mcp-project-block" type="button">Add from JSON</button>
-        <p class="error" id="error-mcp-project-paste"></p>
-      </details>
 
       <ul id="mcp-workspace-rows" class="plugin-rows"></ul>
       <p class="hint" id="mcp-workspace-status" role="status"></p>
       <p class="error" id="error-mcp-project"></p>
-      <button type="button" id="open-project-mcp-file" class="open-config-file">Open this project's mcp.json…</button>
-      <p class="check-result" id="open-project-mcp-file-result" role="status"></p>
+
+      <div class="scope-add">
+        <div class="row">
+          <select id="mcp-project-preset" aria-label="Server to add to this project"></select>
+          <button id="add-mcp-project-preset" type="button">Add</button>
+        </div>
+        <p class="hint" id="mcp-project-preset-note"></p>
+
+        <details class="mcp-custom">
+          <summary>Add a server by hand</summary>
+          <label for="mcp-project-custom-name">Name</label>
+          <input id="mcp-project-custom-name" type="text" placeholder="my-server" spellcheck="false">
+          <label for="mcp-project-custom-command">Command <span class="hint-inline">(for a local server)</span></label>
+          <input id="mcp-project-custom-command" type="text" placeholder="npx" spellcheck="false">
+          <label for="mcp-project-custom-args">Arguments <span class="hint-inline">(space separated)</span></label>
+          <input id="mcp-project-custom-args" type="text" placeholder="-y @playwright/mcp@latest" spellcheck="false">
+          <label for="mcp-project-custom-url">URL <span class="hint-inline">(for a remote server instead)</span></label>
+          <input id="mcp-project-custom-url" type="text" placeholder="https://example.com/mcp" spellcheck="false">
+          <button id="add-mcp-project-custom" type="button">Add</button>
+          <p class="error" id="error-mcp-project-custom"></p>
+        </details>
+
+        <details class="mcp-custom">
+          <summary>Paste a configuration block</summary>
+          <p class="hint">The same <code>mcpServers</code> JSON, written into this project's file.</p>
+          <textarea id="mcp-project-paste" rows="6" spellcheck="false" placeholder='{ "mcpServers": { "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@latest"] } } }'></textarea>
+          <button id="paste-mcp-project-block" type="button">Add from JSON</button>
+          <p class="error" id="error-mcp-project-paste"></p>
+        </details>
+      </div>
     </section>
   </section>
 

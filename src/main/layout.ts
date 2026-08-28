@@ -183,7 +183,12 @@ export function layout(bounds: { width: number; height: number }, columns: Colum
     filesDivider: { x: rail.x, width: 0, ...band },
   }
   open.forEach((column, index) => {
-    places[`${column.key}Divider`] = { x, width: DIVIDER_WIDTH, ...band }
+    // The first divider borders the harness, which keeps the window's full
+    // height — so it runs the full height too, past the docked panel's left
+    // edge. Cut to the band it would leave that edge with no seam against the
+    // conversation at all. Dividers between two columns stop where they do.
+    const bordersHarness = index === 0 && slot === undefined
+    places[`${column.key}Divider`] = { x, width: DIVIDER_WIDTH, ...(bordersHarness ? full : band) }
     x += DIVIDER_WIDTH
     places[column.key] = { x, width: widths[index], ...band }
     x += widths[index]
@@ -199,11 +204,19 @@ export function layout(bounds: { width: number; height: number }, columns: Colum
     files: places.files,
     // Docked along the bottom of the columns, or standing in the editor's own
     // slot at full height. Closed, it has no size at all.
+    // Docked, it starts after the divider that borders the harness rather than
+    // at it: that divider is a gap the window's own page shows through, and a
+    // view laid over the gap hides the seam and swallows the drag.
     terminalDivider: docked
-      ? { x: bandStart, y: bandHeight, width: bandWidth, height: DIVIDER_WIDTH }
+      ? { x: bandStart + DIVIDER_WIDTH, y: bandHeight, width: bandWidth - DIVIDER_WIDTH, height: DIVIDER_WIDTH }
       : slot?.divider ?? empty,
     terminal: docked
-      ? { x: bandStart, y: bandHeight + DIVIDER_WIDTH, width: bandWidth, height: panelHeight }
+      ? {
+        x: bandStart + DIVIDER_WIDTH,
+        y: bandHeight + DIVIDER_WIDTH,
+        width: bandWidth - DIVIDER_WIDTH,
+        height: panelHeight,
+      }
       : slot?.panel ?? empty,
   }
 }

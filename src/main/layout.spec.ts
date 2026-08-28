@@ -152,7 +152,9 @@ describe('the terminal panel', () => {
     expect(places.harness).toMatchObject({ y: 0, height: 860 })
     expect(places.rail).toMatchObject({ y: 0, height: 860 })
     expect(places.editor.height).toBe(860 - 240 - DIVIDER_WIDTH)
-    expect(places.editorDivider.height).toBe(places.editor.height)
+    // The divider bordering the harness runs the window's full height; the one
+    // between two columns stops where they stop.
+    expect(places.editorDivider.height).toBe(860)
     expect(places.filesDivider.height).toBe(places.editor.height)
   })
 
@@ -163,7 +165,9 @@ describe('the terminal panel', () => {
 
   it('spans the columns it sits under', () => {
     const places = layout(BOUNDS, withPanel({ editor: { width: 520, open: true }, files: { width: 240, open: true } }))
-    expect(places.terminal.x).toBe(places.editorDivider.x)
+    // Starting after the harness's divider, not over it: a view laid across
+    // that gap hides the seam and swallows the drag.
+    expect(places.terminal.x).toBe(places.editorDivider.x + DIVIDER_WIDTH)
     expect(places.terminal.x + places.terminal.width).toBe(places.rail.x)
     expect(places.terminalDivider.x).toBe(places.terminal.x)
     expect(places.terminalDivider.width).toBe(places.terminal.width)
@@ -202,6 +206,17 @@ describe('the terminal panel', () => {
 
   describe('with the editor open', () => {
     const both = withPanel({ editor: { width: 520, open: true }, files: { width: 240, open: true } })
+
+    // reason: the panel's left edge meets the conversation, and the divider
+    // between them stopped where the columns stopped — leaving that edge with
+    // no seam and nothing to grab.
+    it('runs the harness divider past the panel, to the window’s full height', () => {
+      const places = layout(BOUNDS, both)
+      expect(places.editorDivider).toMatchObject({ y: 0, height: 860 })
+      expect(places.editorDivider.x + places.editorDivider.width).toBe(places.terminal.x)
+      // The divider between two columns still stops where they stop.
+      expect(places.filesDivider.height).toBe(places.editor.height)
+    })
 
     it('docks along the bottom instead of taking a column', () => {
       const places = layout(BOUNDS, both)

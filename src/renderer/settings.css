@@ -129,6 +129,91 @@ section.group {
    layout and the tight 10px rhythm between the hint, the Add control, and
    the row list — the parts that relied on the card for grouping — while
    dropping only its border, background, and padding. */
+/* A scope card: everything belonging to one place servers are stored — its
+   name, where that is, the file, the servers, and the ways to add one. The MCP
+   tab has two of these, and they carry identical controls; without the card
+   the two sets read as one long list and it is not clear which file an "Add a
+   server by hand" writes to. */
+.scope {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.scope-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.scope-heading {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.scope-title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--label);
+}
+
+.scope-where {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--label-secondary);
+}
+
+/* The file this scope writes, beside its name — not a bare path under the
+   last server row, where it read as output from something rather than as the
+   answer to "which file is this?". Truncated from the left: the end of a path
+   is what identifies it, and these are long. */
+.scope-file {
+  margin: 0;
+  font-family: var(--dsw-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--label-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.scope-action {
+  flex: 0 0 auto;
+}
+
+.scope-picker {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.scope-picker-label {
+  font-size: 12px;
+  color: var(--label-secondary);
+}
+
+/* Held apart from the servers above it by a rule rather than by space alone:
+   the same two disclosures appear in both cards, and the line is what says
+   they belong to this one. */
+.scope-add {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
 .group-flat {
   border: none;
   background: none;

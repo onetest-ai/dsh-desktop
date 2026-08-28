@@ -312,6 +312,17 @@ function renderWorkspaceRows() {
   list.textContent = ''
   const workspace = chosenWorkspace()
 
+  // Which file this card is about belongs in its header, beside the button
+  // that opens it — not printed under the last row, where a bare path reads
+  // as output from something rather than as an answer.
+  const file = el('mcp-project-file')
+  // Truncation from the left is a right-to-left container, which reorders the
+  // path's leading slash to the visual end unless the run is marked
+  // left-to-right. U+200E does that and renders as nothing.
+  file.textContent = workspace === undefined ? '' : `\u200e${workspace.file}`
+  file.title = workspace === undefined ? '' : workspace.file
+  file.hidden = workspace === undefined
+
   if (workspace === undefined) {
     status.textContent = 'No projects yet. Open a folder in the harness and it will appear here.'
     el('open-project-mcp-file').disabled = true
@@ -320,12 +331,10 @@ function renderWorkspaceRows() {
   el('open-project-mcp-file').disabled = false
 
   if (workspace.servers.length === 0) {
-    status.textContent = workspace.declared
-      ? `${workspace.file} declares no servers.`
-      : `${workspace.title} declares none. Add them in ${workspace.file}.`
+    status.textContent = 'This project declares no servers yet.'
     return
   }
-  status.textContent = workspace.file
+  status.textContent = ''
 
   for (const server of workspace.servers) {
     const row = document.createElement('li')

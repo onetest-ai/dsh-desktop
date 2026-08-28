@@ -150,7 +150,11 @@ async function begin(): Promise<void> {
     return
   }
   session = started.id
-  el('terminal-cwd').textContent = started.cwd
+  // Marked left-to-right: the header truncates from the left with a
+  // right-to-left container, which would otherwise reorder the path's leading
+  // slash to the visual end.
+  el('terminal-cwd').textContent = `\u200e${started.cwd}`
+  el('terminal-cwd').title = started.cwd
   el('terminal-title').textContent = started.shell.split('/').pop() ?? 'Terminal'
   report('')
   term.focus()

@@ -2061,10 +2061,30 @@ describe('per-project MCP servers', () => {
     expect(rowToggle(renderer.workspaceRows()[0])?.checked).toBe(false)
   })
 
-  it('says where to declare servers for a project that declares none', async () => {
+  // reason: the file is the answer to "which one is this?", so it belongs in
+  // the card's header beside the button that opens it — not printed under the
+  // last row, where a bare path read as output from something.
+  it('names the file in the header, and says the project declares nothing yet', async () => {
     const renderer = await withWorkspaces([{ path: '/p/bare', title: 'bare', file: '/p/bare/.dsh/mcp.json', declared: false, servers: [] }])
-    expect(renderer.elements.get('mcp-workspace-status')?.textContent).toContain('/p/bare/.dsh/mcp.json')
+    expect(renderer.elements.get('mcp-project-file')?.textContent).toContain('/p/bare/.dsh/mcp.json')
+    expect(renderer.elements.get('mcp-project-file')?.title).toBe('/p/bare/.dsh/mcp.json')
+    expect(renderer.elements.get('mcp-project-file')?.hidden).toBe(false)
+    expect(renderer.elements.get('mcp-workspace-status')?.textContent).toContain('no servers yet')
     expect(renderer.workspaceRows()).toEqual([])
+  })
+
+  it('names the file once servers are declared, without repeating it below them', async () => {
+    const renderer = await withWorkspaces([{
+      path: '/p/one', title: 'one', file: '/p/one/.dsh/mcp.json', declared: true,
+      servers: [{ name: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp@latest'] }],
+    }])
+    expect(renderer.elements.get('mcp-project-file')?.textContent).toContain('/p/one/.dsh/mcp.json')
+    expect(renderer.elements.get('mcp-workspace-status')?.textContent).toBe('')
+  })
+
+  it('has no file to name when no project is chosen', async () => {
+    const renderer = await withWorkspaces([])
+    expect(renderer.elements.get('mcp-project-file')?.hidden).toBe(true)
   })
 
   // reason: with no project chosen there is no file to open, and a button
