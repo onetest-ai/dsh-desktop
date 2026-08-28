@@ -1,4 +1,5 @@
 import { FitAddon } from '@xterm/addon-fit'
+import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import { followHarnessTheme } from '../pane/theme.ts'
 import { palette } from './palette.ts'
@@ -42,6 +43,9 @@ const term = new Terminal({
   cursorBlink: true,
   fontSize: 12,
   fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
+  // Rows sit flush against each other at the default 1.0, which reads as one
+  // block of text rather than as lines.
+  lineHeight: 1.25,
   // Enough to scroll back through a build's output without holding a session
   // of it in memory.
   scrollback: 5_000,
@@ -49,6 +53,21 @@ const term = new Terminal({
 const fit = new FitAddon()
 term.loadAddon(fit)
 term.open(surface)
+
+// The GPU renderer, with xterm's DOM renderer as the fallback it falls back to
+// on its own. The DOM renderer positions each cell with layout rather than
+// drawing to a grid, so glyphs drift out of their columns and rows run
+// together — legible in a demo, wrong in a terminal.
+try {
+  const webgl = new WebglAddon()
+  webgl.onContextLoss(() => {
+    webgl.dispose()
+  })
+  term.loadAddon(webgl)
+} catch {
+  // No GPU context available in this window: xterm keeps the DOM renderer,
+  // which draws everything correctly enough to work with.
+}
 
 /** The running shell, or undefined before one starts or after it exits. */
 let session: number | undefined

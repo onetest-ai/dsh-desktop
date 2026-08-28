@@ -22,10 +22,13 @@ let dragging
  * @param {PointerEvent} event - the move that carried the pointer.
  */
 function report(column, event) {
-  // The terminal is sized by its height, measured from the bottom edge: the
-  // panel grows upward as the divider is dragged up, which is the direction
-  // every editor's panel grows.
-  if (column === 'terminal') {
+  // A docked terminal is sized by its height, measured from the bottom edge:
+  // the panel grows upward as the divider is dragged up, the direction every
+  // editor's panel grows. Standing in the editor's slot it is sized by width
+  // like any other column, so the axis follows the divider's orientation
+  // rather than the column's name.
+  const divider = document.getElementById(`divider-${column}`)
+  if (divider?.classList.contains('divider-horizontal')) {
     window.shell.resizeColumn(column, Math.round(window.innerHeight - (event.screenY - window.screenY)))
     return
   }
@@ -40,11 +43,19 @@ window.shell.onPlaces((places) => {
     const place = places[divider.dataset.column]
     divider.style.left = `${place.x}px`
     divider.style.width = `${place.width}px`
-    // The terminal's runs along the bottom, so it is placed by top and height
-    // as well; the vertical ones inherit both from the stylesheet.
-    if (divider.classList.contains('divider-horizontal')) {
+    // The terminal's divider changes orientation with the panel: it is a
+    // horizontal seam when the panel is docked along the bottom, and a
+    // vertical one when the panel stands in the editor's slot. The rect says
+    // which — the short side is the seam — and a divider left classed the
+    // wrong way collapses to nothing and cannot be grabbed at all.
+    const horizontal = place.width > place.height
+    divider.classList.toggle('divider-horizontal', horizontal && divider.dataset.column === 'terminal')
+    if (horizontal && divider.dataset.column === 'terminal') {
       divider.style.top = `${place.y}px`
       divider.style.height = `${place.height}px`
+    } else {
+      divider.style.top = ''
+      divider.style.height = ''
     }
     // A closed column leaves a zero-width gap; hiding it as well keeps it out
     // of the tab order, where a separator that resizes nothing is noise.

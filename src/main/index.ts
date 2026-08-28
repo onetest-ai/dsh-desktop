@@ -1859,10 +1859,17 @@ if (!app.requestSingleInstanceLock()) {
     // page draws one per open column.
     ipcMain.on('shell:resize-column', (_event, key: keyof Columns, windowX: number) => {
       if (views === undefined || views.window.isDestroyed()) return
-      // The panel is sized by height, and the page already measured it from
-      // the bottom edge — there is no column outside it to account for.
+      // Docked along the bottom the panel is sized by height, which the page
+      // measured from the bottom edge. Standing in the editor's slot it is a
+      // column like any other and sized by width — the same distinction the
+      // divider's own orientation follows.
       if (key === 'terminal') {
-        setTerminalHeight(windowX)
+        if (columns.editor.open) setTerminalHeight(windowX)
+        else {
+          const [full] = views.window.getContentSize()
+          const outside = columns.files.open ? views.files.getBounds().width + DIVIDER_WIDTH : 0
+          setColumn('terminal', { width: full - RAIL_WIDTH - windowX - outside })
+        }
         return
       }
       const [width] = views.window.getContentSize()
@@ -1874,7 +1881,8 @@ if (!app.requestSingleInstanceLock()) {
     })
     ipcMain.on('shell:nudge-column', (_event, key: keyof Columns, delta: number) => {
       if (key === 'terminal') {
-        setTerminalHeight(columns.terminal.height + delta)
+        if (columns.editor.open) setTerminalHeight(columns.terminal.height + delta)
+        else setColumn('terminal', { width: columns.terminal.width + delta })
         return
       }
       setColumn(key, { width: columns[key].width + delta })
