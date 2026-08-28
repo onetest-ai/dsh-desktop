@@ -363,9 +363,10 @@ function showProject(project?: { path: string; title: string }): void {
 /**
  * Follow the harness's workspace list for as long as the app runs.
  *
- * The list changes when a session attaches to a workspace, which is the
- * closest thing the harness records to "the project being worked in" — it
- * publishes no current-workspace of its own.
+ * A fallback. When the desktop plugin is installed it reports the open
+ * session's own directory, which is exact; this covers the case where it is
+ * not, using the closest thing the harness writes down — the list moves when
+ * a session attaches to a workspace.
  */
 function watchWorkspaces(): void {
   try {
@@ -1673,6 +1674,16 @@ if (!app.requestSingleInstanceLock()) {
       toggleColumn('files')
     })
     ipcMain.on('shell:toggle-web', toggleWeb)
+    // The harness telling us which project it is working in — pushed by the
+    // desktop plugin when the user switches session. Better than anything
+    // this app can infer: selecting an existing session moves nothing on
+    // disk, so the file watchers below never see it.
+    ipcMain.on('harness:workspace', (_event, cwd: string) => {
+      const workspace = readWorkspaces(DSH_HOME).find((each) => each.path === cwd)
+      if (workspace === undefined) return
+      currentProject = undefined
+      showProject({ path: workspace.path, title: workspace.title })
+    })
     // A link in a rendered file goes where the user's links go, not into a
     // view of this app. Checked here because the URL comes from a file.
     ipcMain.on('pane:open-external', (_event, url: string) => {

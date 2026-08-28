@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { desktop } from './desktop'
+import { desktop } from './desktop.ts'
 
 afterEach(() => {
   delete (globalThis as { dshDesktop?: unknown }).dshDesktop

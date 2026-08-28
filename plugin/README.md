@@ -6,7 +6,11 @@ That app runs the DeepSeek Harness Web UI beside columns of its own — a file t
 
 ## What it does
 
-Nothing visible. It contributes no UI: the desktop app draws its own controls on its own rail, and a second set of buttons in the harness's sidebar was two places to toggle one thing.
+Two things, neither of them visible. It contributes no UI: the desktop app draws its own controls on its own rail, and a second set of buttons in the harness's sidebar was two places to toggle one thing.
+
+**Tells that app which project you are working in.** The harness's session list knows which session is open and what directory it works in; this reports that directory whenever it changes, so the desktop app's file tree follows you between workspaces. Nothing on disk moves when you switch to an existing session, so without this the app has nothing to notice.
+
+**Puts a path in the message box.** `Add to Chat` in the tree's context menu hands over a file or folder; this appends its path to what you are typing.
 
 Outside the desktop app it does nothing at all — the bridge it listens to is something that app's preload puts on the page, and it is absent everywhere else.
 

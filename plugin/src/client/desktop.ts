@@ -10,6 +10,12 @@ export interface ChatReference {
 export interface DesktopBridge {
   /** Hear about a file or folder the user picked in that app's tree. */
   onAddToChat(listener: (reference: ChatReference) => void): void
+  /**
+   * Tell it which directory the open session works in, so its file tree
+   * follows. Optional: a desktop older than this plugin has no such call, and
+   * falls back to reading the harness's own files.
+   */
+  setWorkspace?(cwd: string): void
 }
 
 /**

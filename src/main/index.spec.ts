@@ -1914,6 +1914,32 @@ describe('the side columns', () => {
     expect(fake.nativeTheme.on).toHaveBeenCalledWith('updated', expect.any(Function))
   })
 
+  // reason: switching to an existing session moves nothing on disk, so no
+  // watcher sees it — the harness has to say so, and the plugin is what says.
+  it('shows the project the harness reports it is working in', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/one', title: 'one', file: '/p/one/.dsh/mcp.json', declared: false, servers: [] },
+      { path: '/p/two', title: 'two', file: '/p/two/.dsh/mcp.json', declared: false, servers: [] },
+    ])
+    await bootReady()
+    fake.views.files.webContents.send.mockClear()
+    fake.sendIpc('harness:workspace', '/p/two')
+    expect(fake.views.files.webContents.send).toHaveBeenCalledWith('pane:project', {
+      path: '/p/two',
+      title: 'two',
+    })
+  })
+
+  it('ignores a directory that is not a project the harness has opened', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/one', title: 'one', file: '/p/one/.dsh/mcp.json', declared: false, servers: [] },
+    ])
+    await bootReady()
+    fake.views.files.webContents.send.mockClear()
+    fake.sendIpc('harness:workspace', '/somewhere/else')
+    expect(fake.views.files.webContents.send).not.toHaveBeenCalled()
+  })
+
   it('opens at the widths the last session stored, with the editor closed', async () => {
     configResult = {
       configured: true,

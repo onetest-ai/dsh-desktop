@@ -33,18 +33,19 @@ export const PROJECT_MCP_BRIDGE = 'dsh-project-mcp-bridge@0.2.1'
  * user typed.
  */
 /**
- * The harness-side half of Add to Chat.
+ * The harness-side half of two things that only the harness page can answer.
  *
- * Its browser half puts a path the user picked in this app's file tree into
- * the harness's message box. It draws nothing: this app's own controls are on
- * its rail, so an install that removes this plugin loses Add to Chat and
- * nothing else.
+ * Its browser half reports which project the open session works in — so the
+ * file tree follows a workspace switch, which moves nothing on disk for this
+ * app to notice — and puts a path from Add to Chat into the message box. It
+ * draws nothing: this app's own controls are on its rail, so an install that
+ * removes this plugin loses those two and nothing else.
  *
  * Pinned like every default: it ships from the same repository as this app
  * and is expected to move with it, which is exactly why an update should be
  * a deliberate raise rather than whatever `latest` happens to be.
  */
-export const DESKTOP_PANE = '@onetest/dsh-desktop-pane@0.2.0'
+export const DESKTOP_PANE = '@onetest/dsh-desktop-pane@0.2.1'
 
 export const DEFAULT_PLUGIN_SPECS: readonly string[] = [PROJECT_MCP_BRIDGE, DESKTOP_PANE]
 

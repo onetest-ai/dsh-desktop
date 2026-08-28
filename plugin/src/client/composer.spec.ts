@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
-import { appendToComposer } from './composer'
+import { appendToComposer } from './composer.ts'
 
 /** A textarea standing in for the harness's message box. */
 function field(value = ''): HTMLTextAreaElement {
