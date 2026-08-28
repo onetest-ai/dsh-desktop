@@ -23,6 +23,15 @@ export interface DesktopConfig {
    */
   extraPath?: string
   /**
+   * The shell the built-in terminal runs, as an absolute path.
+   *
+   * Absent means the login shell `$SHELL` names, and a platform default when
+   * it names none. Configurable for the reason VS Code makes it
+   * configurable: `$SHELL` is what the machine logs you in with, which is not
+   * always what you want a terminal inside an editor to run.
+   */
+  terminalShell?: string
+  /**
    * Packages the desktop shell installs and inserts into the harness,
    * managed exactly like `harness`'s own managed source — pinned, cached,
    * update-checked. Optional so a `desktop.json` predating this field stays
@@ -172,6 +181,9 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
   if (record.extraPath !== undefined && typeof record.extraPath !== 'string') {
     throw new ConfigurationError(`dsh-desktop: ${filePath} "extraPath" must be a string`)
   }
+  if (record.terminalShell !== undefined && typeof record.terminalShell !== 'string') {
+    throw new ConfigurationError(`dsh-desktop: ${filePath} "terminalShell" must be a string`)
+  }
 
   // Unlike every check above, a malformed `pane` is dropped rather than
   // thrown: it is window state this app writes for itself, never something
@@ -186,6 +198,7 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     ...(record.pnpmPath === undefined ? {} : { pnpmPath: record.pnpmPath }),
     ...(record.npmPath === undefined ? {} : { npmPath: record.npmPath }),
     ...(record.extraPath === undefined ? {} : { extraPath: record.extraPath }),
+    ...(record.terminalShell === undefined ? {} : { terminalShell: record.terminalShell }),
     ...(record.plugins === undefined ? {} : { plugins: record.plugins }),
     ...(record.mcpEnabled === undefined ? {} : { mcpEnabled: record.mcpEnabled }),
     ...(record.mcpClientVersion === undefined ? {} : { mcpClientVersion: record.mcpClientVersion }),

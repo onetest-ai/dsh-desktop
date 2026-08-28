@@ -41,7 +41,10 @@ import { createSettingsHandlers } from './settings-ipc'
 import { settingsContents, openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
 import { createTray, type TrayController } from './tray'
-import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, createWindow, installMenu, registerPaneScheme, servePane, showError, type MainWindow } from './window'
+import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, createWindow, installMenu, registerPaneScheme, servePane, showError, type MainWindow,
+  DEFAULT_TERMINAL_HEIGHT,
+  DEFAULT_TERMINAL_WIDTH,
+} from './window'
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
 import { DIVIDER_WIDTH, RAIL_WIDTH, type Columns } from './layout'
@@ -113,6 +116,7 @@ let views: MainWindow | undefined
 const columns: Columns = {
   editor: { width: DEFAULT_EDITOR_WIDTH, open: false },
   files: { width: DEFAULT_FILES_WIDTH, open: false },
+  terminal: { width: DEFAULT_TERMINAL_WIDTH, height: DEFAULT_TERMINAL_HEIGHT, open: false },
 }
 
 /**

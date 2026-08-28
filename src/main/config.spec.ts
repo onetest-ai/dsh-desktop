@@ -325,3 +325,30 @@ describe('writeConfig and a reader racing it', () => {
     expect(result.configured && result.config.harness).toEqual({ kind: 'local', repo: '/tmp/b' })
   })
 })
+
+describe('terminalShell', () => {
+  /**
+   * Load a config with the given extra fields.
+   * @param extra - fields merged over a minimal valid config.
+   * @returns the loaded config.
+   */
+  function loadWith(extra: Record<string, unknown>): ReturnType<typeof loadConfig> {
+    return loadConfig(
+      writeConfigFile(JSON.stringify({ harness: { kind: 'local', repo: '/tmp/harness' }, ...extra })),
+    )
+  }
+
+  it('is carried through when set', () => {
+    expect(loadWith({ terminalShell: '/bin/bash' }).config).toMatchObject({ terminalShell: '/bin/bash' })
+  })
+
+  it('is absent when not set, which means the login shell', () => {
+    expect(loadWith({}).config).not.toHaveProperty('terminalShell')
+  })
+
+  // reason: every other field fails loud on the wrong type, and a shell that
+  // is a number would reach `pty.spawn` as one.
+  it('refuses a value that is not a string', () => {
+    expect(() => loadWith({ terminalShell: 42 })).toThrow(/terminalShell/)
+  })
+})

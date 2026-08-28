@@ -69,6 +69,10 @@ export interface MainWindow {
 export const DEFAULT_EDITOR_WIDTH = 520
 export const DEFAULT_FILES_WIDTH = 220
 
+/** How tall the terminal panel opens, and how wide it claims when no column is open. */
+export const DEFAULT_TERMINAL_HEIGHT = 240
+export const DEFAULT_TERMINAL_WIDTH = 720
+
 /**
  * Where the pane is served from.
  *
@@ -230,6 +234,7 @@ let webShowing = false
 let lastColumns: Columns = {
   editor: { width: DEFAULT_EDITOR_WIDTH, open: false },
   files: { width: DEFAULT_FILES_WIDTH, open: false },
+  terminal: { width: DEFAULT_TERMINAL_WIDTH, height: DEFAULT_TERMINAL_HEIGHT, open: false },
 }
 
 /**

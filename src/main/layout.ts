@@ -28,6 +28,18 @@ export const RAIL_WIDTH = 30
 export const MIN_EDITOR_WIDTH = 320
 export const MIN_FILES_WIDTH = 180
 
+/**
+ * Below this a terminal wraps every command it is given.
+ *
+ * Eighty columns is the width shell output has been written for since before
+ * any of it was written; narrower and `git status` and a stack trace both
+ * become unreadable.
+ */
+export const MIN_TERMINAL_WIDTH = 480
+
+/** Below this the terminal shows too few lines to follow what a command did. */
+export const MIN_TERMINAL_HEIGHT = 120
+
 /** A view's bounds, in the window's coordinates. */
 export interface Rect {
   x: number
@@ -46,6 +58,17 @@ export interface ColumnState {
 export interface Columns {
   editor: ColumnState
   files: ColumnState
+  /**
+   * The terminal panel, whose stored `width` is what it claims for itself when
+   * no column is open to sit under.
+   */
+  terminal: PanelState
+}
+
+/** The terminal panel's stored state. */
+export interface PanelState extends ColumnState {
+  /** How tall the panel is; its width comes from the columns it sits under. */
+  height: number
 }
 
 /** Where each of the window's parts goes, left to right. */
@@ -59,6 +82,10 @@ export interface Layout {
   /** The gap before the files column; zero-width when that column is closed. */
   filesDivider: Rect
   files: Rect
+  /** The gap above the terminal panel; zero-height when it is closed. */
+  terminalDivider: Rect
+  /** The terminal panel along the bottom of the columns; zero-sized when closed. */
+  terminal: Rect
 }
 
 /**
@@ -79,7 +106,14 @@ export interface Layout {
  * @returns bounds for all five parts, together covering the window exactly.
  */
 export function layout(bounds: { width: number; height: number }, columns: Columns): Layout {
-  const full = { y: 0, height: bounds.height }
+  // The terminal takes its height off the bottom of the columns' band, so
+  // every column is laid out into what it leaves.
+  const panelOpen = columns.terminal.open
+  const panelHeight = panelOpen
+    ? Math.min(Math.max(columns.terminal.height, MIN_TERMINAL_HEIGHT), bounds.height)
+    : 0
+  const bandHeight = Math.max(0, bounds.height - panelHeight - (panelOpen ? DIVIDER_WIDTH : 0))
+  const full = { y: 0, height: bandHeight }
   const railWidth = Math.min(RAIL_WIDTH, bounds.width)
   const rail = { x: bounds.width - railWidth, width: railWidth, ...full }
   // Everything else divides what the rail leaves.
@@ -92,6 +126,12 @@ export function layout(bounds: { width: number; height: number }, columns: Colum
   const gaps = open.length * DIVIDER_WIDTH
   const available = Math.max(0, usable - gaps)
   const wanted = open.map((column) => Math.max(column.state.width, column.min))
+  // The panel spans whatever the columns occupy. With none open it has
+  // nothing to sit under, so it claims a band of its own and the harness
+  // gives up the width — otherwise the toggle would appear to do nothing.
+  const soloWidth = panelOpen && open.length === 0
+    ? Math.min(Math.max(columns.terminal.width, MIN_TERMINAL_WIDTH), Math.max(0, usable - MIN_HARNESS_WIDTH))
+    : 0
   const total = wanted.reduce((sum, width) => sum + width, 0)
   const spare = Math.max(0, available - MIN_HARNESS_WIDTH)
 
@@ -102,8 +142,10 @@ export function layout(bounds: { width: number; height: number }, columns: Colum
   const widths = wanted.map((width) => Math.floor(width * scale))
   const used = widths.reduce((sum, width) => sum + width, 0)
 
-  let x = available - used
-  const harness = { x: 0, width: x, ...full }
+  let x = available - used - soloWidth
+  const harness = { x: 0, width: Math.max(0, x), ...full }
+  const bandStart = Math.max(0, x)
+  const bandWidth = usable - bandStart
   const places: Record<string, Rect> = {
     editor: { x: rail.x, width: 0, ...full },
     files: { x: rail.x, width: 0, ...full },
@@ -117,6 +159,7 @@ export function layout(bounds: { width: number; height: number }, columns: Colum
     x += widths[index]
   })
 
+  const empty = { x: bandStart, y: bounds.height, width: 0, height: 0 }
   return {
     harness,
     rail,
@@ -124,5 +167,11 @@ export function layout(bounds: { width: number; height: number }, columns: Colum
     editor: places.editor,
     filesDivider: places.filesDivider,
     files: places.files,
+    terminalDivider: panelOpen
+      ? { x: bandStart, y: bandHeight, width: bandWidth, height: DIVIDER_WIDTH }
+      : empty,
+    terminal: panelOpen
+      ? { x: bandStart, y: bandHeight + DIVIDER_WIDTH, width: bandWidth, height: panelHeight }
+      : empty,
   }
 }

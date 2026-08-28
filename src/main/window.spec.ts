@@ -85,8 +85,9 @@ beforeEach(() => {
 })
 
 /** The columns' stored state, as `index.ts` holds them. */
-const CLOSED = { editor: { width: 520, open: false }, files: { width: 220, open: false } }
-const OPEN = { editor: { width: 520, open: true }, files: { width: 240, open: true } }
+const PANEL = { width: 720, height: 240, open: false }
+const CLOSED = { editor: { width: 520, open: false }, files: { width: 220, open: false }, terminal: PANEL }
+const OPEN = { editor: { width: 520, open: true }, files: { width: 240, open: true }, terminal: PANEL }
 
 describe('the main window drag region', () => {
   it('exports drag CSS that marks a top strip draggable and interactive elements not draggable', async () => {
@@ -161,7 +162,7 @@ describe('the window\'s views', () => {
   // the window resizes unless this puts it back.
   it('re-lays the views out when the window resizes', async () => {
     const { createWindow } = await import('./window')
-    createWindow({ editor: { width: 420, open: true }, files: { width: 240, open: false } })
+    createWindow({ editor: { width: 420, open: true }, files: { width: 240, open: false }, terminal: PANEL })
     fake.windowInstance.getContentSize.mockReturnValue([1200, 600])
     expect(fake.resizeHandlers).toHaveLength(1)
     fake.resizeHandlers[0]?.()

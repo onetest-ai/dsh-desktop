@@ -6,7 +6,12 @@ const BOUNDS = { width: 1280, height: 860 }
 
 /** Column state with both closed, overridable per test. */
 function columns(overrides: Partial<Columns> = {}): Columns {
-  return { editor: { width: 520, open: false }, files: { width: 240, open: false }, ...overrides }
+  return {
+    editor: { width: 520, open: false },
+    files: { width: 240, open: false },
+    terminal: { width: 720, height: 240, open: false },
+    ...overrides,
+  }
 }
 
 /** Every part's width, in the order they appear left to right. */
@@ -101,8 +106,73 @@ describe('layout', () => {
     expect(all.reduce((sum, width) => sum + width, 0)).toBe(tiny.width)
   })
 
-  it('gives every part the full window height', () => {
+  it('gives every column the full window height while the terminal is closed', () => {
     const places = layout(BOUNDS, columns({ editor: { width: 520, open: true }, files: { width: 240, open: true } }))
-    for (const rect of Object.values(places)) expect(rect).toMatchObject({ y: 0, height: 860 })
+    for (const [name, rect] of Object.entries(places)) {
+      if (name.startsWith('terminal')) continue
+      expect(rect, name).toMatchObject({ y: 0, height: 860 })
+    }
+  })
+
+  it('gives the terminal no size at all while it is closed', () => {
+    const places = layout(BOUNDS, columns({ editor: { width: 520, open: true } }))
+    expect(places.terminal).toMatchObject({ width: 0, height: 0 })
+    expect(places.terminalDivider).toMatchObject({ width: 0, height: 0 })
+  })
+})
+
+describe('the terminal panel', () => {
+  const withPanel = (overrides: Partial<Columns> = {}): Columns =>
+    columns({ terminal: { width: 720, height: 240, open: true }, ...overrides })
+
+  it('sits along the bottom, under the columns, with a gap above it', () => {
+    const places = layout(BOUNDS, withPanel({ editor: { width: 520, open: true }, files: { width: 240, open: true } }))
+    expect(places.terminal).toMatchObject({ y: 860 - 240, height: 240 })
+    expect(places.terminalDivider).toMatchObject({ y: 860 - 240 - DIVIDER_WIDTH, height: DIVIDER_WIDTH })
+    // Its top edge is where the columns now stop.
+    expect(places.editor.height).toBe(860 - 240 - DIVIDER_WIDTH)
+    expect(places.files.height).toBe(places.editor.height)
+  })
+
+  // reason: it is one panel across everything this app owns, not a panel per
+  // column, so it starts where the harness stops and runs to the rail.
+  it('spans the columns it sits under', () => {
+    const places = layout(BOUNDS, withPanel({ editor: { width: 520, open: true }, files: { width: 240, open: true } }))
+    expect(places.terminal.x).toBe(places.editorDivider.x)
+    expect(places.terminal.x + places.terminal.width).toBe(places.rail.x)
+    expect(places.terminalDivider.x).toBe(places.terminal.x)
+    expect(places.terminalDivider.width).toBe(places.terminal.width)
+  })
+
+  it('spans one open column just the same', () => {
+    const places = layout(BOUNDS, withPanel({ files: { width: 240, open: true } }))
+    expect(places.terminal.x).toBe(places.filesDivider.x)
+    expect(places.terminal.x + places.terminal.width).toBe(places.rail.x)
+  })
+
+  // reason: with nothing to sit under it would be zero-width, and the toggle
+  // would look like it did nothing at all.
+  it('claims a band of its own when no column is open', () => {
+    const places = layout(BOUNDS, withPanel())
+    expect(places.terminal.width).toBe(720)
+    expect(places.terminal.x + places.terminal.width).toBe(places.rail.x)
+    expect(places.harness.width).toBe(1280 - RAIL_WIDTH - 720)
+  })
+
+  it('leaves the harness usable when it claims that band', () => {
+    const places = layout({ width: 900, height: 860 }, withPanel())
+    expect(places.harness.width).toBeGreaterThanOrEqual(MIN_HARNESS_WIDTH)
+    expect(places.terminal.width).toBeGreaterThan(0)
+  })
+
+  it('never asks for more height than the window has', () => {
+    const places = layout({ width: 1280, height: 200 }, withPanel({ editor: { width: 520, open: true } }))
+    expect(places.terminal.height).toBeLessThanOrEqual(200)
+    expect(places.editor.height).toBeGreaterThanOrEqual(0)
+  })
+
+  it('covers the window exactly, top to bottom', () => {
+    const places = layout(BOUNDS, withPanel({ editor: { width: 520, open: true } }))
+    expect(places.editor.height + places.terminalDivider.height + places.terminal.height).toBe(860)
   })
 })

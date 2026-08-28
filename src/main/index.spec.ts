@@ -220,6 +220,8 @@ vi.mock('./window', () => ({
   PANE_ORIGIN: 'app://pane',
   DEFAULT_EDITOR_WIDTH: 520,
   DEFAULT_FILES_WIDTH: 220,
+  DEFAULT_TERMINAL_HEIGHT: 240,
+  DEFAULT_TERMINAL_WIDTH: 720,
   installMenu: (...args: unknown[]) => installMenuMock(...(args as [])),
 }))
 
@@ -1780,7 +1782,10 @@ describe('the side columns', () => {
     toggle()
     expect(applyLayout).toHaveBeenLastCalledWith(
       fake.views,
-      { editor: expect.objectContaining({ open: false }), files: expect.objectContaining({ open: true }) },
+      expect.objectContaining({
+        editor: expect.objectContaining({ open: false }),
+        files: expect.objectContaining({ open: true }),
+      }),
       expect.any(Boolean),
     )
     toggle()
@@ -1949,6 +1954,9 @@ describe('the side columns', () => {
     expect(createWindow).toHaveBeenCalledWith({
       editor: { width: 600, open: false },
       files: { width: 300, open: true },
+      // A stored config predating the terminal opens it closed, at its
+      // default size, rather than refusing to load.
+      terminal: { width: 720, height: 240, open: false },
     })
   })
 
