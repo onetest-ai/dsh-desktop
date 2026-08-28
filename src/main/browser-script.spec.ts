@@ -113,6 +113,49 @@ describe('locateScript', () => {
     const out = eval(locateScript('#go')) as { found: boolean; reason: string }
     expect(out.found).toBe(false)
     expect(out.reason).toContain('div#advert.ad.wide')
+    expect(out.reason).toContain('scroll it away')
+  })
+
+  // reason: a combobox lays a hidden input over its own placeholder. That
+  // input is a sibling of the placeholder, not its child, and it receives the
+  // click on the widget's behalf — refusing it makes every react-select
+  // unclickable.
+  it("accepts a click landing on the element's own sibling", () => {
+    document.body.innerHTML =
+      '<div id="control"><div id="placeholder">Select State</div><div id="dummy" class="css-19bb58m"></div></div>'
+    for (const element of document.querySelectorAll('*')) {
+      // The control is barely larger than the placeholder inside it; the body
+      // is a page.
+      const box =
+        element === document.body
+          ? { left: 0, top: 0, width: 1000, height: 800 }
+          : { left: 10, top: 20, width: 100, height: 40 }
+      Object.defineProperty(element, 'getBoundingClientRect', { value: () => box })
+      Object.defineProperty(element, 'scrollIntoView', { value: () => {} })
+    }
+    atPoint('#dummy')
+    expect(eval(locateScript('#placeholder'))).toMatchObject({ found: true })
+  })
+
+  // reason: a banner across the middle of a row leaves both of its ends
+  // clickable, and giving up on the centre alone calls a reachable element
+  // unreachable.
+  it('tries other points on the element before calling it covered', () => {
+    document.body.innerHTML = '<button id="go">Go</button><div id="advert"></div>'
+    for (const element of document.querySelectorAll('*')) {
+      Object.defineProperty(element, 'getBoundingClientRect', {
+        value: () => ({ left: 0, top: 0, width: 100, height: 40 }),
+      })
+      Object.defineProperty(element, 'scrollIntoView', { value: () => {} })
+    }
+    // The advert covers the middle of the button and nothing else.
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: (x: number) => document.querySelector(x === 50 ? '#advert' : '#go'),
+    })
+    const out = eval(locateScript('#go')) as { found: boolean; x: number }
+    expect(out.found).toBe(true)
+    expect(out.x).not.toBe(50)
   })
 
   it('accepts a click landing on something inside the element', () => {
@@ -184,26 +227,56 @@ describe('locateScript', () => {
 
 describe('focusScript', () => {
   it('focuses a field', () => {
-    run('<input id="name" value="old">', focusScript('#name', false))
+    run('<input id="name" value="old">', focusScript('#name'))
     expect(document.activeElement?.id).toBe('name')
   })
 
-  // reason: assigning `value` directly is invisible to a React-controlled
-  // field, which is most of what this drives.
-  it('clears through the prototype setter and announces the change', () => {
+  it('reports a field it cannot find', () => {
+    expect(run('<p>x</p>', focusScript('#absent'))).toMatchObject({ found: false })
+  })
+
+  // reason: emptying a field by assigning to it and announcing the change is
+  // not what a person does, and a component may answer it however it likes —
+  // a date picker given an empty value out of band unmounts itself and takes
+  // the rest of the form with it.
+  it('changes nothing about the field it focuses', () => {
+    const out = run<{ found: boolean }>('<input id="name" value="keep me">', focusScript('#name'))
+    expect(out).toMatchObject({ found: true })
+    expect((document.querySelector('#name') as HTMLInputElement).value).toBe('keep me')
+  })
+
+  it('never announces an input event', () => {
     document.body.innerHTML = '<input id="name" value="old">'
     const field = document.querySelector('#name') as HTMLInputElement
     Object.defineProperty(field, 'getBoundingClientRect', { value: () => ({ left: 0, top: 0, width: 10, height: 10 }) })
     Object.defineProperty(field, 'scrollIntoView', { value: () => {} })
     const seen: string[] = []
-    field.addEventListener('input', () => seen.push(field.value))
-    eval(focusScript('#name', true))
-    expect(field.value).toBe('')
-    expect(seen).toEqual([''])
+    field.addEventListener('input', () => seen.push('input'))
+    eval(focusScript('#name'))
+    expect(seen).toEqual([])
   })
 
-  it('reports a field it cannot find', () => {
-    expect(run('<p>x</p>', focusScript('#absent', true))).toMatchObject({ found: false })
+  // reason: focusing can open a picker, which re-renders the field; the node
+  // that ends up focused is then a different one carrying the same identity.
+  it('accepts the element that replaced the one it focused', () => {
+    document.body.innerHTML = '<input id="date" value="old">'
+    const stub = (element: Element): void => {
+      Object.defineProperty(element, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({ left: 0, top: 0, width: 10, height: 10 }),
+      })
+      Object.defineProperty(element, 'scrollIntoView', { configurable: true, value: () => {} })
+    }
+    const original = document.querySelector('#date') as HTMLInputElement
+    stub(original)
+    original.addEventListener('focus', () => {
+      const replacement = document.createElement('input')
+      replacement.id = 'date'
+      stub(replacement)
+      original.replaceWith(replacement)
+      replacement.focus()
+    })
+    expect(eval(focusScript('#date'))).toEqual({ found: true, focused: true })
   })
 })
 

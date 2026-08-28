@@ -21,7 +21,9 @@ function automation(overrides: Partial<BrowserAutomation> = {}): BrowserAutomati
     type: vi.fn(async () => ({ ok: true, message: 'Typed "Olha".' }) as const),
     press: vi.fn(async () => ({ ok: true, message: 'Pressed Enter.' }) as const),
     selectOption: vi.fn(async () => ({ ok: true, message: 'Selected "NCR".' }) as const),
-    drag: vi.fn(async () => ({ ok: true, message: 'Dragged li onto li.' }) as const),
+    drag: vi.fn(async () => ({ ok: true, message: 'Dragged li to li.' }) as const),
+    waitFor: vi.fn(async () => ({ ok: true, message: '"Saved" is there after 0.4s.' }) as const),
+    takeNavigations: vi.fn(() => []),
     evaluate: vi.fn(async () => ({ ok: true, value: { rows: 3 } }) as const),
     uploadFile: vi.fn(async () => ({ ok: true, message: 'Attached.' }) as const),
     resize: vi.fn(async () => ({ ok: true, message: 'The page now measures 1600×900.' }) as const),
@@ -120,6 +122,7 @@ describe('the view tools server', () => {
       'browser_select_option',
       'browser_type',
       'browser_upload_file',
+      'browser_wait_for',
       'read_open_page',
       'view_get_selection',
       'view_open_file',
@@ -298,7 +301,35 @@ describe('the browser tools', () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
     await callTool(url, 'browser_drag', { from: 'text=One', to: 'text=Six' })
-    expect(browser.drag).toHaveBeenCalledWith('text=One', 'text=Six')
+    expect(browser.drag).toHaveBeenCalledWith('text=One', 'text=Six', { dx: 0, dy: 0 })
+  })
+
+  // reason: a resize handle is dragged by a distance, and the nearest element
+  // to that distance is not the same thing.
+  it('drags by a distance when given one', async () => {
+    const browser = automation()
+    const url = await serve(deps({ browser }))
+    await callTool(url, 'browser_drag', { from: '.handle', dx: 50, dy: 30 })
+    expect(browser.drag).toHaveBeenCalledWith('.handle', undefined, { dx: 50, dy: 30 })
+  })
+
+  it('waits for something to appear, and for something to go', async () => {
+    const browser = automation()
+    const url = await serve(deps({ browser }))
+    await callTool(url, 'browser_wait_for', { text: 'Saved' })
+    expect(browser.waitFor).toHaveBeenCalledWith(undefined, 'Saved', false, 10)
+    await callTool(url, 'browser_wait_for', { target: '#spinner', gone: true, seconds: 30 })
+    expect(browser.waitFor).toHaveBeenLastCalledWith('#spinner', undefined, true, 30)
+  })
+
+  // reason: a page that navigates under an automation run loses everything
+  // typed into it, and a run that is not told cannot tell that from a step
+  // that simply failed.
+  it('reports a page the browser moved to on its own', async () => {
+    const browser = automation({ takeNavigations: vi.fn(() => [{ url: 'https://demoqa.com/alerts' }]) })
+    const url = await serve(deps({ browser }))
+    const text = textOf(await callTool(url, 'browser_type', { target: '#firstName', text: 'Olha' }))
+    expect(text).toContain('The browser moved to https://demoqa.com/alerts.')
   })
 
   it('returns what an expression evaluated to, as JSON', async () => {

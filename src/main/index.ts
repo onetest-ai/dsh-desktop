@@ -67,6 +67,7 @@ import {
   selectOption as chooseOption,
   type as typeText,
   uploadFile as attachFile,
+  waitFor as awaitCondition,
 } from './browser-actions'
 import { harnessTheme, settingsPath } from './harness-theme'
 import { workspacesPath } from './workspaces'
@@ -251,16 +252,16 @@ const browserAutomation: BrowserAutomation = {
   type: (target, text, clear) => typeText(browser, target, text, clear),
   press: (key) => pressKey(browser, key),
   selectOption: (target, value) => chooseOption(browser, target, value),
-  drag: (from, to) => dragElement(browser, from, to),
+  drag: (from, to, offset) => dragElement(browser, from, to, offset),
+  waitFor: (target, text, gone, seconds) => awaitCondition(browser, target, text, gone, seconds),
   evaluate: (expression) => browser.evaluate(expression),
   uploadFile: (target, path) => attachFile(browser, target, [path]),
   resize: (width, height) => resizeViewport(browser, width, height),
   screenshot: () => capturePage(browser),
-  setDialogPolicy: (policy) => {
-    browser.setDialogPolicy(policy)
-  },
+  setDialogPolicy: (policy) => browser.setDialogPolicy(policy),
   takeConsole: () => browser.takeConsole(),
   takeDialogs: () => browser.takeDialogs(),
+  takeNavigations: () => browser.takeNavigations(),
 }
 
 /**
@@ -295,6 +296,10 @@ async function fetchPageText(url: string): Promise<PageText> {
     webContents.on('did-finish-load', onLoad)
     webContents.on('did-fail-load', onFail)
   })
+  // This navigation was asked for, so it is not news: reporting it would put
+  // "the browser moved" against the very call that moved it, and bury the
+  // ones nobody asked for.
+  browser.takeNavigations()
   if (!loaded) return { ok: false, reason: `${url} did not finish loading.` }
   return await readPageText()
 }

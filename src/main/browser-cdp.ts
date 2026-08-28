@@ -23,6 +23,12 @@ export interface ConsoleEntry {
   text: string
 }
 
+/** One page the browser moved to on its own. */
+export interface NavigationRecord {
+  /** The address it went to. */
+  url: string
+}
+
 /** One dialog the page opened, and what was done with it. */
 export interface DialogRecord {
   /** `alert`, `confirm`, `prompt`, or `beforeunload`. */
@@ -49,6 +55,14 @@ export interface DialogPolicy {
  */
 export const LOG_LIMIT = 200
 
+/**
+ * How long a dialog is given to be reported after the action that opened it.
+ *
+ * The browser reports one a moment after the call that caused it returns, so
+ * without this the dialog is attributed to whatever the model does next.
+ */
+const DIALOG_GRACE_MS = 80
+
 /** What one `Runtime.evaluate` returned, or why it did not. */
 export type Evaluated = { ok: true; value: unknown } | { ok: false; reason: string }
 
@@ -63,8 +77,11 @@ export class BrowserSession {
   private policy: DialogPolicy = { accept: false }
   private readonly logged: ConsoleEntry[] = []
   private readonly opened: DialogRecord[] = []
+  private readonly navigated: NavigationRecord[] = []
   private listening = false
   private readonly waiting = new Map<string, ((params: Record<string, unknown>) => void)[]>()
+  private attaching: Promise<Debuggee> | undefined
+  private promptScript: string | undefined
 
   /**
    * @param debuggee - reads the current view's debugger, or undefined when
@@ -77,7 +94,25 @@ export class BrowserSession {
    * @returns the attached debugger.
    * @throws when there is no window to attach to.
    */
-  private attached(): Debuggee {
+  private async attached(): Promise<Debuggee> {
+    // One attach at a time: several tool calls can arrive together, and each
+    // enabling the domains again would race the first one's dialog handler
+    // into place after the dialog it was meant to answer.
+    this.attaching ??= this.attach()
+    try {
+      return await this.attaching
+    } catch (error) {
+      this.attaching = undefined
+      throw error
+    }
+  }
+
+  /**
+   * Attach the debugger and make the page ready to be driven.
+   * @returns the attached debugger.
+   * @throws when there is no window to attach to.
+   */
+  private async attach(): Promise<Debuggee> {
     const target = this.debuggee()
     if (target === undefined) throw new Error('The browser is not open.')
     if (!this.listening) {
@@ -86,14 +121,45 @@ export class BrowserSession {
       })
       this.listening = true
     }
-    if (!target.isAttached()) {
-      target.attach('1.3')
-      // Enabled here rather than lazily: a page logs and opens dialogs
-      // whether or not anyone has asked yet, and a domain enabled after the
-      // fact reports nothing that already happened.
-      for (const domain of ['Page', 'Runtime', 'Log']) void target.sendCommand(`${domain}.enable`)
-    }
+    if (!target.isAttached()) target.attach('1.3')
+    // Awaited, not fired off: the first thing a caller does may be to click
+    // something that opens a dialog, and a dialog that opens before `Page` is
+    // enabled is never reported — it blocks the renderer instead, and with it
+    // every call after it.
+    for (const domain of ['Page', 'Runtime', 'Log']) await target.sendCommand(`${domain}.enable`)
+    await this.installPrompt(target)
     return target
+  }
+
+  /**
+   * Give the page a `window.prompt` that answers from the dialog policy.
+   *
+   * Electron does not implement `prompt`: it throws `prompt() is not
+   * supported.` before any dialog exists, so there is nothing for the
+   * protocol to intercept and a page that calls it fails outright. This
+   * substitutes one that behaves the way an answered dialog would, so
+   * `alert`, `confirm`, and `prompt` all follow the same policy.
+   *
+   * Installed for every future document as well as the current one, and
+   * reinstalled whenever the policy changes, so the value it returns is
+   * always the one that was asked for.
+   * @param target - the attached debugger.
+   */
+  private async installPrompt(target: Debuggee): Promise<void> {
+    const source = `(() => {
+      const state = { accept: ${String(this.policy.accept)}, text: ${JSON.stringify(this.policy.promptText ?? '')} }
+      window.__dshPrompts = window.__dshPrompts ?? []
+      window.prompt = (message, fallback) => {
+        window.__dshPrompts.push({ message: String(message ?? ''), accepted: state.accept })
+        return state.accept ? (state.text === '' ? String(fallback ?? '') : state.text) : null
+      }
+    })()`
+    if (source === this.promptScript) return
+    this.promptScript = source
+    // On the page as it is, and on every page after it: a policy set before a
+    // navigation has to survive the navigation.
+    await target.sendCommand('Page.addScriptToEvaluateOnNewDocument', { source })
+    await target.sendCommand('Runtime.evaluate', { expression: source })
   }
 
   /**
@@ -126,6 +192,15 @@ export class BrowserSession {
     if (method === 'Log.entryAdded') {
       const entry = params.entry as { level?: string; text?: string } | undefined
       this.keep(this.logged, { level: entry?.level ?? 'info', text: entry?.text ?? '' })
+      return
+    }
+    if (method === 'Page.frameNavigated') {
+      const frame = params.frame as { url?: string; parentId?: string } | undefined
+      // The main frame only: a page's adverts navigate their own frames
+      // constantly, and none of that moves the page the model is reading.
+      if (frame !== undefined && frame.parentId === undefined) {
+        this.keep(this.navigated, { url: String(frame.url ?? '') })
+      }
       return
     }
     if (method === 'Page.javascriptDialogOpening') {
@@ -169,7 +244,8 @@ export class BrowserSession {
    * @returns what the command returned.
    */
   async send<T>(method: string, params?: object): Promise<T> {
-    return (await this.attached().sendCommand(method, params)) as T
+    const target = await this.attached()
+    return (await target.sendCommand(method, params)) as T
   }
 
   /**
@@ -237,9 +313,13 @@ export class BrowserSession {
   /**
    * Decide what happens to dialogs from now on.
    * @param policy - whether to accept, and what to type into a prompt.
+   * @returns resolution once the page is answering prompts that way too.
    */
-  setDialogPolicy(policy: DialogPolicy): void {
+  async setDialogPolicy(policy: DialogPolicy): Promise<void> {
     this.policy = policy
+    const target = this.debuggee()
+    if (target === undefined || !target.isAttached()) return
+    await this.installPrompt(target)
   }
 
   /** What the standing dialog policy is. */
@@ -256,10 +336,43 @@ export class BrowserSession {
   }
 
   /**
-   * Read and empty the dialog buffer.
-   * @returns the dialogs that opened since the last read.
+   * Read and empty the record of pages the browser moved to.
+   *
+   * Reported like a dialog, with whatever action was running when it
+   * happened: a page that navigates under an automation run loses everything
+   * typed into it, and a run that is not told cannot tell that from a step
+   * that simply failed.
+   * @returns the pages it moved to since the last read.
    */
-  takeDialogs(): DialogRecord[] {
-    return this.opened.splice(0)
+  takeNavigations(): NavigationRecord[] {
+    return this.navigated.splice(0)
+  }
+
+  /**
+   * Read and empty the dialog buffer.
+   * @returns the dialogs that opened since the last read, native ones and the
+   *   prompts the page's substitute recorded.
+   */
+  async takeDialogs(): Promise<DialogRecord[]> {
+    // A dialog is reported by the browser a moment after the click that
+    // opened it returns, so draining immediately attributes it to the next
+    // action instead of the one that caused it.
+    await new Promise((resolve) => setTimeout(resolve, DIALOG_GRACE_MS))
+    const native = this.opened.splice(0)
+    const target = this.debuggee()
+    if (target === undefined || !target.isAttached()) return native
+    let prompts: { message: string; accepted: boolean }[] = []
+    try {
+      const answer = (await target.sendCommand('Runtime.evaluate', {
+        expression: '(() => { const seen = window.__dshPrompts ?? []; window.__dshPrompts = []; return seen })()',
+        returnByValue: true,
+      })) as { result?: { value?: { message: string; accepted: boolean }[] } }
+      prompts = answer.result?.value ?? []
+    } catch {
+      // The page navigated or closed while this was asked: whatever prompts
+      // it had recorded went with it, and the native dialogs still stand.
+      prompts = []
+    }
+    return [...native, ...prompts.map((each) => ({ kind: 'prompt', ...each }))]
   }
 }

@@ -185,15 +185,22 @@ The browser can also be **driven**, through the Chrome DevTools protocol — the
 | --- | --- |
 | `browser_read_page` | Numbers every interactive element with its role, name, id, and value. The numbers (`ref=N`) are how the tools below name an element, and they beat a CSS selector guessed from memory. |
 | `browser_click`, `browser_hover` | Clicks or hovers, at the element's place on screen. |
-| `browser_type`, `browser_press_key` | Types key by key, so pickers and autocompletes react; presses `Enter`, `Tab`, `Control+a`. |
+| `browser_type`, `browser_press_key` | Types key by key, so pickers and autocompletes react. Replacing a value selects the old one and types over it, so the field never passes through empty — a date picker handed an empty value unmounts the form around it. `Meta+a`, `Meta+c` and the rest carry the editing command the browser acts on, so they select and copy rather than merely being pressed. |
 | `browser_select_option` | Chooses in a native `<select>`, by value or by the label you read. |
-| `browser_drag` | Presses, moves across in steps, releases — what a sortable list or a resize handle actually waits for. |
+| `browser_drag` | Presses, moves across in steps, releases — what a sortable list or a resize handle actually waits for. Onto an element, or by a distance in pixels, or both. |
 | `browser_upload_file` | Puts a file on a file input without a chooser. The file must be inside an open project. |
 | `browser_handle_dialogs` | Decides what happens to `alert`, `confirm`, and `prompt`. They are dismissed by default and always answered at once, since a dialog left open blocks the page; whatever appeared is reported with the action that caused it. |
-| `browser_evaluate` | Runs an expression in the page — for state the rendered text does not show, such as an input's `.value` or a `getBoundingClientRect()`. |
+| `browser_wait_for` | Waits for an element or some visible text to appear or go. Also how you wait out something timed: a dialog a page opens seconds after a click is reported when this returns. |
+| `browser_evaluate` | Runs an expression in the page — for state the rendered text does not show, such as an input's `.value` or a `getBoundingClientRect()`. For reading, not for acting: one action per tool call, since a framework repaints after the expression has already returned. |
 | `browser_read_console` | Reads what the page logged, uncaught exceptions included. |
 | `browser_resize` | Overrides the viewport the page measures, without moving the window you arranged. |
 | `browser_screenshot` | Captures the page as a PNG. |
+
+Alongside whatever it was asked to do, an action reports two things it did not: any dialog the page opened, and any page the browser moved to on its own. A run that is not told about a navigation cannot tell a lost form from a step that simply failed.
+
+Every action waits for its target to stop moving before acting on it. That is not caution about timing: a page whose adverts are still arriving moves its own controls by more than the height of one, and a click at a point measured a moment earlier lands on the button above the one that was asked for.
+
+Two limits worth knowing. `window.prompt` is replaced rather than intercepted, because Electron does not implement it — the substitute answers from the same policy, so a page calling `prompt` behaves as it would in Chrome instead of throwing. And where an item lands in a sortable can vary by a position, because the list reorders under the pointer as it moves — as it does for a person.
 
 There are two browsers in reach, and their tools carry the same names: these drive **this app's** browser, the one on your screen, while Playwright's MCP server drives a separate headless one. Every description here says which, so the model does not reach for the wrong one.
 

@@ -25,8 +25,28 @@ describe('iconFileFor', () => {
     expect(iconFileFor(name, false)).toBe(icon)
   })
 
-  it('opens and closes the folder with the directory', () => {
-    expect(iconFileFor('src', true, false)).not.toBe(iconFileFor('src', true, true))
+  // reason: vscode-icons draws the plain expanded folder as a hollow outline,
+  // which at sixteen pixels reads as an empty box beside the solid folder
+  // above it. The twisty already says whether a folder is open.
+  it('keeps the solid folder for a plain folder, open or closed', () => {
+    expect(iconFileFor('demoqa-webtables', true, true)).toBe('default_folder.svg')
+    expect(iconFileFor('demoqa-webtables', true, false)).toBe('default_folder.svg')
+  })
+
+  it('still opens a folder that has an icon of its own', () => {
+    expect(iconFileFor('src', true, true)).toBe('folder_type_src_opened.svg')
+    expect(iconFileFor('src', true, true)).not.toBe(iconFileFor('src', true, false))
+  })
+
+  // reason: JSON Lines is JSON, one object per line, and vscode-icons has no
+  // icon for it — leaving it the only unmarked file among its neighbours.
+  it('gives JSON Lines the JSON icon', () => {
+    expect(iconFileFor('events.jsonl', false)).toBe(iconFileFor('events.json', false))
+    expect(iconFileFor('events.ndjson', false)).toBe(iconFileFor('events.json', false))
+  })
+
+  it('borrows only by extension, never by a name that merely contains one', () => {
+    expect(iconFileFor('jsonl', false)).toBe('default_file.svg')
   })
 
   // reason: the mapping knows more file types than this app carries icons for,

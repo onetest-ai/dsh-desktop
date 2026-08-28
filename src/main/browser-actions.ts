@@ -1,8 +1,9 @@
 import type { BrowserSession } from './browser-cdp'
-import { keyEvent } from './browser-keys'
+import { editingCommands, keyEvent } from './browser-keys'
 import {
   REF_ATTRIBUTE,
   SNAPSHOT_LIMIT,
+  conditionScript,
   focusScript,
   locateScript,
   selectOptionScript,
@@ -61,6 +62,14 @@ const SETTLE_AGREEMENTS = 2
  */
 const DRAG_INTERCEPT_MS = 300
 
+/**
+ * The shortcut that selects a field's contents, as this platform spells it.
+ *
+ * The command it carries is what does the work either way, but a page reading
+ * the modifiers should see the ones its user would have held.
+ */
+const SELECT_ALL = process.platform === 'darwin' ? 'Meta+a' : 'Control+a'
+
 /** The most characters one `browser_type` call sends. */
 export const TYPE_LIMIT = 5_000
 
@@ -107,6 +116,51 @@ export function cssFor(target: Target): string | undefined {
   return target
 }
 
+/** How often a wait re-reads the page. */
+const POLL_MS = 200
+
+/**
+ * Wait until something is on the page, or until it is gone.
+ *
+ * Polled from here rather than watched from inside the page: a condition
+ * expressed as a promise in the page dies with the next navigation, and the
+ * pages this drives navigate under it.
+ *
+ * Draining dialogs is the caller's job, as it is after any action — which is
+ * what makes this the right way to wait out a timed dialog: the wait ends and
+ * the dialog is reported with it.
+ * @param session - the protocol session.
+ * @param target - the element to wait for, or undefined when waiting on text.
+ * @param text - the visible text to wait for, or undefined when waiting on an
+ *   element.
+ * @param gone - whether to wait for absence instead of presence.
+ * @param seconds - how long to wait before giving up.
+ * @returns whether the condition held, or why the wait could not be made.
+ */
+export async function waitFor(
+  session: BrowserSession,
+  target: Target | undefined,
+  text: string | undefined,
+  gone: boolean,
+  seconds: number,
+): Promise<ActionResult> {
+  if (target === undefined && text === undefined) {
+    return { ok: false, reason: 'Name either an element or some text to wait for.' }
+  }
+  const what = target ?? JSON.stringify(text)
+  const deadline = seconds * 1000
+  for (let waited = 0; waited <= deadline; waited += POLL_MS) {
+    const answer = await session.evaluate(conditionScript(target, text, gone))
+    // A page mid-navigation cannot answer, which is not a reason to stop
+    // waiting for what will be on the page after it.
+    if (answer.ok && answer.value === true) {
+      return { ok: true, message: `${what} is ${gone ? 'gone' : 'there'} after ${String(Math.round(waited / 100) / 10)}s.` }
+    }
+    await pause(POLL_MS)
+  }
+  return { ok: false, reason: `${what} was still ${gone ? 'there' : 'missing'} after ${String(seconds)}s.` }
+}
+
 /**
  * Number the page's interactive elements and read them back.
  * @param session - the protocol session.
@@ -120,11 +174,17 @@ export async function readPage(session: BrowserSession): Promise<ActionResult> {
 }
 
 /**
- * Click an element where it sits on screen.
+ * Click an element where it sits on screen, once it has stopped moving.
  *
  * Dispatched through the protocol, so the page receives a trusted event: a
  * scripted `element.click()` is refused by file inputs, ignored by some
  * frameworks, and never opens a native dialog.
+ *
+ * Waiting for the element to settle is not caution about timing: a page whose
+ * adverts are still arriving moves its own controls by more than the height
+ * of one, and a click at a point measured a moment earlier lands on the
+ * button above the one that was asked for — which reads as the right button
+ * doing the wrong thing.
  * @param session - the protocol session.
  * @param target - how the element is named.
  * @param options - which button, and how many clicks.
@@ -135,7 +195,7 @@ export async function click(
   target: Target,
   options: { button?: 'left' | 'right' | 'middle'; count?: number } = {},
 ): Promise<ActionResult> {
-  const at = await locate(session, target)
+  const at = await settle(session, target)
   if (refused(at)) return at
   const button = options.button ?? 'left'
   const clickCount = options.count ?? 1
@@ -155,7 +215,7 @@ export async function click(
  * @returns what is now hovered, or why nothing is.
  */
 export async function hover(session: BrowserSession, target: Target): Promise<ActionResult> {
-  const at = await locate(session, target)
+  const at = await settle(session, target)
   if (refused(at)) return at
   await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, buttons: 0 })
   return { ok: true, message: `Hovering ${at.tag}${at.text === '' ? '' : ` "${at.text}"`}.` }
@@ -180,11 +240,19 @@ export async function type(
   clear: boolean,
 ): Promise<ActionResult> {
   if (text.length > TYPE_LIMIT) return { ok: false, reason: `More than ${TYPE_LIMIT} characters at once.` }
-  const focused = await session.evaluate(focusScript(target, clear))
+  const focused = await session.evaluate(focusScript(target))
   if (!focused.ok) return focused
   const state = focused.value as { found: boolean; focused?: boolean; reason?: string }
   if (!state.found) return { ok: false, reason: `${target}: ${state.reason ?? 'not found'}` }
   if (state.focused !== true) return { ok: false, reason: `${target} did not take focus; it may not be a field.` }
+  if (clear) {
+    // Selected, then typed over. The selection is what makes the first
+    // character replace the old value, so the field never passes through
+    // empty on the way — and a component that cannot survive being empty is
+    // never asked to. Only an empty replacement needs the deletion.
+    await press(session, SELECT_ALL)
+    if (text === '') await press(session, 'Backspace')
+  }
   for (const character of text) {
     const event = keyEvent(character)
     if (event === undefined) {
@@ -208,9 +276,16 @@ export async function type(
 export async function press(session: BrowserSession, name: string): Promise<ActionResult> {
   const event = keyEvent(name)
   if (event === undefined) return { ok: false, reason: `${name} is not a key.` }
+  const commands = editingCommands(event)
   // A key that inserts nothing is a raw press; one that inserts a character
-  // has to be the kind of event that carries the character.
-  await session.send('Input.dispatchKeyEvent', { ...event, type: event.text === undefined ? 'rawKeyDown' : 'keyDown' })
+  // has to be the kind of event that carries the character. A shortcut also
+  // names what the browser's editor should do, which is the half that makes
+  // it select, copy, or undo anything.
+  await session.send('Input.dispatchKeyEvent', {
+    ...event,
+    type: event.text === undefined ? 'rawKeyDown' : 'keyDown',
+    ...(commands === undefined ? {} : { commands }),
+  })
   await session.send('Input.dispatchKeyEvent', { ...event, type: 'keyUp' })
   return { ok: true, message: `Pressed ${name}.` }
 }
@@ -246,6 +321,17 @@ async function settle(session: BrowserSession, target: Target): Promise<Located 
   // Still moving after all that: something on the page animates without
   // stopping, and dragging from its last known place beats refusing outright.
   return previous
+}
+
+/**
+ * Where a drag ended, in words.
+ * @param end - the element or point it was aimed at.
+ * @param offset - the pixels added to it.
+ * @returns a phrase naming the destination.
+ */
+function describe(end: { tag: string }, offset: { dx: number; dy: number }): string {
+  const moved = offset.dx !== 0 || offset.dy !== 0 ? ` offset by ${String(offset.dx)}, ${String(offset.dy)}` : ''
+  return `${end.tag}${moved}`
 }
 
 /** What a page put on the clipboard when it started a native drag. */
@@ -298,19 +384,23 @@ async function beginNativeDrag(
  * @param data - the payload the page put on the drag.
  * @param start - where the drag began.
  * @param end - where it was aimed.
- * @param to - how the drop target is named, for re-reading where it has moved to.
+ * @param to - how the drop target is named, for re-reading where it has moved
+ *   to, or undefined for a drag by an offset.
+ * @param offset - pixels added to the drop point.
  * @returns what was dragged where.
  */
 async function finishNativeDrag(
   session: BrowserSession,
   data: DragPayload,
   start: Located,
-  end: Located,
-  to: Target,
+  end: { x: number; y: number; tag: string },
+  to: Target | undefined,
+  offset: { dx: number; dy: number },
 ): Promise<ActionResult> {
   try {
-    const settled = await locate(session, to, false)
-    const drop = refused(settled) ? end : settled
+    const settled = to === undefined ? undefined : await locate(session, to, false)
+    const drop =
+      settled === undefined || refused(settled) ? end : { x: settled.x + offset.dx, y: settled.y + offset.dy }
     for (let step = 1; step <= DRAG_STEPS; step += 1) {
       const ratio = step / DRAG_STEPS
       const at = {
@@ -326,7 +416,7 @@ async function finishNativeDrag(
       await pause(DRAG_FRAME_MS)
     }
     await session.send('Input.dispatchDragEvent', { type: 'drop', x: drop.x, y: drop.y, data })
-    return { ok: true, message: `Dragged ${start.tag} onto ${end.tag}, as an HTML5 drag.` }
+    return { ok: true, message: `Dragged ${start.tag} to ${describe(end, offset)}, as an HTML5 drag.` }
   } finally {
     // Left on, every later drag on this page would be caught and never
     // completed — including one the user starts with their own mouse.
@@ -342,21 +432,34 @@ async function finishNativeDrag(
  * a point that is no longer on it.
  * @param session - the protocol session.
  * @param from - how the element to drag is named.
- * @param to - how the element to drop on is named.
+ * @param to - how the element to drop on is named, or undefined to drop at an
+ *   offset from where the drag started.
+ * @param offset - pixels to add to the drop point. A resize handle is dragged
+ *   by a distance rather than onto something, and the nearest element to that
+ *   distance is not the same thing.
  * @returns what was dragged where, or why nothing was.
  */
-export async function drag(session: BrowserSession, from: Target, to: Target): Promise<ActionResult> {
+export async function drag(
+  session: BrowserSession,
+  from: Target,
+  to: Target | undefined,
+  offset: { dx: number; dy: number } = { dx: 0, dy: 0 },
+): Promise<ActionResult> {
+  if (to === undefined && offset.dx === 0 && offset.dy === 0) {
+    return { ok: false, reason: 'Name something to drag onto, or an offset to drag by.' }
+  }
   const start = await settle(session, from)
   if (refused(start)) return start
-  const end = await locate(session, to, false)
-  if (refused(end)) {
+  const aimed = to === undefined ? start : await locate(session, to, false)
+  if (refused(aimed)) {
     return {
       ok: false,
-      reason: `${to} is not on screen with ${from}; both ends of a drag have to be visible at once. Scroll to them or widen the viewport first. (${
-        end.ok ? '' : end.reason
+      reason: `${to ?? ''} is not on screen with ${from}; both ends of a drag have to be visible at once. Scroll to them or widen the viewport first. (${
+        aimed.ok ? '' : aimed.reason
       })`,
     }
   }
+  const end = { ...aimed, x: aimed.x + offset.dx, y: aimed.y + offset.dy }
   await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x, y: start.y, buttons: 0 })
   await session.send('Input.dispatchMouseEvent', {
     type: 'mousePressed',
@@ -381,7 +484,7 @@ export async function drag(session: BrowserSession, from: Target, to: Target): P
     // events instead.
     if (step === 1 && intercepted === undefined) {
       intercepted = await beginNativeDrag(session, at)
-      if (intercepted !== undefined) return await finishNativeDrag(session, intercepted, start, end, to)
+      if (intercepted !== undefined) return await finishNativeDrag(session, intercepted, start, end, to, offset)
     }
     await session.send('Input.dispatchMouseEvent', {
       type: 'mouseMoved',
@@ -394,9 +497,11 @@ export async function drag(session: BrowserSession, from: Target, to: Target): P
   }
   // Where the target is now, not where it was: a page whose adverts finish
   // loading mid-drag moves everything under the pointer, and releasing at the
-  // point measured beforehand then drops on whatever took its place.
-  const settled = await locate(session, to, false)
-  const drop = refused(settled) ? end : settled
+  // point measured beforehand then drops on whatever took its place. An
+  // offset drag has no target to re-read; its distance is what was asked for.
+  const settled = to === undefined ? undefined : await locate(session, to, false)
+  const drop =
+    settled === undefined || refused(settled) ? end : { x: settled.x + offset.dx, y: settled.y + offset.dy }
   await session.send('Input.dispatchMouseEvent', {
     type: 'mouseMoved',
     x: drop.x,
@@ -413,7 +518,7 @@ export async function drag(session: BrowserSession, from: Target, to: Target): P
     buttons: 0,
     clickCount: 1,
   })
-  return { ok: true, message: `Dragged ${start.tag} onto ${end.tag}.` }
+  return { ok: true, message: `Dragged ${start.tag} to ${describe(end, offset)}.` }
 }
 
 /**

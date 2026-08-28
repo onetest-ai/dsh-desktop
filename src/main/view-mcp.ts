@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
 import type { ActionResult } from './browser-actions'
-import type { ConsoleEntry, DialogRecord, Evaluated } from './browser-cdp'
+import type { ConsoleEntry, DialogRecord, Evaluated, NavigationRecord } from './browser-cdp'
 import { loadableUrl, locate } from './view-tools'
 
 /** What the tools need from the app. */
@@ -52,8 +52,8 @@ export interface BrowserAutomation {
   press(key: string): Promise<ActionResult>
   /** Choose an option in a native select. */
   selectOption(target: string, value: string): Promise<ActionResult>
-  /** Drag one element onto another. */
-  drag(from: string, to: string): Promise<ActionResult>
+  /** Drag one element onto another, by an offset, or both. */
+  drag(from: string, to: string | undefined, offset: { dx: number; dy: number }): Promise<ActionResult>
   /** Run an expression in the page. */
   evaluate(expression: string): Promise<Evaluated>
   /** Put a file on a file input; the path is checked by the caller. */
@@ -63,11 +63,15 @@ export interface BrowserAutomation {
   /** Capture the page as a base64 PNG. */
   screenshot(): Promise<{ ok: true; png: string } | { ok: false; reason: string }>
   /** Decide what happens to native dialogs from now on. */
-  setDialogPolicy(policy: { accept: boolean; promptText?: string }): void
+  setDialogPolicy(policy: { accept: boolean; promptText?: string }): Promise<void>
   /** Read and empty what the page logged. */
   takeConsole(): ConsoleEntry[]
   /** Read and empty the dialogs that opened. */
-  takeDialogs(): DialogRecord[]
+  takeDialogs(): Promise<DialogRecord[]>
+  /** Read and empty the pages the browser moved to on its own. */
+  takeNavigations(): NavigationRecord[]
+  /** Wait for something to appear on the page, or to go. */
+  waitFor(target: string | undefined, text: string | undefined, gone: boolean, seconds: number): Promise<ActionResult>
 }
 
 /** A page as the agent reads it. */
@@ -203,11 +207,16 @@ function buildServer(deps: ViewDeps): McpServer {
    * @param result - what the action reported.
    * @returns the tool result.
    */
-  function acted(result: ActionResult): { content: { type: 'text'; text: string }[]; isError?: true } {
-    const dialogs = deps.browser
-      .takeDialogs()
-      .map((each) => `A ${each.kind} said ${JSON.stringify(each.message)} and was ${each.accepted ? 'accepted' : 'dismissed'}.`)
-    const trailer = dialogs.length === 0 ? '' : `\n${dialogs.join('\n')}`
+  async function acted(result: ActionResult): Promise<{ content: { type: 'text'; text: string }[]; isError?: true }> {
+    const dialogs = (await deps.browser.takeDialogs()).map(
+      (each) =>
+        `A ${each.kind} said ${JSON.stringify(each.message)} and was ${each.accepted ? 'accepted' : 'dismissed'}.`,
+    )
+    const moved = deps.browser
+      .takeNavigations()
+      .map((each) => `The browser moved to ${each.url}.`)
+    const notes = [...dialogs, ...moved]
+    const trailer = notes.length === 0 ? '' : `\n${notes.join('\n')}`
     return result.ok ? done(result.message + trailer) : refuse(result.reason + trailer)
   }
 
@@ -225,7 +234,7 @@ function buildServer(deps: ViewDeps): McpServer {
         "Number every interactive element on the page the desktop app's built-in browser is showing, with its role, name, id, and value. Call this before acting on a page and after anything changes it: the numbers it returns (`ref=N`) are how the other browser_* tools name an element, and they are more reliable than a CSS selector guessed from memory. Use `read_open_page` instead when you want the page's prose rather than its controls.",
       inputSchema: {},
     },
-    async () => acted(await deps.browser.readPage()),
+    async () => await acted(await deps.browser.readPage()),
   )
 
   server.registerTool(
@@ -240,7 +249,7 @@ function buildServer(deps: ViewDeps): McpServer {
         count: z.number().int().min(1).max(3).optional().describe('1 for a click, 2 for a double click.'),
       },
     },
-    async ({ target: element, button, count }) => acted(await deps.browser.click(element, { button, count })),
+    async ({ target: element, button, count }) => await acted(await deps.browser.click(element, { button, count })),
   )
 
   server.registerTool(
@@ -251,7 +260,7 @@ function buildServer(deps: ViewDeps): McpServer {
         "Move the pointer onto an element in the desktop app's built-in browser, without pressing anything. Use this for a menu or tooltip that only appears under the pointer.",
       inputSchema: { target },
     },
-    async ({ target: element }) => acted(await deps.browser.hover(element)),
+    async ({ target: element }) => await acted(await deps.browser.hover(element)),
   )
 
   server.registerTool(
@@ -266,7 +275,7 @@ function buildServer(deps: ViewDeps): McpServer {
         clear: z.boolean().optional().describe('Empty the field first; true by default.'),
       },
     },
-    async ({ target: element, text, clear }) => acted(await deps.browser.type(element, text, clear !== false)),
+    async ({ target: element, text, clear }) => await acted(await deps.browser.type(element, text, clear !== false)),
   )
 
   server.registerTool(
@@ -277,7 +286,7 @@ function buildServer(deps: ViewDeps): McpServer {
         "Press one key wherever focus is in the desktop app's built-in browser — `Enter`, `Tab`, `Escape`, `ArrowDown`, or a shortcut such as `Control+a`. Use this to commit a value a picker is holding open.",
       inputSchema: { key: z.string().describe('The key, as the DOM names it, optionally as `Modifier+Key`.') },
     },
-    async ({ key }) => acted(await deps.browser.press(key)),
+    async ({ key }) => await acted(await deps.browser.press(key)),
   )
 
   server.registerTool(
@@ -288,7 +297,7 @@ function buildServer(deps: ViewDeps): McpServer {
         "Choose an option in a native `<select>` in the desktop app's built-in browser, by its value or by the label the user reads. A custom combobox is not a `<select>`: click it open and click the option instead.",
       inputSchema: { target, value: z.string().describe("The option's value or its visible label.") },
     },
-    async ({ target: element, value }) => acted(await deps.browser.selectOption(element, value)),
+    async ({ target: element, value }) => await acted(await deps.browser.selectOption(element, value)),
   )
 
   server.registerTool(
@@ -296,10 +305,33 @@ function buildServer(deps: ViewDeps): McpServer {
     {
       title: 'Drag in the built-in browser',
       description:
-        "Drag one element onto another in the desktop app's built-in browser. The pointer is pressed, moved across in steps, and released — which is what a sortable list, a resize handle, and an HTML5 drop target all wait for; a single jump from one point to the other does nothing.",
-      inputSchema: { from: target, to: target },
+        "Drag in the desktop app's built-in browser: onto another element, or by a distance in pixels with `dx`/`dy`, or both. The pointer is pressed, moved across in steps, and released — which is what a sortable list, a resize handle, and an HTML5 drop target all wait for; a single jump from one point to the other does nothing. Use `dx`/`dy` alone for a resize handle, where the distance is the point and no element sits where the drag should end.",
+      inputSchema: {
+        from: target,
+        to: target.optional(),
+        dx: z.number().optional().describe('Pixels to add to the drop point horizontally.'),
+        dy: z.number().optional().describe('Pixels to add to the drop point vertically.'),
+      },
     },
-    async ({ from, to }) => acted(await deps.browser.drag(from, to)),
+    async ({ from, to, dx, dy }) =>
+      await acted(await deps.browser.drag(from, to, { dx: dx ?? 0, dy: dy ?? 0 })),
+  )
+
+  server.registerTool(
+    'browser_wait_for',
+    {
+      title: 'Wait for the built-in browser',
+      description:
+        "Wait until an element or some visible text appears in the desktop app's built-in browser, or until it goes. Use this instead of reading the page repeatedly, and to wait out something timed — a dialog a page opens seconds after a click is reported when this returns.",
+      inputSchema: {
+        target: target.optional(),
+        text: z.string().optional().describe('Visible text to wait for, when no element is named.'),
+        gone: z.boolean().optional().describe('Wait for it to disappear instead of appear.'),
+        seconds: z.number().min(1).max(120).optional().describe('How long to wait; 10 by default.'),
+      },
+    },
+    async ({ target: element, text, gone, seconds }) =>
+      await acted(await deps.browser.waitFor(element, text, gone === true, seconds ?? 10)),
   )
 
   server.registerTool(
@@ -307,7 +339,7 @@ function buildServer(deps: ViewDeps): McpServer {
     {
       title: 'Run JavaScript in the built-in browser',
       description:
-        "Run a JavaScript expression in the page the desktop app's built-in browser is showing, and read what it returns. Use it to check state the rendered text does not show — an input's `.value`, a checkbox's `.checked`, a class, `getBoundingClientRect()`. Prefer the other browser_* tools for acting on the page: an event this dispatches is untrusted, and much of the web ignores it.",
+        "Run a JavaScript expression in the page the desktop app's built-in browser is showing, and read what it returns. Use it to check state the rendered text does not show — an input's `.value`, a checkbox's `.checked`, a class, `getBoundingClientRect()`. Read with it, do not act with it: an event it dispatches is untrusted and much of the web ignores it, and a loop that clicks and re-reads inside one expression sees none of its own effects, because a framework repaints after the expression has already returned. One action per tool call.",
       inputSchema: { expression: z.string().describe('The expression; a promise is awaited.') },
     },
     async ({ expression }) => {
@@ -330,7 +362,7 @@ function buildServer(deps: ViewDeps): McpServer {
     async ({ target: element, path }) => {
       const found = locate(path, deps.roots())
       if (found === undefined) return refuse(`${path} is not inside a project the user has open.`)
-      return acted(await deps.browser.uploadFile(element, path))
+      return await acted(await deps.browser.uploadFile(element, path))
     },
   )
 
@@ -345,8 +377,8 @@ function buildServer(deps: ViewDeps): McpServer {
         prompt_text: z.string().optional().describe('What to type into a `prompt` when accepting one.'),
       },
     },
-    ({ action, prompt_text }) => {
-      deps.browser.setDialogPolicy({ accept: action === 'accept', promptText: prompt_text })
+    async ({ action, prompt_text }) => {
+      await deps.browser.setDialogPolicy({ accept: action === 'accept', promptText: prompt_text })
       return done(`Dialogs will be ${action === 'accept' ? 'accepted' : 'dismissed'} from now on.`)
     },
   )
@@ -380,7 +412,7 @@ function buildServer(deps: ViewDeps): McpServer {
         height: z.number().int().min(0).max(10_000).describe('Height in CSS pixels.'),
       },
     },
-    async ({ width, height }) => acted(await deps.browser.resize(width, height)),
+    async ({ width, height }) => await acted(await deps.browser.resize(width, height)),
   )
 
   server.registerTool(

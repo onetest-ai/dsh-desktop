@@ -55,8 +55,8 @@ function resolve(target: Target): string {
 /**
  * Find an element and report the point to dispatch input at.
  *
- * Three things have to be true for a coordinate to be worth clicking, and
- * each has been observed failing on a real page:
+ * Four things have to be true for a coordinate to be worth clicking, and each
+ * has been observed failing on a real page:
  *
  * The element has to be scrolled to. `behavior: 'instant'` is explicit
  * because a page that sets `scroll-behavior: smooth` makes `scrollIntoView`
@@ -67,9 +67,14 @@ function resolve(target: Target): string {
  * page cannot be centred, so the point is taken from the part of it that is
  * actually on screen rather than from its middle.
  *
- * Nothing may be on top of it. An advertisement over a button takes the click
- * that was meant for the button, and the page then reports nothing happening
- * for a reason no amount of retrying explains.
+ * Something belonging to the element has to be on top at that point. An
+ * advertisement over a button takes the click meant for the button, and the
+ * page then reports nothing happening for a reason no amount of retrying
+ * explains.
+ *
+ * And a covered centre is not a covered element. A banner across the middle
+ * of a row leaves both ends clickable, so several points are tried before the
+ * element is called unreachable.
  * @param target - how the element is named.
  * @param scroll - whether to scroll to it first. A drag reads its two ends in
  *   one scroll position, so the second read must not move the page under the
@@ -91,54 +96,77 @@ export function locateScript(target: Target, scroll = true): string {
     if (right <= left || bottom <= top) {
       return { found: false, reason: 'the element is off screen even after scrolling to it' }
     }
-    const x = (left + right) / 2
-    const y = (top + bottom) / 2
     const identity = {
-      x,
-      y,
       tag: element.tagName.toLowerCase(),
       type: (element.getAttribute('type') ?? '').toLowerCase(),
       text: (element.textContent ?? '').trim().slice(0, 80),
     }
-    const hit = document.elementFromPoint(x, y)
-    // A wrapper counts as the element: a label around an input, or a span
-    // inside a button, receives the click on its behalf.
-    if (hit === null) return { found: false, reason: 'nothing is at the point it occupies' }
-    if (hit !== element && !element.contains(hit) && !hit.contains(element)) {
-      const covering = hit.tagName.toLowerCase() + (hit.id === '' ? '' : '#' + hit.id) + (hit.className === '' || typeof hit.className !== 'string' ? '' : '.' + hit.className.trim().split(/\\s+/).join('.'))
-      return { found: false, reason: 'covered by ' + covering + '; scroll it away, close it, or resize the viewport' }
+    const area = (box) => Math.max(box.width * box.height, 1)
+    // A widget's own furniture: something sharing the element's immediate
+    // parent, where that parent is no bigger than the widget itself — the
+    // hidden input a combobox lays over its placeholder, which receives the
+    // click on the widget's behalf. A page-level sibling is not that: under
+    // <body> everything is a sibling, and an advertisement over a button is
+    // exactly what this check exists to catch.
+    const furniture = (hit) => {
+      const parent = element.parentElement
+      if (parent === null || parent === document.body || parent === document.documentElement) return false
+      if (!parent.contains(hit)) return false
+      return area(parent.getBoundingClientRect()) <= area(rect) * ${String(FURNITURE_SCALE)}
     }
-    return { found: true, ...identity }
+    const across = (ratio) => left + (right - left) * ratio
+    const down = (ratio) => top + (bottom - top) * ratio
+    const points = [
+      [across(0.5), down(0.5)],
+      [across(0.25), down(0.5)],
+      [across(0.75), down(0.5)],
+      [across(0.5), down(0.25)],
+      [across(0.5), down(0.75)],
+    ]
+    let covering = null
+    for (const [x, y] of points) {
+      const hit = document.elementFromPoint(x, y)
+      if (hit === null) continue
+      const mine = hit === element || element.contains(hit) || hit.contains(element) || furniture(hit)
+      if (mine) return { found: true, x, y, ...identity }
+      covering = covering ?? hit
+    }
+    if (covering === null) return { found: false, reason: 'nothing is at the points it occupies' }
+    const name =
+      covering.tagName.toLowerCase() +
+      (covering.id === '' ? '' : '#' + covering.id) +
+      (covering.className === '' || typeof covering.className !== 'string'
+        ? ''
+        : '.' + covering.className.trim().split(/\\s+/).join('.'))
+    return { found: false, reason: 'covered by ' + name + '; scroll it away, close it, or resize the viewport' }
   })()`
 }
 
 /**
- * Put the caret in a field, optionally emptying it first.
+ * Put the caret in a field.
  *
  * Typing is dispatched as real key events, which land wherever focus is; this
- * is what puts focus in the right place. Clearing is done here rather than
- * with a select-all shortcut because the shortcut's meaning differs by
- * platform and by what the page has bound.
+ * is what puts focus in the right place.
+ *
+ * Nothing is cleared here. Emptying a field by assigning to it and announcing
+ * the change is not what a person does, and a component can answer it however
+ * it likes: a date picker given an empty value out of band unmounts itself
+ * and takes the rest of the form with it. Clearing is done by selecting the
+ * text and deleting it, through the same key events as the typing.
  * @param target - how the field is named.
- * @param clear - whether to empty it before typing.
  * @returns the script's source; it returns whether the field was focused.
  */
-export function focusScript(target: Target, clear: boolean): string {
+export function focusScript(target: Target): string {
   return `(() => {
     const element = ${resolve(target)}
     if (element === null) return { found: false, reason: 'no element matches' }
-    element.scrollIntoView({ block: 'center', inline: 'center' })
+    element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' })
     element.focus()
-    if (${String(clear)} && 'value' in element) {
-      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value')?.set
-      // Through the prototype's setter, so a React-controlled field sees the
-      // change; assigning \`value\` directly is invisible to its state.
-      if (setter !== undefined) setter.call(element, '')
-      else element.value = ''
-      element.dispatchEvent(new Event('input', { bubbles: true }))
-    }
-    if ('select' in element && typeof element.select === 'function' && !${String(clear)}) element.select()
-    return { found: true, focused: document.activeElement === element }
+    const active = document.activeElement
+    // Or the element that replaced it: a re-render swaps the node while
+    // keeping its identity on the page, and focus follows the new one.
+    const focused = active === element || (active !== null && element.id !== '' && active.id === element.id)
+    return { found: true, focused }
   })()`
 }
 
@@ -209,6 +237,39 @@ export function snapshotScript(limit: number): string {
       lines.push(parts.join(' '))
     }
     return { url: location.href, title: document.title, elements: lines.join('\\n') }
+  })()`
+}
+
+/**
+ * How much larger than the element its parent may be for a sibling to still
+ * count as part of the same widget.
+ *
+ * A combobox's control wrapper is barely larger than the placeholder inside
+ * it; a page section holding a button and an advertisement is many times
+ * larger. Wide enough for padding and a border, far short of a layout
+ * container.
+ */
+const FURNITURE_SCALE = 4
+
+/**
+ * Whether a condition on the page holds yet.
+ *
+ * Text is matched against what the page renders rather than its markup, so a
+ * value a framework has not painted yet does not read as present.
+ * @param target - the element to wait for, or undefined when waiting on text.
+ * @param text - the visible text to wait for, or undefined when waiting on an
+ *   element.
+ * @param gone - whether to wait for absence instead of presence.
+ * @returns the script's source; it returns whether the wait is over.
+ */
+export function conditionScript(target: Target | undefined, text: string | undefined, gone: boolean): string {
+  const found =
+    target !== undefined
+      ? `${resolve(target)} !== null`
+      : `(document.body?.innerText ?? '').includes(${JSON.stringify(text ?? '')})`
+  return `(() => {
+    const present = ${found}
+    return present !== ${String(gone)}
   })()`
 }
 

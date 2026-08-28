@@ -13,6 +13,7 @@ import {
   selectOption,
   type,
   uploadFile,
+  waitFor,
 } from './browser-actions'
 
 /** One command the actions sent. */
@@ -113,17 +114,46 @@ describe('cssFor', () => {
 })
 
 describe('click', () => {
+  // reason: a page whose adverts are still arriving moves its own controls by
+  // more than the height of one, and a click at a point measured a moment
+  // earlier lands on the button above the one that was asked for.
+  it('waits for the element to stop moving before clicking it', async () => {
+    const places = [100, 200, 300, 300, 300]
+    let read = 0
+    const session = {
+      evaluate: async () => {
+        const y = places[Math.min(read, places.length - 1)]
+        read += 1
+        return { ok: true as const, value: { found: true, x: 30, y, tag: 'button', type: '', text: 'Go' } }
+      },
+      send: async () => ({}),
+      next: async () => undefined,
+    } as unknown as BrowserSession
+    const sent: number[] = []
+    const original = session.send.bind(session)
+    session.send = async (method: string, params?: Record<string, unknown>) => {
+      if (params?.type === 'mousePressed') sent.push(params.y as number)
+      return await original(method, params)
+    }
+    await click(session, '#go')
+    expect(sent).toEqual([300])
+  })
+
   it('presses and releases at the element, after moving there', async () => {
     const { session, sent } = fakeSession([AT])
     expect(await click(session, '#go')).toEqual({ ok: true, message: 'Clicked button "Go".' })
-    expect(sent.slice(1).map((each) => each.params?.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased'])
-    expect(sent[2].params).toMatchObject({ x: 30, y: 40, button: 'left', clickCount: 1 })
+    const mouse = sent.filter((each) => each.method === 'Input.dispatchMouseEvent')
+    expect(mouse.map((each) => each.params?.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased'])
+    expect(mouse[1].params).toMatchObject({ x: 30, y: 40, button: 'left', clickCount: 1 })
   })
 
   it('clicks with another button and count when asked', async () => {
     const { session, sent } = fakeSession([AT])
     await click(session, '#go', { button: 'right', count: 2 })
-    expect(sent[2].params).toMatchObject({ button: 'right', clickCount: 2 })
+    expect(sent.filter((each) => each.method === 'Input.dispatchMouseEvent')[1].params).toMatchObject({
+      button: 'right',
+      clickCount: 2,
+    })
   })
 
   it('sends no input when the element is not there', async () => {
@@ -142,7 +172,12 @@ describe('hover', () => {
   it('moves the pointer with no button held', async () => {
     const { session, sent } = fakeSession([AT])
     expect(await hover(session, '#go')).toMatchObject({ ok: true })
-    expect(sent[1].params).toEqual({ type: 'mouseMoved', x: 30, y: 40, buttons: 0 })
+    expect(sent.filter((each) => each.method === 'Input.dispatchMouseEvent')[0].params).toEqual({
+      type: 'mouseMoved',
+      x: 30,
+      y: 40,
+      buttons: 0,
+    })
   })
 })
 
@@ -161,10 +196,39 @@ describe('type', () => {
     ])
   })
 
-  it('asks the page to clear the field when told to', async () => {
+  // reason: assigning an empty value and announcing it is not what a person
+  // does — a date picker answers that by unmounting itself and the form
+  // around it. Selecting and deleting is what a keyboard produces.
+  it('clears by selecting the old value and typing over it', async () => {
     const { session, sent } = fakeSession([focused])
     await type(session, '#name', 'x', true)
-    expect(sent[0].params?.expression).toContain('true')
+    const keys = sent.filter((each) => each.method === 'Input.dispatchKeyEvent')
+    expect(keys[0].params).toMatchObject({ commands: ['selectAll'] })
+    expect(keys[2].params).toMatchObject({ key: 'x' })
+  })
+
+  // reason: a field emptied on the way is a field a component sees empty —
+  // and one of them answers that by unmounting the form around it. Typing
+  // over the selection never leaves it blank.
+  it('never empties the field on the way to replacing it', async () => {
+    const { session, sent } = fakeSession([focused])
+    await type(session, '#date', '25 Aug 2026', true)
+    const keys = sent.filter((each) => each.method === 'Input.dispatchKeyEvent')
+    expect(keys.some((each) => each.params?.code === 'Backspace')).toBe(false)
+  })
+
+  it('deletes the selection when the replacement is empty', async () => {
+    const { session, sent } = fakeSession([focused])
+    await type(session, '#name', '', true)
+    const keys = sent.filter((each) => each.method === 'Input.dispatchKeyEvent')
+    expect(keys[0].params).toMatchObject({ commands: ['selectAll'] })
+    expect(keys[2].params).toMatchObject({ code: 'Backspace' })
+  })
+
+  it('leaves the field alone when not told to clear it', async () => {
+    const { session, sent } = fakeSession([focused])
+    await type(session, '#name', 'x', false)
+    expect(sent.some((each) => (each.params as { commands?: string[] })?.commands !== undefined)).toBe(false)
   })
 
   // reason: typing lands wherever focus is, so typing into something that
@@ -206,6 +270,23 @@ describe('press', () => {
     expect(sent[0].params).toMatchObject({ type: 'keyDown', text: '\r' })
   })
 
+  // reason: select-all is an editor command, not a page behaviour; without it
+  // the key is pressed, nothing is selected, and a delete after it removes
+  // one character.
+  it('carries the editing command a shortcut means', async () => {
+    const { session, sent } = fakeSession()
+    await press(session, 'Meta+a')
+    expect(sent[0].params).toMatchObject({ type: 'rawKeyDown', commands: ['selectAll'] })
+    // Only on the press: a key release that repeated it would select twice.
+    expect(sent[1].params?.commands).toBeUndefined()
+  })
+
+  it('carries no command for an ordinary key', async () => {
+    const { session, sent } = fakeSession()
+    await press(session, 'Enter')
+    expect(sent[0].params?.commands).toBeUndefined()
+  })
+
   it('refuses a name that is not a key', async () => {
     const { session, sent } = fakeSession()
     expect(await press(session, 'Retrun')).toEqual({ ok: false, reason: 'Retrun is not a key.' })
@@ -218,7 +299,7 @@ describe('drag', () => {
 
   it('presses, moves in steps with the button held, then releases at the target', async () => {
     const { session, sent } = targetedSession(both)
-    expect(await drag(session, '#from', '#to')).toEqual({ ok: true, message: 'Dragged button onto div.' })
+    expect(await drag(session, '#from', '#to')).toEqual({ ok: true, message: 'Dragged button to div.' })
     const mouse = sent.filter((each) => each.method === 'Input.dispatchMouseEvent')
     expect(mouse[0].params).toMatchObject({ type: 'mouseMoved', buttons: 0 })
     expect(mouse[1].params).toMatchObject({ type: 'mousePressed', x: 30, y: 40 })
@@ -363,7 +444,7 @@ describe('drag', () => {
       const { session, sent } = targetedSession(both, {}, intercept)
       expect(await drag(session, '#from', '#to')).toEqual({
         ok: true,
-        message: 'Dragged button onto div, as an HTML5 drag.',
+        message: 'Dragged button to div, as an HTML5 drag.',
       })
       const drags = sent.filter((each) => each.method === 'Input.dispatchDragEvent')
       expect(drags[0].params).toMatchObject({ type: 'dragEnter', data: { items: [] } })
@@ -509,5 +590,96 @@ describe('readPage', () => {
       ok: true,
       message: '# Demo\nhttps://demoqa.com/\n\nref=1 button "Go"',
     })
+  })
+})
+
+describe('waitFor', () => {
+  it('returns as soon as the condition holds', async () => {
+    let asked = 0
+    const session = {
+      evaluate: async () => {
+        asked += 1
+        return { ok: true as const, value: asked >= 3 }
+      },
+      send: async () => ({}),
+      next: async () => undefined,
+    } as unknown as BrowserSession
+    const result = await waitFor(session, '#done', undefined, false, 5)
+    expect(result).toMatchObject({ ok: true })
+    expect(asked).toBe(3)
+  })
+
+  it('gives up after the time it was given', async () => {
+    const session = {
+      evaluate: async () => ({ ok: true as const, value: false }),
+      send: async () => ({}),
+      next: async () => undefined,
+    } as unknown as BrowserSession
+    const result = await waitFor(session, '#done', undefined, false, 1)
+    expect(result).toMatchObject({ ok: false })
+    expect(result.ok ? '' : result.reason).toContain('still missing after 1s')
+  })
+
+  // reason: a page mid-navigation cannot answer, which is not a reason to
+  // stop waiting for what will be on the page after it.
+  it('keeps waiting through a page that cannot answer', async () => {
+    let asked = 0
+    const session = {
+      evaluate: async () => {
+        asked += 1
+        return asked < 3 ? { ok: false as const, reason: 'target closed' } : { ok: true as const, value: true }
+      },
+      send: async () => ({}),
+      next: async () => undefined,
+    } as unknown as BrowserSession
+    await expect(waitFor(session, '#done', undefined, false, 5)).resolves.toMatchObject({ ok: true })
+  })
+
+  it('waits for text as well as for an element', async () => {
+    const seen: string[] = []
+    const session = {
+      evaluate: async (expression: string) => {
+        seen.push(expression)
+        return { ok: true as const, value: true }
+      },
+      send: async () => ({}),
+      next: async () => undefined,
+    } as unknown as BrowserSession
+    await waitFor(session, undefined, 'Saved', false, 5)
+    expect(seen[0]).toContain('innerText')
+    expect(seen[0]).toContain('"Saved"')
+  })
+
+  it('refuses a wait for nothing in particular', async () => {
+    const { session, sent } = fakeSession()
+    expect(await waitFor(session, undefined, undefined, false, 5)).toMatchObject({ ok: false })
+    expect(sent).toEqual([])
+  })
+})
+
+describe('drag by an offset', () => {
+  // reason: a resize handle is dragged by a distance, and the nearest element
+  // to that distance is not the same thing.
+  it('drags from the source by the offset when no target is named', async () => {
+    const { session, sent } = targetedSession({ '#handle': AT })
+    expect(await drag(session, '#handle', undefined, { dx: 50, dy: 30 })).toEqual({
+      ok: true,
+      message: 'Dragged button to button offset by 50, 30.',
+    })
+    const mouse = sent.filter((each) => each.method === 'Input.dispatchMouseEvent')
+    expect(mouse.at(-1)?.params).toMatchObject({ type: 'mouseReleased', x: 80, y: 70 })
+  })
+
+  it('adds the offset to a named target', async () => {
+    const { session, sent } = targetedSession({ '#from': AT, '#to': ELSEWHERE })
+    await drag(session, '#from', '#to', { dx: -10, dy: 5 })
+    const mouse = sent.filter((each) => each.method === 'Input.dispatchMouseEvent')
+    expect(mouse.at(-1)?.params).toMatchObject({ x: 190, y: 305 })
+  })
+
+  it('refuses a drag that names neither a target nor a distance', async () => {
+    const { session, sent } = targetedSession({ '#from': AT })
+    expect(await drag(session, '#from', undefined, { dx: 0, dy: 0 })).toMatchObject({ ok: false })
+    expect(sent).toEqual([])
   })
 })

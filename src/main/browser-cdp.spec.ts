@@ -50,6 +50,24 @@ function session(): { browser: BrowserSession; fake: FakeDebuggee } {
 }
 
 describe('BrowserSession', () => {
+  // reason: the first thing a caller does may be to click something that
+  // opens a dialog, and a dialog opening before `Page` is enabled is never
+  // reported — it blocks the renderer instead, and with it everything after.
+  it('finishes enabling the domains before the call that attached it runs', async () => {
+    const { browser, fake } = session()
+    await browser.send('Input.dispatchMouseEvent', { type: 'mousePressed' })
+    const enabled = fake.sent.findIndex((each) => each.method === 'Page.enable')
+    const clicked = fake.sent.findIndex((each) => each.method === 'Input.dispatchMouseEvent')
+    expect(enabled).toBeGreaterThanOrEqual(0)
+    expect(enabled).toBeLessThan(clicked)
+  })
+
+  it('attaches once even when several calls arrive together', async () => {
+    const { browser, fake } = session()
+    await Promise.all([browser.send('Runtime.evaluate'), browser.send('Runtime.evaluate')])
+    expect(fake.sent.filter((each) => each.method === 'Page.enable')).toHaveLength(1)
+  })
+
   it('attaches once and enables the domains it listens to', async () => {
     const { browser, fake } = session()
     await browser.send('Runtime.evaluate', {})
@@ -131,6 +149,28 @@ describe('BrowserSession', () => {
     })
   })
 
+  describe('navigation', () => {
+    // reason: a page that navigates under an automation run loses everything
+    // typed into it, and a run that is not told cannot tell that from a step
+    // that simply failed.
+    it('records where the browser went, and empties on read', async () => {
+      const { browser, fake } = session()
+      await browser.send('Runtime.evaluate')
+      fake.emit('Page.frameNavigated', { frame: { url: 'https://demoqa.com/alerts' } })
+      expect(browser.takeNavigations()).toEqual([{ url: 'https://demoqa.com/alerts' }])
+      expect(browser.takeNavigations()).toEqual([])
+    })
+
+    // reason: a page's adverts navigate their own frames constantly, and none
+    // of that moves the page the model is reading.
+    it('ignores a frame inside the page', async () => {
+      const { browser, fake } = session()
+      await browser.send('Runtime.evaluate')
+      fake.emit('Page.frameNavigated', { frame: { url: 'https://ads.example/x', parentId: 'main' } })
+      expect(browser.takeNavigations()).toEqual([])
+    })
+  })
+
   describe('dialogs', () => {
     it('dismisses by default, so a page is never left blocked', async () => {
       const { browser, fake } = session()
@@ -145,7 +185,7 @@ describe('BrowserSession', () => {
     it('accepts, with prompt text, once told to', async () => {
       const { browser, fake } = session()
       await browser.send('Runtime.evaluate')
-      browser.setDialogPolicy({ accept: true, promptText: 'Olha' })
+      await browser.setDialogPolicy({ accept: true, promptText: 'Olha' })
       fake.emit('Page.javascriptDialogOpening', { type: 'prompt', message: 'Your name?' })
       expect(fake.sent.at(-1)?.params).toEqual({ accept: true, promptText: 'Olha' })
     })
@@ -163,18 +203,58 @@ describe('BrowserSession', () => {
       await new Promise((resolve) => setTimeout(resolve, 10))
       process.off('unhandledRejection', unhandled)
       expect(unhandled).not.toHaveBeenCalled()
-      expect(browser.takeDialogs()).toHaveLength(1)
+      expect(await browser.takeDialogs()).toHaveLength(1)
+    })
+
+    // reason: Electron does not implement `prompt` — it throws before any
+    // dialog exists, so there is nothing for the protocol to intercept and a
+    // page that calls it fails outright.
+    it('gives the page a prompt of its own, for now and for later pages', async () => {
+      const { browser, fake } = session()
+      await browser.send('Runtime.evaluate')
+      const installs = fake.sent.filter((each) => each.method === 'Page.addScriptToEvaluateOnNewDocument')
+      expect(installs).toHaveLength(1)
+      expect((installs[0].params as { source: string }).source).toContain('window.prompt =')
+    })
+
+    it('reinstalls its prompt when the policy changes, so it answers the new way', async () => {
+      const { browser, fake } = session()
+      await browser.send('Runtime.evaluate')
+      await browser.setDialogPolicy({ accept: true, promptText: 'Olha' })
+      const source = (fake.sent
+        .filter((each) => each.method === 'Page.addScriptToEvaluateOnNewDocument')
+        .at(-1)?.params as { source: string }).source
+      expect(source).toContain('"Olha"')
+      expect(source).toContain('accept: true')
+    })
+
+    it('does not reinstall its prompt when nothing about the policy changed', async () => {
+      const { browser, fake } = session()
+      await browser.send('Runtime.evaluate')
+      await browser.setDialogPolicy({ accept: false })
+      expect(fake.sent.filter((each) => each.method === 'Page.addScriptToEvaluateOnNewDocument')).toHaveLength(1)
+    })
+
+    it('reports the prompts the page recorded alongside the native dialogs', async () => {
+      const { browser, fake } = session()
+      await browser.send('Runtime.evaluate')
+      fake.emit('Page.javascriptDialogOpening', { type: 'alert', message: 'hi' })
+      fake.replies['Runtime.evaluate'] = { result: { value: [{ message: 'Please enter your name', accepted: true }] } }
+      expect(await browser.takeDialogs()).toEqual([
+        { kind: 'alert', message: 'hi', accepted: false },
+        { kind: 'prompt', message: 'Please enter your name', accepted: true },
+      ])
     })
 
     it('records what appeared and how it was answered', async () => {
       const { browser, fake } = session()
       await browser.send('Runtime.evaluate')
-      browser.setDialogPolicy({ accept: true })
+      await browser.setDialogPolicy({ accept: true })
       fake.emit('Page.javascriptDialogOpening', { type: 'confirm', message: 'Do you confirm action?' })
-      expect(browser.takeDialogs()).toEqual([
+      expect(await browser.takeDialogs()).toEqual([
         { kind: 'confirm', message: 'Do you confirm action?', accepted: true },
       ])
-      expect(browser.takeDialogs()).toEqual([])
+      expect(await browser.takeDialogs()).toEqual([])
     })
   })
 })
