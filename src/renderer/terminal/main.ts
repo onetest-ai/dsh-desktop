@@ -1,8 +1,5 @@
-import { FitAddon } from '@xterm/addon-fit'
-import { WebglAddon } from '@xterm/addon-webgl'
-import { Terminal } from '@xterm/xterm'
 import { followHarnessTheme } from '../pane/theme.ts'
-import { palette } from './palette.ts'
+import { createSession, type Session } from './session.ts'
 
 /** What the preload exposes to this page. */
 declare global {
@@ -12,6 +9,8 @@ declare global {
       input(id: number, data: string): void
       resize(id: number, cols: number, rows: number): void
       ack(id: number, chars: number): void
+      kill(id: number): void
+      closePanel(): void
       onData(listener: (id: number, data: string) => void): void
       onExit(listener: (id: number, code: number) => void): void
       onFailed(listener: (id: number, reason: string) => void): void
@@ -20,9 +19,6 @@ declare global {
     }
   }
 }
-
-/** Characters drawn before the panel acknowledges them; see `pty-flow.ts`. */
-const ACK_CHARS = 5_000
 
 /**
  * One element by id.
@@ -35,130 +31,172 @@ function el(id: string): HTMLElement {
   return node
 }
 
-const surface = el('terminal-surface')
-const message = el('terminal-message')
+const strip = el('terminal-tabs')
+const surfaces = el('terminal-surfaces')
+const empty = el('terminal-empty')
 
-const term = new Terminal({
-  allowProposedApi: true,
-  cursorBlink: true,
-  fontSize: 12,
-  fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
-  // Rows sit flush against each other at the default 1.0, which reads as one
-  // block of text rather than as lines.
-  lineHeight: 1.25,
-  // Enough to scroll back through a build's output without holding a session
-  // of it in memory.
-  scrollback: 5_000,
-})
-const fit = new FitAddon()
-term.loadAddon(fit)
-term.open(surface)
+/** Every shell this panel has open, in the order their tabs are shown. */
+const sessions: Session[] = []
+/** The session showing, or undefined when none is. */
+let active: number | undefined
 
-// The GPU renderer, with xterm's DOM renderer as the fallback it falls back to
-// on its own. The DOM renderer positions each cell with layout rather than
-// drawing to a grid, so glyphs drift out of their columns and rows run
-// together — legible in a demo, wrong in a terminal.
-try {
-  const webgl = new WebglAddon()
-  webgl.onContextLoss(() => {
-    webgl.dispose()
-  })
-  term.loadAddon(webgl)
-} catch {
-  // No GPU context available in this window: xterm keeps the DOM renderer,
-  // which draws everything correctly enough to work with.
+const deps = {
+  input: (id: number, data: string) => {
+    window.terminal.input(id, data)
+  },
+  resize: (id: number, cols: number, rows: number) => {
+    window.terminal.resize(id, cols, rows)
+  },
+  ack: (id: number, chars: number) => {
+    window.terminal.ack(id, chars)
+  },
 }
 
-/** The running shell, or undefined before one starts or after it exits. */
-let session: number | undefined
-/** Characters drawn since the last acknowledgement. */
-let drawn = 0
-
 /**
- * Say why there is no terminal, where the terminal would be.
- * @param text - what to show, or '' to clear it.
+ * The session with an id, or undefined when it has gone.
+ * @param id - the session's id.
+ * @returns the session.
  */
-function report(text: string): void {
-  message.textContent = text
-  message.hidden = text === ''
+function find(id: number): Session | undefined {
+  return sessions.find((session) => session.id === id)
 }
 
-/** Apply the harness's palette to xterm, which owns its own colours. */
-function repaint(): void {
-  term.options.theme = palette(document.body)
+/** Draw the tab strip from the sessions, marking the active one. */
+function drawTabs(): void {
+  strip.textContent = ''
+  for (const session of sessions) {
+    const tab = document.createElement('div')
+    tab.className = 'terminal-tab'
+    if (session.id === active) tab.classList.add('is-active')
+
+    const label = document.createElement('button')
+    label.type = 'button'
+    label.className = 'terminal-tab-label'
+    label.textContent = session.shell.split('/').pop() ?? 'shell'
+    // The directory a terminal was started in never changes, and is the only
+    // thing that distinguishes two shells with the same name.
+    label.title = session.cwd
+    label.addEventListener('click', () => {
+      show(session.id)
+    })
+
+    const close = document.createElement('button')
+    close.type = 'button'
+    close.className = 'terminal-tab-close'
+    close.setAttribute('aria-label', `Close ${label.textContent}`)
+    close.textContent = '✕'
+    close.addEventListener('click', (event) => {
+      event.stopPropagation()
+      closeSession(session.id)
+    })
+
+    tab.append(label, close)
+    strip.append(tab)
+  }
 }
 
 /**
- * Fit the terminal to the panel and tell the shell its new size.
+ * Show one session and hide the rest.
+ * @param id - the session to show.
+ */
+function show(id: number): void {
+  active = id
+  for (const session of sessions) session.surface.hidden = session.id !== id
+  drawTabs()
+  const session = find(id)
+  // Fitted on the way in: a hidden surface measures zero, so a session sized
+  // while it was in the background would have told its shell the wrong size.
+  session?.fit()
+  session?.focus()
+}
+
+/**
+ * Start a shell and give it a tab.
+ * @returns resolution once it has started, or the reason it did not.
+ */
+async function open(): Promise<void> {
+  // Measured from the panel itself: the surface a new session draws into does
+  // not exist yet, and every session in this panel is the same size.
+  const probe = surfaces.getBoundingClientRect()
+  const started = await window.terminal.start(Math.max(1, Math.floor(probe.width / 7)), Math.max(1, Math.floor(probe.height / 16)))
+  if ('error' in started) {
+    empty.textContent = started.error
+    empty.hidden = false
+    return
+  }
+  empty.hidden = true
+  const session = createSession(started, deps)
+  sessions.push(session)
+  surfaces.append(session.surface)
+  session.repaint()
+  show(session.id)
+}
+
+/**
+ * Close one session, and the panel with it when it was the last.
  *
- * The shell is told rather than left to guess: without it, `vim` and `less`
- * draw for the size the terminal started at.
+ * The panel closing with its last terminal is what every editor does: a panel
+ * left open with nothing in it is a strip of chrome asking to be dismissed
+ * twice.
+ * @param id - the session to close.
  */
-function resize(): void {
-  fit.fit()
-  if (session !== undefined) window.terminal.resize(session, term.cols, term.rows)
+function closeSession(id: number): void {
+  const index = sessions.findIndex((session) => session.id === id)
+  if (index === -1) return
+  window.terminal.kill(id)
+  sessions[index].dispose()
+  sessions.splice(index, 1)
+  if (sessions.length === 0) {
+    active = undefined
+    window.terminal.closePanel()
+    drawTabs()
+    return
+  }
+  show(sessions[Math.min(index, sessions.length - 1)].id)
 }
 
 window.terminal.onData((id, data) => {
-  if (id !== session) return
-  term.write(data, () => {
-    // Acknowledged after the write has been drawn, not when it arrived: the
-    // count is what tells the pty the panel has kept up. See `pty-flow.ts`.
-    drawn += data.length
-    if (drawn < ACK_CHARS) return
-    window.terminal.ack(id, drawn)
-    drawn = 0
-  })
+  find(id)?.write(data)
 })
 
 window.terminal.onExit((id, code) => {
-  if (id !== session) return
-  session = undefined
-  report(code === 0 ? 'The shell exited. Close and reopen the panel to start another.' : `The shell exited with code ${String(code)}.`)
+  const session = find(id)
+  if (session === undefined) return
+  // A shell that exited on its own takes its tab with it, the same as one
+  // closed from the tab — the difference is not one anybody acts on.
+  if (code === 0) {
+    closeSession(id)
+    return
+  }
+  session.report(`The shell exited with code ${String(code)}. Close this tab to be rid of it.`)
 })
 
 window.terminal.onFailed((id, reason) => {
-  if (id !== session) return
-  session = undefined
-  report(reason)
+  const session = find(id)
+  if (session === undefined) {
+    empty.textContent = reason
+    empty.hidden = false
+    return
+  }
+  session.report(reason)
 })
 
-term.onData((data) => {
-  if (session !== undefined) window.terminal.input(session, data)
-})
-
-// Sets the attribute the vendored token sheet keys on, then hands back the
-// answer so xterm — which owns its own colours and reads no CSS — is repainted
-// with the values that attribute just changed.
 followHarnessTheme(() => {
-  repaint()
+  for (const session of sessions) session.repaint()
 })
 
 new ResizeObserver(() => {
-  resize()
-}).observe(surface)
+  if (active !== undefined) find(active)?.fit()
+}).observe(surfaces)
 
-/**
- * Start the shell for this panel.
- * @returns resolution once it has started, or the reason it did not.
- */
-async function begin(): Promise<void> {
-  fit.fit()
-  const started = await window.terminal.start(term.cols, term.rows)
-  if ('error' in started) {
-    report(started.error)
-    return
-  }
-  session = started.id
-  // Marked left-to-right: the header truncates from the left with a
-  // right-to-left container, which would otherwise reorder the path's leading
-  // slash to the visual end.
-  el('terminal-cwd').textContent = `\u200e${started.cwd}`
-  el('terminal-cwd').title = started.cwd
-  el('terminal-title').textContent = started.shell.split('/').pop() ?? 'Terminal'
-  report('')
-  term.focus()
-}
+el('terminal-new').addEventListener('click', () => {
+  void open()
+})
+el('terminal-close').addEventListener('click', () => {
+  // Every shell in the panel goes with it: a pty left running with nothing
+  // drawing it holds the workspace open for no one.
+  for (const session of [...sessions]) closeSession(session.id)
+  window.terminal.closePanel()
+})
 
-repaint()
-void begin()
+void open()

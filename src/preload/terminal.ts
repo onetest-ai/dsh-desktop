@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('terminal', {
   input: (id: number, data: string) => ipcRenderer.send('terminal:input', id, data),
   resize: (id: number, cols: number, rows: number) => ipcRenderer.send('terminal:resize', id, cols, rows),
   ack: (id: number, chars: number) => ipcRenderer.send('terminal:ack', id, chars),
+  kill: (id: number) => ipcRenderer.send('terminal:kill', id),
+  closePanel: () => ipcRenderer.send('terminal:close-panel'),
   onData: (listener: (id: number, data: string) => void) => {
     ipcRenderer.on('terminal:data', (_event, id: number, data: string) => listener(id, data))
   },

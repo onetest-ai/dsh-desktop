@@ -2055,6 +2055,15 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.on('terminal:ack', (_event, id: number, chars: number) => {
       terminals.send({ kind: 'ack', id, chars })
     })
+    ipcMain.on('terminal:kill', (_event, id: number) => {
+      terminals.send({ kind: 'kill', id })
+    })
+    // The panel's own close button. It closes the column, exactly as the
+    // rail's toggle does — the shells in it are killed by the page first.
+    ipcMain.on('terminal:close-panel', () => {
+      if (!columns.terminal.open) return
+      toggleColumn('terminal')
+    })
     // Asked for as the tree's page loads, for the same reason as the theme:
     // main cannot know when a page is ready to be told.
     ipcMain.on('pane:ask-project', () => {

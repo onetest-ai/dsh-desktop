@@ -16,34 +16,107 @@ body {
   font-family: var(--dsw-font-family);
 }
 
+/* The strip carries the tabs, and the two buttons that act on the panel
+   rather than on any one shell. */
 .terminal-chrome {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  height: 28px;
-  font-size: 11px;
-  color: var(--dsw-alias-label-secondary);
+  align-items: stretch;
+  height: 30px;
+  padding-right: 4px;
   border-bottom: 1px solid var(--dsw-alias-border-l2);
   user-select: none;
 }
 
-.terminal-title {
-  font-weight: 600;
+.terminal-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.terminal-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* A tab is its name and its own close, so a terminal is dismissed where it is
+   rather than by first selecting it. */
+.terminal-tab {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 10px;
+  border-right: 1px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.terminal-tab.is-active {
+  background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
 }
 
-.terminal-cwd {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
+.terminal-tab-label {
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 
-/* The measured area xterm fits itself to; its own canvas fills this. */
+.terminal-tab-close,
+.terminal-chrome-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  align-self: center;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.terminal-tab-close:hover,
+.terminal-chrome-button:hover {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+  color: var(--dsw-alias-label-primary);
+}
+
+.terminal-tab-close:focus-visible,
+.terminal-chrome-button:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: -2px;
+}
+
+.terminal-surfaces {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+/* Every session keeps its own surface, hidden while another is shown, so a
+   tab switch costs nothing and loses no scrollback. */
 .terminal-surface {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-surface[hidden] {
+  display: none;
+}
+
+.terminal-screen {
   flex: 1 1 auto;
   min-height: 0;
   padding: 6px 0 6px 8px;
