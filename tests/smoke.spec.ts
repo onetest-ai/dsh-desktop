@@ -340,6 +340,80 @@ test('resizes the browser column by dragging its seam', async () => {
   }
 })
 
+/**
+ * The View menu, read from the packaged app itself.
+ *
+ * Both halves need the real artifact: an accelerator exists only where a menu
+ * item carries one, and `app.isPackaged` is false in every unit test, so the
+ * DevTools omission cannot be proven anywhere but here.
+ */
+test('ships a shortcut for every pane and no DevTools', async () => {
+  const userDataDir = mkdtempSync(join(tmpdir(), 'dsh-desktop-menu-'))
+  const dshHome = provisionDshHome()
+  const app = await electron.launch({
+    executablePath: APP,
+    args: [`--user-data-dir=${userDataDir}`],
+    env: { ...process.env, DSH_HOME: dshHome },
+  })
+  try {
+    await waitForWindowUrl(app, /shell\.html$/)
+    const items = await app.evaluate(({ Menu }) => {
+      const view = Menu.getApplicationMenu()?.items.find((item) => item.label === 'View')
+      return (view?.submenu?.items ?? []).map((item) => ({
+        label: item.label,
+        role: item.role,
+        accelerator: item.accelerator,
+      }))
+    })
+    expect(items.filter((i) => (i.accelerator ?? '') !== '').map((i) => `${i.label ?? ''} ${i.accelerator ?? ''}`)).toEqual([
+      'Toggle File Tree CmdOrCtrl+Alt+B',
+      'Toggle Browser CmdOrCtrl+Alt+W',
+      'Toggle Terminal CmdOrCtrl+Alt+J',
+      'Actual Size CmdOrCtrl+0',
+      'Zoom In CmdOrCtrl+Plus',
+      'Zoom Out CmdOrCtrl+-',
+    ])
+    expect(items.map((i) => i.role)).not.toContain('toggleDevTools')
+  } finally {
+    await app.close()
+  }
+})
+
+/**
+ * The rail is inside the window it is placed in.
+ *
+ * `applyLayout` sends the rail's position in the window's own points, and the
+ * page lays it out in CSS pixels. Those agree only at zoom 1 — and Chromium
+ * persists zoom per origin, so one press of ⌘+ put the rail at x=1250 inside
+ * a 1168-wide page, off its own right edge, and kept it there across every
+ * relaunch. Nothing in the page's own numbers looked wrong: the rail reported
+ * a correct box, a real background, and buttons with a real colour.
+ *
+ * Run against the real user profile, without a temporary `--user-data-dir`,
+ * because a persisted zoom is exactly what a fresh profile does not have.
+ */
+test('places the rail inside the page, whatever the profile says about zoom', async () => {
+  const app = await electron.launch({ executablePath: APP, env: { ...process.env } })
+  try {
+    const shell = await waitForWindowUrl(app, /shell\.html$/)
+    const zoom = await app.evaluate(({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows().find((each) => each.getContentSize()[0] > 800)
+      return { level: main?.webContents.getZoomLevel(), content: main?.getContentSize()[0] }
+    })
+    expect(zoom.level, 'the window page is zoomed, so its layout no longer matches the window').toBe(0)
+
+    const page = await shell.evaluate(() => {
+      const rail = document.getElementById('rail')
+      const box = rail?.getBoundingClientRect()
+      return { viewport: window.innerWidth, right: box === undefined ? 0 : box.right }
+    })
+    expect(page.viewport, 'the page lays out at a different size from the window').toBe(zoom.content)
+    expect(page.right, 'the rail runs past the right edge of its own page').toBeLessThanOrEqual(page.viewport)
+  } finally {
+    await app.close()
+  }
+})
+
 // reason: without the executable bit every terminal fails with a bare
 // `posix_spawnp failed.`, and the mode npm leaves it in is not executable.
 test('ships a pty helper the app may actually execute', () => {

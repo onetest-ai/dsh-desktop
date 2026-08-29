@@ -33,7 +33,7 @@ const fake = vi.hoisted(() => {
   })
 
   const windowInstance = {
-    webContents: { ...contents(), send: vi.fn() },
+    webContents: { ...contents(), send: vi.fn(), setZoomLevel: vi.fn() },
     contentView: { addChildView: vi.fn() },
     on: (event: string, handler: () => void) => {
       if (event === 'resize') resizeHandlers.push(handler)
@@ -80,6 +80,7 @@ beforeEach(() => {
   // window of that size and every coordinate in it is off.
   fake.windowInstance.getContentSize.mockReturnValue([1280, 860])
   fake.packaged = false
+  fake.windowInstance.webContents.setZoomLevel.mockClear()
   fake.domReadyHandlers.length = 0
   fake.loadHandlers.length = 0
   fake.windowInstance.webContents.send.mockClear()
@@ -149,7 +150,7 @@ describe('the window\'s views', () => {
   it('places the rail and the dividers again once its page has loaded', async () => {
     const { createWindow } = await import('./window')
     createWindow(OPEN)
-    expect(fake.loadHandlers, 'nothing re-places the page after it loads').toHaveLength(1)
+    expect(fake.loadHandlers.length, 'nothing re-places the page after it loads').toBeGreaterThan(0)
     fake.windowInstance.webContents.send.mockClear()
     for (const handler of fake.loadHandlers) handler()
     expect(fake.windowInstance.webContents.send).toHaveBeenCalledWith(
@@ -242,7 +243,7 @@ describe('the application menu', () => {
   async function viewItems(): Promise<Array<{ label?: string; role?: string; accelerator?: string }>> {
     const { installMenu } = await import('./window')
     const { Menu } = await import('electron')
-    installMenu(vi.fn(), { toggleFiles: vi.fn(), toggleWeb: vi.fn(), toggleTerminal: vi.fn() })
+    installMenu(vi.fn(), { toggleFiles: vi.fn(), toggleWeb: vi.fn(), toggleTerminal: vi.fn(), zoomIn: vi.fn(), zoomOut: vi.fn(), zoomReset: vi.fn() })
     const template = vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)?.[0] ?? []
     const view = template.find((entry) => 'label' in entry && entry.label === 'View')
     return (view as { submenu?: Array<{ label?: string; role?: string; accelerator?: string }> }).submenu ?? []
@@ -257,6 +258,9 @@ describe('the application menu', () => {
       ['Toggle File Tree', 'CmdOrCtrl+Alt+B'],
       ['Toggle Browser', 'CmdOrCtrl+Alt+W'],
       ['Toggle Terminal', 'CmdOrCtrl+Alt+J'],
+      ['Actual Size', 'CmdOrCtrl+0'],
+      ['Zoom In', 'CmdOrCtrl+Plus'],
+      ['Zoom Out', 'CmdOrCtrl+-'],
     ])
   })
 
@@ -264,7 +268,7 @@ describe('the application menu', () => {
     const { installMenu } = await import('./window')
     const { Menu } = await import('electron')
     const toggleTerminal = vi.fn()
-    installMenu(vi.fn(), { toggleFiles: vi.fn(), toggleWeb: vi.fn(), toggleTerminal })
+    installMenu(vi.fn(), { toggleFiles: vi.fn(), toggleWeb: vi.fn(), toggleTerminal, zoomIn: vi.fn(), zoomOut: vi.fn(), zoomReset: vi.fn() })
     const template = vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)?.[0] ?? []
     const view = template.find((entry) => 'label' in entry && entry.label === 'View') as {
       submenu: Array<{ label?: string; click?: () => void }>
@@ -281,5 +285,20 @@ describe('the application menu', () => {
     vi.resetModules()
     fake.packaged = false
     expect((await viewItems()).map((i) => i.role)).toContain('toggleDevTools')
+  })
+})
+
+describe('the window page’s zoom', () => {
+  // reason: `applyLayout` places the rail and the dividers at the window's own
+  // coordinates. Chromium persists zoom per origin, so one press of ⌘+ put the
+  // rail at x=1250 inside a 1168-wide page — off its own right edge, gone —
+  // and it stayed that way across every relaunch.
+  it('is pinned to actual size, at load and again once loaded', async () => {
+    const { createWindow } = await import('./window')
+    createWindow(CLOSED)
+    expect(fake.windowInstance.webContents.setZoomLevel).toHaveBeenCalledWith(0)
+    fake.windowInstance.webContents.setZoomLevel.mockClear()
+    for (const handler of fake.loadHandlers) handler()
+    expect(fake.windowInstance.webContents.setZoomLevel).toHaveBeenCalledWith(0)
   })
 })

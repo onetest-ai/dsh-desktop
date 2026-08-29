@@ -153,6 +153,16 @@ export function createWindow(columns: Columns): MainWindow {
     },
   })
   void window.loadFile(join(__dirname, '..', 'renderer', 'shell.html'))
+  // This page is chrome, not content: `applyLayout` places the rail and the
+  // dividers at the window's own coordinates, and a zoomed page lays them out
+  // in CSS pixels that no longer match — at zoom 1.1 in a 1280pt window the
+  // rail is positioned at 1250 inside a 1168-wide page and is never seen.
+  // Chromium persists zoom per origin and restores it on load, so it is
+  // pinned here and again once the document has loaded.
+  window.webContents.setZoomLevel(0)
+  window.webContents.on('did-finish-load', () => {
+    window.webContents.setZoomLevel(0)
+  })
 
   const harness = new WebContentsView({
     // The harness Web UI is loaded unmodified, so it runs with node
@@ -359,7 +369,14 @@ export function showError(views: MainWindow, title: string, detail: string): voi
  */
 export function installMenu(
   onSettings: () => void,
-  panes: { toggleFiles(): void; toggleWeb(): void; toggleTerminal(): void },
+  panes: {
+    toggleFiles(): void
+    toggleWeb(): void
+    toggleTerminal(): void
+    zoomIn(): void
+    zoomOut(): void
+    zoomReset(): void
+  },
 ): void {
   const developer: MenuItemConstructorOptions[] = app.isPackaged
     ? []
@@ -391,9 +408,12 @@ export function installMenu(
           { role: 'reload' },
           { role: 'forceReload' },
           ...developer,
-          { role: 'resetZoom' },
-          { role: 'zoomIn' },
-          { role: 'zoomOut' },
+          // Aimed at the harness rather than left as roles: a role acts on the
+          // focused window's own page — this app's chrome — and zooming that
+          // moves the rail out of the window.
+          { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: panes.zoomReset },
+          { label: 'Zoom In', accelerator: 'CmdOrCtrl+Plus', click: panes.zoomIn },
+          { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: panes.zoomOut },
           { type: 'separator' },
           { role: 'togglefullscreen' },
         ],

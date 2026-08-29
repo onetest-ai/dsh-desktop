@@ -273,6 +273,28 @@ function tellTerminalShown(): void {
 }
 
 /**
+ * How far the conversation may be zoomed, in Chromium's zoom levels.
+ *
+ * Each step is a factor of 1.2; five steps out is 2.5x and five in is 0.4x,
+ * past which the harness Web UI's own layout stops working.
+ */
+const ZOOM_LIMIT = 5
+
+/**
+ * Zoom the harness, which is the only view with reading in it.
+ *
+ * Never this app's own page: it draws the rail and the dividers at the
+ * window's coordinates, and a zoomed page lays them out somewhere else.
+ * @param step - levels to move by, or `0` to go back to actual size.
+ */
+function zoomHarness(step: number): void {
+  if (views === undefined || views.window.isDestroyed()) return
+  const contents = views.harness.webContents
+  const next = step === 0 ? 0 : contents.getZoomLevel() + step
+  contents.setZoomLevel(Math.max(-ZOOM_LIMIT, Math.min(ZOOM_LIMIT, next)))
+}
+
+/**
  * Show or hide the terminal panel.
  *
  * Shared by the rail's button and the View menu: opening the panel has to
@@ -1866,6 +1888,15 @@ if (!app.requestSingleInstanceLock()) {
       },
       toggleWeb,
       toggleTerminal: toggleTerminalPanel,
+      zoomIn: () => {
+        zoomHarness(1)
+      },
+      zoomOut: () => {
+        zoomHarness(-1)
+      },
+      zoomReset: () => {
+        zoomHarness(0)
+      },
     })
     try {
       const stored = loadConfig(CONFIG_PATH)

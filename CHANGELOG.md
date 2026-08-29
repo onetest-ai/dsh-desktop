@@ -8,6 +8,10 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 - **The terminal has a keyboard shortcut.** ⌘⌥J, alongside ⌘⌥B for the tree and ⌘⌥W for the browser. The rail's button has advertised that key in its tooltip since the panel shipped, but nothing registered it: an accelerator exists only where a menu item carries one. The rail and the menu now open the panel through one function, so neither can forget to tell the page to start a shell.
 
+### Fixed
+
+- **The rail comes back when the window has been zoomed.** ⌘+ zoomed this app's own chrome, and Chromium keeps a page's zoom per origin and restores it on every load — so one press moved the rail to x=1250 inside a page only 1168 wide, off its own right edge, and left it there across every relaunch. The rail's own numbers all looked right, which is why it read as the buttons having vanished. The window's page is now pinned to actual size, and the zoom items act on the harness, which is the view with anything to read in it.
+
 ### Changed
 
 - **DevTools is left out of packaged builds.** It stays in a development run, where it is ours to use.
