@@ -4,27 +4,11 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-29
+
 ### Added
 
 - **The terminal has a keyboard shortcut.** ⌘⌥J, alongside ⌘⌥B for the tree and ⌘⌥W for the browser. The rail's button has advertised that key in its tooltip since the panel shipped, but nothing registered it: an accelerator exists only where a menu item carries one. The rail and the menu now open the panel through one function, so neither can forget to tell the page to start a shell.
-
-### Fixed
-
-- **The rail comes back when the window has been zoomed.** ⌘+ zoomed this app's own chrome, and Chromium keeps a page's zoom per origin and restores it on every load — so one press moved the rail to x=1250 inside a page only 1168 wide, off its own right edge, and left it there across every relaunch. The rail's own numbers all looked right, which is why it read as the buttons having vanished. The window's page is now pinned to actual size, and the zoom items act on the harness, which is the view with anything to read in it.
-
-### Changed
-
-- **DevTools is left out of packaged builds.** It stays in a development run, where it is ours to use.
-
-### Fixed
-
-- **The terminal panel comes back with a shell in it.** Its page is loaded with the window and starts a shell once, at load — so closing the last tab (which takes the panel with it) left the rail's button reopening a strip of chrome with nothing in it, for as long as the window lived. Opening the panel now tells the page, which starts a shell when it has none and otherwise puts the keyboard back in the terminal that was showing. A panel opened in the first moments after boot waits for the page to finish loading rather than having the message dropped.
-- **The rail and the dividers are placed again once their page has loaded.** They have no position in `shell.css` — they are placed only by the `shell:places` message — and the first layout pass runs while `shell.html` is still loading, where a page drops what is sent to it. Until now it worked only because a later pass (a theme or project event during boot) happened to re-send in time.
-- **A terminal repaints after losing its GPU context.** Disposing the WebGL renderer hands drawing back to xterm's DOM renderer, which starts from an empty screen: a macOS fullscreen transition takes the context away at a moment nothing is being written, so the panel stayed blank until the next keystroke.
-
-## [0.3.0] - 2026-08-28
-
-### Added
 
 - **A terminal panel with tabs**, opened from the foot of the rail. `+` opens another shell, each tab closes itself, and the `✕` at the end of the strip closes the panel with every shell in it — while the rail's button only hides it, so shells left running are still there on the way back. Each tab owns its terminal rather than sharing one and swapping buffers, so a switch keeps scrollback, selection, and cursor. It runs your login shell — or the one named under Settings → Advanced → Terminal shell — in the workspace the tree is showing, and keeps that directory: switching workspace later moves the tree, not a shell you are already working in. It takes the editor's place when the editor is closed, the whole split when the tree is closed too, and docks along the bottom (up to half the window) when both are up.
 
@@ -34,9 +18,17 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 ### Changed
 
+- **DevTools is left out of packaged builds.** It stays in a development run, where it is ours to use.
+
 - **Settings is two columns and flat**: the sections in a list down the left, the section itself on the right, grouped by hairlines rather than by boxes. Cards inside cards inside cards spent attention on the borders instead of the settings. A strip across the top worked at five sections and hid four of the five behind a horizontal scan every time. Each setting is now a row — what it is on the left, the control on the right — with the note that used to hide behind an ⓘ shown in full. The MCP tab's two scopes, global and per-project, each became a card carrying its own name, its file, and its own ways of adding a server; they previously appeared as five flat groups with identical controls and nothing saying which file each wrote to.
 
 ### Fixed
+
+- **The rail comes back when the window has been zoomed.** ⌘+ zoomed this app's own chrome, and Chromium keeps a page's zoom per origin and restores it on every load — so one press moved the rail to x=1250 inside a page only 1168 wide, off its own right edge, and left it there across every relaunch. The rail's own numbers all looked right, which is why it read as the buttons having vanished. The window's page is now pinned to actual size, and the zoom items act on the harness, which is the view with anything to read in it.
+
+- **The terminal panel comes back with a shell in it.** Its page is loaded with the window and starts a shell once, at load — so closing the last tab (which takes the panel with it) left the rail's button reopening a strip of chrome with nothing in it, for as long as the window lived. Opening the panel now tells the page, which starts a shell when it has none and otherwise puts the keyboard back in the terminal that was showing. A panel opened in the first moments after boot waits for the page to finish loading rather than having the message dropped.
+- **The rail and the dividers are placed again once their page has loaded.** They have no position in `shell.css` — they are placed only by the `shell:places` message — and the first layout pass runs while `shell.html` is still loading, where a page drops what is sent to it. Until now it worked only because a later pass (a theme or project event during boot) happened to re-send in time.
+- **A terminal repaints after losing its GPU context.** Disposing the WebGL renderer hands drawing back to xterm's DOM renderer, which starts from an empty screen: a macOS fullscreen transition takes the context away at a moment nothing is being written, so the panel stayed blank until the next keystroke.
 
 - **One MCP server per surface, and the tool is a bare verb**: `mcp__app_editor__open_file`, `mcp__app_browser__click`. The harness publishes every tool as `mcp__<server>__<tool>`, so the server segment already says which surface a tool belongs to; a single server with `browser_`/`editor_` prefixes on each tool paid for that twice and buried the verb at the end of a long name. The three ways of getting at a page now say what each gives back — `open` navigates and returns the text, `read` returns the text of whatever is showing, `snapshot` numbers the controls — where `browse_page`, `read_open_page` and `browser_read_page` were near-twins a model guessed wrong.
 - **The view tools are named `mcp__desktop_views__…`**, not `mcp__desktop-views__…`. The harness publishes each MCP tool as `mcp__<server>__<tool>` and a hyphen is legal there, so the old server name produced one hyphen in a name that is otherwise all underscores — which a model normalizes, calls, and is told is an unknown tool. Observed happening in a real session.
