@@ -88,19 +88,33 @@ export interface ViewServer {
 }
 
 /**
- * What the harness's MCP client is told this server is called.
+ * The surfaces this app serves, each its own MCP server on its own path.
  *
- * Underscored, not hyphenated. The harness publishes each tool as
- * `mcp__<server>__<tool>`, and a hyphen is legal there — so `desktop-views`
- * produced `mcp__desktop-views__browse_page`, one hyphen in a name that is
- * otherwise all underscores. Models normalize that to an underscore and the
- * call comes back "unknown tool"; observed doing exactly that. One separator
- * throughout leaves nothing to normalize.
+ * One server per surface rather than one server with prefixed tool names: the
+ * harness publishes every tool as `mcp__<server>__<tool>`, so the server
+ * segment is already there to say which surface a tool belongs to. Spending it
+ * on one name for everything meant paying for the distinction twice — once in
+ * `desktop_views`, again in a `browser_`/`editor_` prefix on each tool — and
+ * left the verb buried at the end of a long name.
+ *
+ * Underscored throughout: a hyphen is legal in the harness's name contract but
+ * would be the only one in a name that is otherwise all underscores, and a
+ * model normalizes it away and calls a tool that does not exist.
  */
-export const VIEW_SERVER_NAME = 'desktop_views'
+export const SURFACES = {
+  /** The page in the Web tab, and everything that drives it. */
+  browser: { name: 'app_browser', path: '/browser' },
+  /** The editor column beside the conversation. */
+  editor: { name: 'app_editor', path: '/editor' },
+} as const
 
-/** The one path the server answers on, matching the URL written into `mcp.json`. */
-const ENDPOINT = '/mcp'
+/** One MCP server this app serves. */
+export interface ServedSurface {
+  /** The name the harness namespaces this surface's tools under. */
+  name: string
+  /** The path it answers on. */
+  path: string
+}
 
 /**
  * Tool result for a refused call.
@@ -121,15 +135,18 @@ function done(message: string): { content: { type: 'text'; text: string }[] } {
 }
 
 /**
- * Build the MCP server and register its tools.
+ * Build one surface's MCP server and register its tools.
+ * @param surface - which surface's tools to register.
  * @param deps - what the tools act on.
  * @returns the server, not yet connected to a transport.
  */
-function buildServer(deps: ViewDeps): McpServer {
-  const server = new McpServer({ name: 'dsh-desktop-views', version: '0.1.0' })
+function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer {
+  const server = new McpServer({ name: `dsh-${SURFACES[surface].name}`, version: '0.1.0' })
+  const editor = surface === 'editor'
+  const browser = surface === 'browser'
 
-  server.registerTool(
-    'editor_open_file',
+  if (editor) server.registerTool(
+    'open_file',
     {
       title: 'Open a file in the desktop editor',
       description:
@@ -144,12 +161,12 @@ function buildServer(deps: ViewDeps): McpServer {
     },
   )
 
-  server.registerTool(
-    'browser_show',
+  if (browser) server.registerTool(
+    'show',
     {
       title: 'Show a page in the built-in browser',
       description:
-        "Put a web page on screen in the desktop app's built-in browser, beside the conversation, and return nothing. Use this to show the user a page. Use `browser_open` instead when you want to read the page yourself — it loads the same browser and hands back the text. http and https only.",
+        "Put a web page on screen in the desktop app's built-in browser, beside the conversation, and return nothing. Use this to show the user a page. Use `open` instead when you want to read the page yourself — it loads the same browser and hands back the text. http and https only.",
       inputSchema: { url: z.string().describe('The http or https URL to load.') },
     },
     ({ url }) => {
@@ -159,8 +176,8 @@ function buildServer(deps: ViewDeps): McpServer {
     },
   )
 
-  server.registerTool(
-    'editor_show_diff',
+  if (editor) server.registerTool(
+    'show_diff',
     {
       title: 'Show a proposed change',
       description:
@@ -178,8 +195,8 @@ function buildServer(deps: ViewDeps): McpServer {
     },
   )
 
-  server.registerTool(
-    'browser_open',
+  if (browser) server.registerTool(
+    'open',
     {
       title: 'Read a web page in the desktop browser',
       description:
@@ -193,12 +210,12 @@ function buildServer(deps: ViewDeps): McpServer {
     },
   )
 
-  server.registerTool(
-    'browser_read',
+  if (browser) server.registerTool(
+    'read',
     {
       title: 'Read the page the desktop browser is showing',
       description:
-        "Read whatever page the desktop app's built-in browser is currently showing as text — including one the user navigated to themselves. Use `browser_open` to open a URL of your own, and `browser_snapshot` when you need the page's controls rather than its prose.",
+        "Read whatever page the desktop app's built-in browser is currently showing as text — including one the user navigated to themselves. Use `open` to load a URL of your own, and `snapshot` when you need the page's controls rather than its prose.",
       inputSchema: {},
     },
     async () => {
@@ -235,23 +252,23 @@ function buildServer(deps: ViewDeps): McpServer {
       'The element: `ref=N` from browser_snapshot, a CSS selector, or `text=Some visible text`.',
     )
 
-  server.registerTool(
-    'browser_snapshot',
+  if (browser) server.registerTool(
+    'snapshot',
     {
       title: 'List what can be acted on in the built-in browser',
       description:
-        "Number every interactive element on the page the desktop app's built-in browser is showing, with its role, name, id, and value. Call this before acting on a page and after anything changes it: the numbers it returns (`ref=N`) are how the other browser_* tools name an element, and they are more reliable than a CSS selector guessed from memory. Use `browser_read` instead when you want the page's prose rather than its controls.",
+        "Number every interactive element on the page the desktop app's built-in browser is showing, with its role, name, id, and value. Call this before acting on a page and after anything changes it: the numbers it returns (`ref=N`) are how the other tools here name an element, and they are more reliable than a CSS selector guessed from memory. Use `read` instead when you want the page's prose rather than its controls.",
       inputSchema: {},
     },
     async () => await acted(await deps.browser.readPage()),
   )
 
-  server.registerTool(
-    'browser_click',
+  if (browser) server.registerTool(
+    'click',
     {
       title: 'Click in the built-in browser',
       description:
-        "Click an element in the desktop app's built-in browser. The click is dispatched through the DevTools protocol, so the page cannot tell it from the user's own — it opens native dialogs, works on file inputs, and triggers handlers that ignore scripted events. Any dialog the click opens is answered and reported back; set `browser_handle_dialogs` first to decide how.",
+        "Click an element in the desktop app's built-in browser. The click is dispatched through the DevTools protocol, so the page cannot tell it from the user's own — it opens native dialogs, works on file inputs, and triggers handlers that ignore scripted events. Any dialog the click opens is answered and reported back; set `handle_dialogs` first to decide how.",
       inputSchema: {
         target,
         button: z.enum(['left', 'right', 'middle']).optional().describe('Which button; left by default.'),
@@ -261,8 +278,8 @@ function buildServer(deps: ViewDeps): McpServer {
     async ({ target: element, button, count }) => await acted(await deps.browser.click(element, { button, count })),
   )
 
-  server.registerTool(
-    'browser_hover',
+  if (browser) server.registerTool(
+    'hover',
     {
       title: 'Hover in the built-in browser',
       description:
@@ -272,8 +289,8 @@ function buildServer(deps: ViewDeps): McpServer {
     async ({ target: element }) => await acted(await deps.browser.hover(element)),
   )
 
-  server.registerTool(
-    'browser_type',
+  if (browser) server.registerTool(
+    'type',
     {
       title: 'Type into a field in the built-in browser',
       description:
@@ -287,8 +304,8 @@ function buildServer(deps: ViewDeps): McpServer {
     async ({ target: element, text, clear }) => await acted(await deps.browser.type(element, text, clear !== false)),
   )
 
-  server.registerTool(
-    'browser_press_key',
+  if (browser) server.registerTool(
+    'press_key',
     {
       title: 'Press a key in the built-in browser',
       description:
@@ -298,8 +315,8 @@ function buildServer(deps: ViewDeps): McpServer {
     async ({ key }) => await acted(await deps.browser.press(key)),
   )
 
-  server.registerTool(
-    'browser_select_option',
+  if (browser) server.registerTool(
+    'select_option',
     {
       title: 'Choose an option in the built-in browser',
       description:
@@ -309,8 +326,8 @@ function buildServer(deps: ViewDeps): McpServer {
     async ({ target: element, value }) => await acted(await deps.browser.selectOption(element, value)),
   )
 
-  server.registerTool(
-    'browser_drag',
+  if (browser) server.registerTool(
+    'drag',
     {
       title: 'Drag in the built-in browser',
       description:
@@ -326,8 +343,8 @@ function buildServer(deps: ViewDeps): McpServer {
       await acted(await deps.browser.drag(from, to, { dx: dx ?? 0, dy: dy ?? 0 })),
   )
 
-  server.registerTool(
-    'browser_wait_for',
+  if (browser) server.registerTool(
+    'wait_for',
     {
       title: 'Wait for the built-in browser',
       description:
@@ -348,8 +365,8 @@ function buildServer(deps: ViewDeps): McpServer {
       await acted(await deps.browser.waitFor(element, text, gone === true, seconds ?? 10)),
   )
 
-  server.registerTool(
-    'browser_evaluate',
+  if (browser) server.registerTool(
+    'evaluate',
     {
       title: 'Run JavaScript in the built-in browser',
       description:
@@ -362,8 +379,8 @@ function buildServer(deps: ViewDeps): McpServer {
     },
   )
 
-  server.registerTool(
-    'browser_upload_file',
+  if (browser) server.registerTool(
+    'upload_file',
     {
       title: 'Attach a file in the built-in browser',
       description:
@@ -380,8 +397,8 @@ function buildServer(deps: ViewDeps): McpServer {
     },
   )
 
-  server.registerTool(
-    'browser_handle_dialogs',
+  if (browser) server.registerTool(
+    'handle_dialogs',
     {
       title: 'Decide what happens to dialogs in the built-in browser',
       description:
@@ -397,8 +414,8 @@ function buildServer(deps: ViewDeps): McpServer {
     },
   )
 
-  server.registerTool(
-    'browser_console',
+  if (browser) server.registerTool(
+    'console',
     {
       title: "Read the built-in browser's console",
       description:
@@ -415,8 +432,8 @@ function buildServer(deps: ViewDeps): McpServer {
     },
   )
 
-  server.registerTool(
-    'browser_resize',
+  if (browser) server.registerTool(
+    'resize',
     {
       title: 'Set the viewport of the built-in browser',
       description:
@@ -429,8 +446,8 @@ function buildServer(deps: ViewDeps): McpServer {
     async ({ width, height }) => await acted(await deps.browser.resize(width, height)),
   )
 
-  server.registerTool(
-    'browser_screenshot',
+  if (browser) server.registerTool(
+    'screenshot',
     {
       title: 'Photograph the built-in browser',
       description:
@@ -445,8 +462,8 @@ function buildServer(deps: ViewDeps): McpServer {
     },
   )
 
-  server.registerTool(
-    'editor_selection',
+  if (editor) server.registerTool(
+    'selection',
     {
       title: 'Read the editor selection',
       description:
@@ -474,12 +491,14 @@ function buildServer(deps: ViewDeps): McpServer {
 export async function serveViewTools(port: number, deps: ViewDeps): Promise<ViewServer> {
   const http: Server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
-    if (url.pathname !== ENDPOINT) {
+    const surface = (Object.keys(SURFACES) as (keyof typeof SURFACES)[])
+      .find((key) => SURFACES[key].path === url.pathname)
+    if (surface === undefined) {
       response.writeHead(404).end()
       return
     }
     void (async () => {
-      const server = buildServer(deps)
+      const server = buildServer(surface, deps)
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
       // Closed together: a stateless request owns both, and leaving either
       // behind would leak one server per tool call.

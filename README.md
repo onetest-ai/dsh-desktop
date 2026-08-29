@@ -170,33 +170,35 @@ Right-click any row in the tree for **New File**, **New Folder**, **Rename**, **
 
 All of it draws in the harness's own design tokens and follows the harness's own **Appearance** setting — set dark there and these columns turn dark with it, without a restart.
 
-The agent can drive these views through a set of tools, served over MCP on `127.0.0.1` for as long as the app is running:
+The agent drives these views through two MCP servers on `127.0.0.1`, running for as long as the app is. One per surface, so the harness namespaces each one's tools under its own name and the tool itself is a bare verb: `mcp__app_editor__open_file`, `mcp__app_browser__click`.
+
+**`app_editor`** — the column beside the conversation:
 
 | Tool | What it does |
 | --- | --- |
-| `editor_open_file` | Shows a file in the editor. |
-| `browser_show` | Loads an `http`/`https` page in the Web tab. |
-| `browser_open` | Opens a URL **and reads it back as text** — the agent's way to read the web through a real browser rather than a plain fetch. |
-| `browser_read` | Reads whatever the browser is showing, including a page you navigated to yourself. |
-| `editor_show_diff` | Shows a file beside the text the agent proposes for it, before anything is written. |
-| `editor_selection` | Reads what you have selected in the editor. |
+| `open_file` | Shows a file in the editor. |
+| `show` | Loads an `http`/`https` page in the Web tab. |
+| `open` | Opens a URL **and reads it back as text** — the agent's way to read the web through a real browser rather than a plain fetch. |
+| `read` | Reads whatever the browser is showing, including a page you navigated to yourself. |
+| `show_diff` | Shows a file beside the text the agent proposes for it, before anything is written. |
+| `selection` | Reads what you have selected in the editor. |
 
-The browser can also be **driven**, through the Chrome DevTools protocol — the same protocol Playwright speaks — so a page cannot tell the input from your own:
+**`app_browser`** — the page, driven through the Chrome DevTools protocol, the same protocol Playwright speaks, so a page cannot tell the input from your own:
 
 | Tool | What it does |
 | --- | --- |
-| `browser_snapshot` | Numbers every interactive element with its role, name, id, and value. The numbers (`ref=N`) are how the tools below name an element, and they beat a CSS selector guessed from memory. |
-| `browser_click`, `browser_hover` | Clicks or hovers, at the element's place on screen. |
-| `browser_type`, `browser_press_key` | Types key by key, so pickers and autocompletes react. Replacing a value selects the old one and types over it, so the field never passes through empty — a date picker handed an empty value unmounts the form around it. `Meta+a`, `Meta+c` and the rest carry the editing command the browser acts on, so they select and copy rather than merely being pressed. |
-| `browser_select_option` | Chooses in a native `<select>`, by value or by the label you read. |
-| `browser_drag` | Presses, moves across in steps, releases — what a sortable list or a resize handle actually waits for. Onto an element, or by a distance in pixels, or both. |
-| `browser_upload_file` | Puts a file on a file input without a chooser. The file must be inside an open project. |
-| `browser_handle_dialogs` | Decides what happens to `alert`, `confirm`, and `prompt`. They are dismissed by default and always answered at once, since a dialog left open blocks the page; whatever appeared is reported with the action that caused it. |
-| `browser_wait_for` | Waits for an element or some visible text to appear or go — or, naming neither, simply for the time to pass. Also how you wait out something timed: a dialog a page opens seconds after a click is reported when this returns. |
-| `browser_evaluate` | Runs an expression in the page — for state the rendered text does not show, such as an input's `.value` or a `getBoundingClientRect()`. For reading, not for acting: one action per tool call, since a framework repaints after the expression has already returned. |
-| `browser_console` | Reads what the page logged, uncaught exceptions included. |
-| `browser_resize` | Overrides the viewport the page measures, without moving the window you arranged. |
-| `browser_screenshot` | Captures the page as a PNG. |
+| `snapshot` | Numbers every interactive element with its role, name, id, and value. The numbers (`ref=N`) are how the tools below name an element, and they beat a CSS selector guessed from memory. |
+| `click`, `hover` | Clicks or hovers, at the element's place on screen. |
+| `type`, `press_key` | Types key by key, so pickers and autocompletes react. Replacing a value selects the old one and types over it, so the field never passes through empty — a date picker handed an empty value unmounts the form around it. `Meta+a`, `Meta+c` and the rest carry the editing command the browser acts on, so they select and copy rather than merely being pressed. |
+| `select_option` | Chooses in a native `<select>`, by value or by the label you read. |
+| `drag` | Presses, moves across in steps, releases — what a sortable list or a resize handle actually waits for. Onto an element, or by a distance in pixels, or both. |
+| `upload_file` | Puts a file on a file input without a chooser. The file must be inside an open project. |
+| `handle_dialogs` | Decides what happens to `alert`, `confirm`, and `prompt`. They are dismissed by default and always answered at once, since a dialog left open blocks the page; whatever appeared is reported with the action that caused it. |
+| `wait_for` | Waits for an element or some visible text to appear or go — or, naming neither, simply for the time to pass. Also how you wait out something timed: a dialog a page opens seconds after a click is reported when this returns. |
+| `evaluate` | Runs an expression in the page — for state the rendered text does not show, such as an input's `.value` or a `getBoundingClientRect()`. For reading, not for acting: one action per tool call, since a framework repaints after the expression has already returned. |
+| `console` | Reads what the page logged, uncaught exceptions included. |
+| `resize` | Overrides the viewport the page measures, without moving the window you arranged. |
+| `screenshot` | Captures the page as a PNG. |
 
 Alongside whatever it was asked to do, an action reports two things it did not: any dialog the page opened, and any page the browser moved to on its own. A run that is not told about a navigation cannot tell a lost form from a step that simply failed.
 

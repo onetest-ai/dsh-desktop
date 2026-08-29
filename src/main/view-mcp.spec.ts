@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { serveViewTools, VIEW_SERVER_NAME, type BrowserAutomation, type ViewDeps, type ViewServer } from './view-mcp'
+import { serveViewTools, SURFACES, type BrowserAutomation, type ViewDeps, type ViewServer } from './view-mcp'
 
 let running: ViewServer | undefined
 
@@ -50,10 +50,16 @@ function deps(overrides: Partial<ViewDeps> = {}): ViewDeps {
   }
 }
 
-/** Start the server on an OS-chosen port. */
-async function serve(d: ViewDeps): Promise<string> {
+/**
+ * Start the server on an OS-chosen port.
+ * @param d - what the tools act on.
+ * @param surface - which surface's endpoint to address; the browser's by
+ *   default, since most tools live there.
+ * @returns that surface's endpoint.
+ */
+async function serve(d: ViewDeps, surface: keyof typeof SURFACES = 'browser'): Promise<string> {
   running = await serveViewTools(0, d)
-  return `http://127.0.0.1:${String(running.port)}/mcp`
+  return `http://127.0.0.1:${String(running.port)}${SURFACES[surface].path}`
 }
 
 /**
@@ -102,33 +108,44 @@ function textOf(result: Record<string, unknown>): string {
 }
 
 describe('the view tools server', () => {
-  it('lists every view tool', async () => {
+  it('lists the browser\u2019s tools on the browser\u2019s endpoint', async () => {
     const url = await serve(deps())
     await rpc(url, INITIALIZE)
     const answer = await rpc(url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
     const names = ((answer.result as { tools: { name: string }[] }).tools ?? []).map((tool) => tool.name)
     expect(names.sort()).toEqual([
-      'browser_click',
-      'browser_console',
-      'browser_drag',
-      'browser_evaluate',
-      'browser_handle_dialogs',
-      'browser_hover',
-      'browser_open',
-      'browser_press_key',
-      'browser_read',
-      'browser_resize',
-      'browser_screenshot',
-      'browser_select_option',
-      'browser_show',
-      'browser_snapshot',
-      'browser_type',
-      'browser_upload_file',
-      'browser_wait_for',
-      'editor_open_file',
-      'editor_selection',
-      'editor_show_diff',
+      'click',
+      'console',
+      'drag',
+      'evaluate',
+      'handle_dialogs',
+      'hover',
+      'open',
+      'press_key',
+      'read',
+      'resize',
+      'screenshot',
+      'select_option',
+      'show',
+      'snapshot',
+      'type',
+      'upload_file',
+      'wait_for',
     ])
+  })
+
+  it('lists the editor\u2019s tools on the editor\u2019s endpoint, and only those', async () => {
+    const url = await serve(deps(), 'editor')
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
+    const names = ((answer.result as { tools: { name: string }[] }).tools ?? []).map((tool) => tool.name)
+    expect(names.sort()).toEqual(['open_file', 'selection', 'show_diff'])
+  })
+
+  it('answers nothing on a path no surface claims', async () => {
+    const url = await serve(deps())
+    const response = await fetch(url.replace('/browser', '/mcp'), { method: 'POST', body: '{}' })
+    expect(response.status).toBe(404)
   })
 
   // reason: the model has a second, external browser through Playwright's own
@@ -144,9 +161,8 @@ describe('the view tools server', () => {
     await rpc(url, INITIALIZE)
     const answer = await rpc(url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
     const tools = (answer.result as { tools: { name: string; description: string }[] }).tools ?? []
-    const browserTools = tools.filter((tool) => tool.name.startsWith('browser_'))
-    expect(browserTools.length).toBeGreaterThan(10)
-    for (const tool of browserTools) {
+    expect(tools.length).toBeGreaterThan(10)
+    for (const tool of tools) {
       expect(tool.description, tool.name).toContain("desktop app's built-in browser")
     }
   })
@@ -156,7 +172,7 @@ describe('the view tools server', () => {
   it('reads a page it opened, title and address included', async () => {
     const d = deps()
     const url = await serve(d)
-    const result = await callTool(url, 'browser_open', { url: 'https://example.com' })
+    const result = await callTool(url, 'open', { url: 'https://example.com' })
     expect(d.fetchPage).toHaveBeenCalledWith('https://example.com')
     expect(textOf(result)).toContain('A page')
     expect(textOf(result)).toContain('the content')
@@ -165,7 +181,7 @@ describe('the view tools server', () => {
   it.each(['file:///etc/passwd', 'javascript:alert(1)', 'not a url'])('refuses to read %s', async (target) => {
     const d = deps()
     const url = await serve(d)
-    const result = await callTool(url, 'browser_open', { url: target })
+    const result = await callTool(url, 'open', { url: target })
     expect(d.fetchPage).not.toHaveBeenCalled()
     expect(result.isError).toBe(true)
   })
@@ -175,7 +191,7 @@ describe('the view tools server', () => {
       fetchPage: vi.fn(async () => ({ ok: false, reason: 'https://slow.example did not finish loading.' }) as const),
     })
     const url = await serve(d)
-    const result = await callTool(url, 'browser_open', { url: 'https://slow.example' })
+    const result = await callTool(url, 'open', { url: 'https://slow.example' })
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('did not finish loading')
   })
@@ -185,22 +201,22 @@ describe('the view tools server', () => {
   it('reads whatever the browser is already showing', async () => {
     const d = deps()
     const url = await serve(d)
-    expect(textOf(await callTool(url, 'browser_read'))).toContain('the content')
+    expect(textOf(await callTool(url, 'read'))).toContain('the content')
     expect(d.readPage).toHaveBeenCalled()
   })
 
   it('says so when the browser has nothing open', async () => {
     const d = deps({ readPage: vi.fn(async () => ({ ok: false, reason: 'The browser has no page open yet.' }) as const) })
     const url = await serve(d)
-    const result = await callTool(url, 'browser_read')
+    const result = await callTool(url, 'read')
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('no page open')
   })
 
   it('opens a file inside an open project', async () => {
     const d = deps()
-    const url = await serve(d)
-    const result = await callTool(url, 'editor_open_file', { path: '/p/demo/src/index.ts' })
+    const url = await serve(d, 'editor')
+    const result = await callTool(url, 'open_file', { path: '/p/demo/src/index.ts' })
     expect(d.openFile).toHaveBeenCalledWith('/p/demo', 'src/index.ts')
     expect(textOf(result)).toContain('src/index.ts')
   })
@@ -209,8 +225,8 @@ describe('the view tools server', () => {
   // content lets it pick a different path; a protocol error does not.
   it('refuses a file outside every open project, and says so in the result', async () => {
     const d = deps()
-    const url = await serve(d)
-    const result = await callTool(url, 'editor_open_file', { path: '/etc/passwd' })
+    const url = await serve(d, 'editor')
+    const result = await callTool(url, 'open_file', { path: '/etc/passwd' })
     expect(d.openFile).not.toHaveBeenCalled()
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('not inside a project')
@@ -219,36 +235,36 @@ describe('the view tools server', () => {
   it('opens an https page', async () => {
     const d = deps()
     const url = await serve(d)
-    await callTool(url, 'browser_show', { url: 'https://example.com' })
+    await callTool(url, 'show', { url: 'https://example.com' })
     expect(d.openUrl).toHaveBeenCalledWith('https://example.com')
   })
 
   it.each(['file:///etc/passwd', 'javascript:alert(1)'])('refuses to load %s', async (target) => {
     const d = deps()
     const url = await serve(d)
-    const result = await callTool(url, 'browser_show', { url: target })
+    const result = await callTool(url, 'show', { url: target })
     expect(d.openUrl).not.toHaveBeenCalled()
     expect(result.isError).toBe(true)
   })
 
   it('shows a proposed change without writing it', async () => {
     const d = deps()
-    const url = await serve(d)
-    await callTool(url, 'editor_show_diff', { path: '/p/demo/readme.md', proposed: '# new' })
+    const url = await serve(d, 'editor')
+    await callTool(url, 'show_diff', { path: '/p/demo/readme.md', proposed: '# new' })
     expect(d.showDiff).toHaveBeenCalledWith('/p/demo', 'readme.md', '# new')
   })
 
   it('refuses a diff for a file outside every open project', async () => {
     const d = deps()
-    const url = await serve(d)
-    const result = await callTool(url, 'editor_show_diff', { path: '/etc/hosts', proposed: 'x' })
+    const url = await serve(d, 'editor')
+    const result = await callTool(url, 'show_diff', { path: '/etc/hosts', proposed: 'x' })
     expect(d.showDiff).not.toHaveBeenCalled()
     expect(result.isError).toBe(true)
   })
 
   it('reports the editor selection', async () => {
-    const url = await serve(deps())
-    expect(textOf(await callTool(url, 'editor_selection'))).toBe('selected text')
+    const url = await serve(deps(), 'editor')
+    expect(textOf(await callTool(url, 'selection'))).toBe('selected text')
   })
 
   // reason: these tools drive the window in front of the user. Nothing off
@@ -275,13 +291,13 @@ describe('the view tools server', () => {
 describe('the browser tools', () => {
   it('numbers the page for the model to act on', async () => {
     const url = await serve(deps())
-    expect(textOf(await callTool(url, 'browser_snapshot'))).toContain('ref=1 button "Go"')
+    expect(textOf(await callTool(url, 'snapshot'))).toContain('ref=1 button "Go"')
   })
 
   it('clicks what it was told to, with the button it was told to use', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
-    const result = await callTool(url, 'browser_click', { target: 'ref=3', button: 'right', count: 2 })
+    const result = await callTool(url, 'click', { target: 'ref=3', button: 'right', count: 2 })
     expect(browser.click).toHaveBeenCalledWith('ref=3', { button: 'right', count: 2 })
     expect(textOf(result)).toBe('Clicked button "Go".')
   })
@@ -289,23 +305,23 @@ describe('the browser tools', () => {
   it('clears a field by default when typing into it', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
-    await callTool(url, 'browser_type', { target: '#firstName', text: 'Olha' })
+    await callTool(url, 'type', { target: '#firstName', text: 'Olha' })
     expect(browser.type).toHaveBeenCalledWith('#firstName', 'Olha', true)
-    await callTool(url, 'browser_type', { target: '#firstName', text: 'Olha', clear: false })
+    await callTool(url, 'type', { target: '#firstName', text: 'Olha', clear: false })
     expect(browser.type).toHaveBeenLastCalledWith('#firstName', 'Olha', false)
   })
 
   it('presses a key', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
-    await callTool(url, 'browser_press_key', { key: 'Enter' })
+    await callTool(url, 'press_key', { key: 'Enter' })
     expect(browser.press).toHaveBeenCalledWith('Enter')
   })
 
   it('drags one element onto another', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
-    await callTool(url, 'browser_drag', { from: 'text=One', to: 'text=Six' })
+    await callTool(url, 'drag', { from: 'text=One', to: 'text=Six' })
     expect(browser.drag).toHaveBeenCalledWith('text=One', 'text=Six', { dx: 0, dy: 0 })
   })
 
@@ -314,23 +330,23 @@ describe('the browser tools', () => {
   it('drags by a distance when given one', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
-    await callTool(url, 'browser_drag', { from: '.handle', dx: 50, dy: 30 })
+    await callTool(url, 'drag', { from: '.handle', dx: 50, dy: 30 })
     expect(browser.drag).toHaveBeenCalledWith('.handle', undefined, { dx: 50, dy: 30 })
   })
 
   it('waits for the time to pass when nothing in particular is named', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
-    await callTool(url, 'browser_wait_for', { seconds: 6 })
+    await callTool(url, 'wait_for', { seconds: 6 })
     expect(browser.waitFor).toHaveBeenCalledWith(undefined, undefined, false, 6)
   })
 
   it('waits for something to appear, and for something to go', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
-    await callTool(url, 'browser_wait_for', { text: 'Saved' })
+    await callTool(url, 'wait_for', { text: 'Saved' })
     expect(browser.waitFor).toHaveBeenCalledWith(undefined, 'Saved', false, 10)
-    await callTool(url, 'browser_wait_for', { target: '#spinner', gone: true, seconds: 30 })
+    await callTool(url, 'wait_for', { target: '#spinner', gone: true, seconds: 30 })
     expect(browser.waitFor).toHaveBeenLastCalledWith('#spinner', undefined, true, 30)
   })
 
@@ -340,19 +356,19 @@ describe('the browser tools', () => {
   it('reports a page the browser moved to on its own', async () => {
     const browser = automation({ takeNavigations: vi.fn(() => [{ url: 'https://demoqa.com/alerts' }]) })
     const url = await serve(deps({ browser }))
-    const text = textOf(await callTool(url, 'browser_type', { target: '#firstName', text: 'Olha' }))
+    const text = textOf(await callTool(url, 'type', { target: '#firstName', text: 'Olha' }))
     expect(text).toContain('The browser moved to https://demoqa.com/alerts.')
   })
 
   it('returns what an expression evaluated to, as JSON', async () => {
     const url = await serve(deps())
-    expect(textOf(await callTool(url, 'browser_evaluate', { expression: 'x' }))).toBe('{\n  "rows": 3\n}')
+    expect(textOf(await callTool(url, 'evaluate', { expression: 'x' }))).toBe('{\n  "rows": 3\n}')
   })
 
   it('reports an expression the page refused, as an error', async () => {
     const browser = automation({ evaluate: vi.fn(async () => ({ ok: false, reason: 'TypeError: nope' }) as const) })
     const url = await serve(deps({ browser }))
-    const result = await callTool(url, 'browser_evaluate', { expression: 'boom()' })
+    const result = await callTool(url, 'evaluate', { expression: 'boom()' })
     expect(result.isError).toBe(true)
     expect(textOf(result)).toBe('TypeError: nope')
   })
@@ -362,7 +378,7 @@ describe('the browser tools', () => {
   it('refuses to attach a file outside a project the user has open', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
-    const result = await callTool(url, 'browser_upload_file', { target: '#uploadPicture', path: '/etc/passwd' })
+    const result = await callTool(url, 'upload_file', { target: '#uploadPicture', path: '/etc/passwd' })
     expect(result.isError).toBe(true)
     expect(browser.uploadFile).not.toHaveBeenCalled()
   })
@@ -370,14 +386,14 @@ describe('the browser tools', () => {
   it('attaches a file inside one', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
-    await callTool(url, 'browser_upload_file', { target: '#uploadPicture', path: '/p/demo/shot.png' })
+    await callTool(url, 'upload_file', { target: '#uploadPicture', path: '/p/demo/shot.png' })
     expect(browser.uploadFile).toHaveBeenCalledWith('#uploadPicture', '/p/demo/shot.png')
   })
 
   it('sets a standing dialog policy', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
-    await callTool(url, 'browser_handle_dialogs', { action: 'accept', prompt_text: 'Olha' })
+    await callTool(url, 'handle_dialogs', { action: 'accept', prompt_text: 'Olha' })
     expect(browser.setDialogPolicy).toHaveBeenCalledWith({ accept: true, promptText: 'Olha' })
   })
 
@@ -388,7 +404,7 @@ describe('the browser tools', () => {
       takeDialogs: vi.fn(() => [{ kind: 'confirm', message: 'Do you confirm action?', accepted: true }]),
     })
     const url = await serve(deps({ browser }))
-    const text = textOf(await callTool(url, 'browser_click', { target: '#confirmButton' }))
+    const text = textOf(await callTool(url, 'click', { target: '#confirmButton' }))
     expect(text).toContain('Clicked button "Go".')
     expect(text).toContain('A confirm said "Do you confirm action?" and was accepted.')
   })
@@ -399,14 +415,14 @@ describe('the browser tools', () => {
       takeDialogs: vi.fn(() => [{ kind: 'alert', message: 'hi', accepted: false }]),
     })
     const url = await serve(deps({ browser }))
-    const result = await callTool(url, 'browser_click', { target: '#x' })
+    const result = await callTool(url, 'click', { target: '#x' })
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('was dismissed')
   })
 
   it('reads the console, and says so when there is nothing in it', async () => {
     const url = await serve(deps())
-    expect(textOf(await callTool(url, 'browser_console'))).toContain('Nothing has been logged')
+    expect(textOf(await callTool(url, 'console'))).toContain('Nothing has been logged')
   })
 
   it('reads console entries with their level', async () => {
@@ -414,7 +430,7 @@ describe('the browser tools', () => {
       takeConsole: vi.fn(() => [{ level: 'error', text: 'TypeError: Lr.findDOMNode is not a function' }]),
     })
     const url = await serve(deps({ browser }))
-    expect(textOf(await callTool(url, 'browser_console'))).toBe(
+    expect(textOf(await callTool(url, 'console'))).toBe(
       '[error] TypeError: Lr.findDOMNode is not a function',
     )
   })
@@ -422,60 +438,42 @@ describe('the browser tools', () => {
   it('sets the viewport a layout needs', async () => {
     const browser = automation()
     const url = await serve(deps({ browser }))
-    await callTool(url, 'browser_resize', { width: 1600, height: 900 })
+    await callTool(url, 'resize', { width: 1600, height: 900 })
     expect(browser.resize).toHaveBeenCalledWith(1600, 900)
   })
 
   it('returns a screenshot as an image, not as text', async () => {
     const url = await serve(deps())
-    const result = await callTool(url, 'browser_screenshot')
+    const result = await callTool(url, 'screenshot')
     expect(result.content).toEqual([{ type: 'image', data: 'iVBORw0K', mimeType: 'image/png' }])
   })
 
   it('reports a screenshot that could not be taken', async () => {
     const browser = automation({ screenshot: vi.fn(async () => ({ ok: false, reason: 'no target' }) as const) })
     const url = await serve(deps({ browser }))
-    expect((await callTool(url, 'browser_screenshot')).isError).toBe(true)
-  })
-})
-
-// reason: the harness publishes each tool as `mcp__<server>__<tool>` and
-// allows a hyphen there, so a hyphenated server name produced a tool name
-// mixing both separators — which a model normalizes to underscores, calls,
-// and is told is unknown. Observed against a real session.
-describe('the server name the harness namespaces tools with', () => {
-  it('uses one separator, so there is nothing to normalize', () => {
-    expect(VIEW_SERVER_NAME).toBe('desktop_views')
-    expect(VIEW_SERVER_NAME).not.toContain('-')
-  })
-
-  it('is a name the harness will publish verbatim', () => {
-    // The harness's own contract: `[A-Za-z0-9_-]`, and the joined name within
-    // 64 characters, or it is hashed and no longer predictable.
-    const longest = `mcp__${VIEW_SERVER_NAME}__browser_select_option`
-    expect(longest).toMatch(/^[A-Za-z0-9_-]+$/)
-    expect(longest.length).toBeLessThanOrEqual(64)
+    expect((await callTool(url, 'screenshot')).isError).toBe(true)
   })
 })
 
 describe('the shape of the tool surface', () => {
   /**
-   * Every tool this server publishes.
-   * @param url - the server's endpoint.
-   * @returns their names.
+   * Every tool one surface publishes.
+   * @param surface - the surface to ask.
+   * @returns its tool names.
    */
-  async function names(url: string): Promise<string[]> {
+  async function names(surface: keyof typeof SURFACES): Promise<string[]> {
+    const url = await serve(deps(), surface)
     await rpc(url, INITIALIZE)
     const answer = await rpc(url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
     return ((answer.result as { tools: { name: string }[] }).tools ?? []).map((tool) => tool.name)
   }
 
-  // reason: a model reads the list and guesses the rest. Names that share a
-  // prefix per surface are guessable; three prefixes for two surfaces are not.
-  it('groups every tool under one of two prefixes', async () => {
-    const url = await serve(deps())
-    for (const name of await names(url)) {
-      expect(name, name).toMatch(/^(editor|browser)_/)
+  // reason: the harness publishes `mcp__<server>__<tool>`, so the server
+  // segment already says which surface a tool belongs to. Repeating it in the
+  // tool name paid for the distinction twice and buried the verb.
+  it('leaves the tool a bare verb, with the surface in the namespace', async () => {
+    for (const name of await names('browser')) {
+      expect(name, name).not.toMatch(/^(browser|editor|view)_/)
     }
   })
 
@@ -483,23 +481,29 @@ describe('the shape of the tool surface', () => {
   // names for three nearby things, close enough that a model reached for one
   // that did not exist. Each of the three now says what it gives back.
   it('names the three ways of getting at a page distinctly', async () => {
-    const url = await serve(deps())
-    const published = await names(url)
-    expect(published).toContain('browser_open')
-    expect(published).toContain('browser_read')
-    expect(published).toContain('browser_snapshot')
-    expect(published).not.toContain('browser_read_page')
-    expect(published).not.toContain('read_open_page')
+    const published = await names('browser')
+    expect(published).toContain('open')
+    expect(published).toContain('read')
+    expect(published).toContain('snapshot')
   })
 
   // reason: past 64 characters the harness hashes the published name, and a
   // hashed name is not one a model can predict from the others.
   it('publishes every name verbatim under the harness contract', async () => {
-    const url = await serve(deps())
-    for (const name of await names(url)) {
-      const published = `mcp__desktop_views__${name}`
-      expect(published, published).toMatch(/^[A-Za-z0-9_-]+$/)
-      expect(published.length, published).toBeLessThanOrEqual(64)
+    for (const surface of Object.keys(SURFACES) as (keyof typeof SURFACES)[]) {
+      for (const name of await names(surface)) {
+        const published = `mcp__${SURFACES[surface].name}__${name}`
+        expect(published, published).toMatch(/^[A-Za-z0-9_-]+$/)
+        expect(published.length, published).toBeLessThanOrEqual(64)
+      }
+    }
+  })
+
+  // reason: a hyphen is legal in that contract but would be the only one in a
+  // name that is otherwise all underscores, and a model normalizes it away.
+  it('names every surface with one separator', () => {
+    for (const surface of Object.values(SURFACES)) {
+      expect(surface.name, surface.name).not.toContain('-')
     }
   })
 })

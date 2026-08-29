@@ -48,7 +48,7 @@ import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, cr
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
 import { DIVIDER_WIDTH, RAIL_WIDTH, type Columns } from './layout'
-import { serveViewTools, VIEW_SERVER_NAME, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
+import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
 import { loadableUrl } from './view-tools'
@@ -849,18 +849,19 @@ function viewToolsEntry(): McpServerEntry[] {
   // decides whether they are offered at all; that one decides whether
   // anything is.
   if (viewServer === undefined) return []
-  return [
-    {
-      name: VIEW_SERVER_NAME,
-      disabled: false,
-      transport: 'http',
-      args: [],
-      env: {},
-      url: `http://127.0.0.1:${String(viewServer.port)}/mcp`,
-      headers: {},
-      rest: {},
-    },
-  ]
+  const port = String(viewServer.port)
+  // One entry per surface, so the harness namespaces each surface's tools
+  // under its own name and the tool itself is left as a bare verb.
+  return Object.values(SURFACES).map((surface) => ({
+    name: surface.name,
+    disabled: false,
+    transport: 'http' as const,
+    args: [],
+    env: {},
+    url: `http://127.0.0.1:${port}${surface.path}`,
+    headers: {},
+    rest: {},
+  }))
 }
 
 /**
