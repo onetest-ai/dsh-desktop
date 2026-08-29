@@ -18,6 +18,8 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 ### Fixed
 
+- **The view tools are named `mcp__desktop_views__…`**, not `mcp__desktop-views__…`. The harness publishes each MCP tool as `mcp__<server>__<tool>` and a hyphen is legal there, so the old server name produced one hyphen in a name that is otherwise all underscores — which a model normalizes, calls, and is told is an unknown tool. Observed happening in a real session.
+
 - **Settings rendered white**, with its content scrolling through the fixed header: it mapped the harness's tokens on `:root`, one level above the `body` the vendored sheet defines them on, so every derived variable resolved to nothing.
 
 ## [0.2.0] - 2026-08-28

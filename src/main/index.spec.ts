@@ -354,7 +354,7 @@ vi.mock('./startup-window', () => ({
 const serveViewToolsMock = vi.fn(async () => ({ port: 43118, close: async () => {} }))
 vi.mock('./view-mcp', () => ({
   serveViewTools: (...args: unknown[]) => serveViewToolsMock(...(args as [])),
-  VIEW_SERVER_NAME: 'desktop-views',
+  VIEW_SERVER_NAME: 'desktop_views',
 }))
 
 const harnessThemeMock = vi.fn((): string => 'system')
@@ -1527,7 +1527,7 @@ describe('MCP servers at boot', () => {
     await bootReady()
     const rows = declaredPatchResolver()({ package: MCP_CLIENT, packageDir: '/tmp/mcp' }) as { id: string; name: string }[]
     // This app's own view tools ride the same client, so they are a row too.
-    expect(rows.map((row) => row.id)).toEqual(['mcp-tavily', 'mcp-playwright', 'mcp-desktop-views'])
+    expect(rows.map((row) => row.id)).toEqual(['mcp-tavily', 'mcp-playwright', 'mcp-desktop_views'])
     expect(new Set(rows.map((row) => row.name))).toEqual(new Set([MCP_CLIENT]))
   })
 

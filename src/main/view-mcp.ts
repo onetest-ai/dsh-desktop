@@ -87,8 +87,17 @@ export interface ViewServer {
   close(): Promise<void>
 }
 
-/** What the harness's MCP client is told this server is called. */
-export const VIEW_SERVER_NAME = 'desktop-views'
+/**
+ * What the harness's MCP client is told this server is called.
+ *
+ * Underscored, not hyphenated. The harness publishes each tool as
+ * `mcp__<server>__<tool>`, and a hyphen is legal there — so `desktop-views`
+ * produced `mcp__desktop-views__browse_page`, one hyphen in a name that is
+ * otherwise all underscores. Models normalize that to an underscore and the
+ * call comes back "unknown tool"; observed doing exactly that. One separator
+ * throughout leaves nothing to normalize.
+ */
+export const VIEW_SERVER_NAME = 'desktop_views'
 
 /** The one path the server answers on, matching the URL written into `mcp.json`. */
 const ENDPOINT = '/mcp'

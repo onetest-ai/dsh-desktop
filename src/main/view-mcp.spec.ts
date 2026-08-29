@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { serveViewTools, type BrowserAutomation, type ViewDeps, type ViewServer } from './view-mcp'
+import { serveViewTools, VIEW_SERVER_NAME, type BrowserAutomation, type ViewDeps, type ViewServer } from './view-mcp'
 
 let running: ViewServer | undefined
 
@@ -431,5 +431,24 @@ describe('the browser tools', () => {
     const browser = automation({ screenshot: vi.fn(async () => ({ ok: false, reason: 'no target' }) as const) })
     const url = await serve(deps({ browser }))
     expect((await callTool(url, 'browser_screenshot')).isError).toBe(true)
+  })
+})
+
+// reason: the harness publishes each tool as `mcp__<server>__<tool>` and
+// allows a hyphen there, so a hyphenated server name produced a tool name
+// mixing both separators — which a model normalizes to underscores, calls,
+// and is told is unknown. Observed against a real session.
+describe('the server name the harness namespaces tools with', () => {
+  it('uses one separator, so there is nothing to normalize', () => {
+    expect(VIEW_SERVER_NAME).toBe('desktop_views')
+    expect(VIEW_SERVER_NAME).not.toContain('-')
+  })
+
+  it('is a name the harness will publish verbatim', () => {
+    // The harness's own contract: `[A-Za-z0-9_-]`, and the joined name within
+    // 64 characters, or it is hashed and no longer predictable.
+    const longest = `mcp__${VIEW_SERVER_NAME}__browser_select_option`
+    expect(longest).toMatch(/^[A-Za-z0-9_-]+$/)
+    expect(longest.length).toBeLessThanOrEqual(64)
   })
 })
