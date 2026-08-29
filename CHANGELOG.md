@@ -4,6 +4,8 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-28
+
 ### Added
 
 - **A terminal panel with tabs**, opened from the foot of the rail. `+` opens another shell, each tab closes itself, and the `✕` at the end of the strip closes the panel with every shell in it — while the rail's button only hides it, so shells left running are still there on the way back. Each tab owns its terminal rather than sharing one and swapping buffers, so a switch keeps scrollback, selection, and cursor. It runs your login shell — or the one named under Settings → Advanced → Terminal shell — in the workspace the tree is showing, and keeps that directory: switching workspace later moves the tree, not a shell you are already working in. It takes the editor's place when the editor is closed, the whole split when the tree is closed too, and docks along the bottom (up to half the window) when both are up.

@@ -1,6 +1,6 @@
 {
   "name": "@onetest/dsh-desktop-pane",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Tells the dsh-desktop app which project the open session works in, and puts files it sends into the chat",
   "keywords": [
     "deepseek-harness",
