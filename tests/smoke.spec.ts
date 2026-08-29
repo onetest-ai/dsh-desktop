@@ -235,6 +235,43 @@ test('launches, renders the harness UI, and leaves no orphans', async () => {
   expect(findLeakedChildren(marker)).toBe('')
 })
 
+/**
+ * The panel comes back with a shell in it after its last tab is closed.
+ *
+ * Driven through the packaged app because the failure lived entirely in the
+ * renderer, which starts its shell once at page load: every unit test of the
+ * main process passed while the panel came back as a strip of chrome with
+ * nothing in it.
+ */
+test('reopens the terminal panel with a shell in it', async () => {
+  const userDataDir = mkdtempSync(join(tmpdir(), 'dsh-desktop-terminal-'))
+  const dshHome = provisionDshHome()
+  const app = await electron.launch({
+    executablePath: APP,
+    args: [`--user-data-dir=${userDataDir}`],
+    env: { ...process.env, DSH_HOME: dshHome },
+  })
+  try {
+    const shell = await waitForWindowUrl(app, /shell\.html$/)
+    const panel = await waitForWindowUrl(app, /terminal\.html$/)
+
+    // Opened from the rail, the way it is opened in the app.
+    await shell.click('#rail-terminal')
+    await expect.poll(async () => await panel.locator('.terminal-tab').count(), { timeout: 30_000 }).toBe(1)
+
+    // Closing the only tab takes the panel with it.
+    await panel.click('.terminal-tab-close')
+    await expect.poll(async () => await panel.locator('.terminal-tab').count(), { timeout: 15_000 }).toBe(0)
+
+    // Reopening must start a shell rather than showing the empty strip: the
+    // page has already run, so nothing else would.
+    await shell.click('#rail-terminal')
+    await expect.poll(async () => await panel.locator('.terminal-tab').count(), { timeout: 30_000 }).toBe(1)
+  } finally {
+    await app.close()
+  }
+})
+
 // reason: without the executable bit every terminal fails with a bare
 // `posix_spawnp failed.`, and the mode npm leaves it in is not executable.
 test('ships a pty helper the app may actually execute', () => {

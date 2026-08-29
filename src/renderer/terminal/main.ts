@@ -14,6 +14,7 @@ declare global {
       onData(listener: (id: number, data: string) => void): void
       onExit(listener: (id: number, code: number) => void): void
       onFailed(listener: (id: number, reason: string) => void): void
+      onShown(listener: () => void): void
       askTheme(): void
       onTheme(listener: (dark: boolean) => void): void
     }
@@ -197,6 +198,18 @@ el('terminal-close').addEventListener('click', () => {
   // drawing it holds the workspace open for no one.
   for (const session of [...sessions]) closeSession(session.id)
   window.terminal.closePanel()
+})
+
+window.terminal.onShown(() => {
+  // An empty panel means every tab was closed while the panel stayed on the
+  // rail, or the shell started at load has since exited. Either way, a panel
+  // someone just opened should have a shell in it: this page runs once, so
+  // without this it would stay empty for as long as the window lives.
+  if (sessions.length === 0) {
+    void open()
+    return
+  }
+  if (active !== undefined) find(active)?.focus()
 })
 
 void open()

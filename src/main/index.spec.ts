@@ -86,7 +86,13 @@ const fake = vi.hoisted(() => {
   // The terminal panel: `index.ts` pushes it the theme and the shell's output.
   const terminal = {
     getBounds: vi.fn(() => ({ x: 0, y: 620, width: 740, height: 240 })),
-    webContents: { send: vi.fn() },
+    webContents: {
+      send: vi.fn(),
+      isLoading: vi.fn(() => false),
+      once: vi.fn((name: string, handler: Handler) => {
+        windowHandlers.set(`terminal:${name}`, [...(windowHandlers.get(`terminal:${name}`) ?? []), handler])
+      }),
+    },
   }
   // The browser: `index.ts` drives its navigation and listens for where it
   // ends up.
@@ -177,6 +183,7 @@ const fake = vi.hoisted(() => {
     window,
     views,
     harness,
+    terminal,
     web,
     ipcMain,
     nativeTheme,
@@ -1729,6 +1736,37 @@ describe('the side columns', () => {
       expect.objectContaining({ files: expect.objectContaining({ width: 1280 - 30 - 1040 }) }),
       expect.any(Boolean),
     )
+  })
+
+  // reason: the panel's page is loaded with the window and runs once, so it
+  // starts a shell only at load. A panel whose last tab closed comes back
+  // empty — a strip of chrome with nothing in it — unless opening it says so.
+  it('tells the panel it is on screen when the rail opens it', async () => {
+    await bootReady()
+    fake.terminal.webContents.send.mockClear()
+    fake.sendIpc('shell:toggle-terminal')
+    expect(fake.terminal.webContents.send).toHaveBeenCalledWith('terminal:shown')
+  })
+
+  it('says nothing to the panel when the rail closes it', async () => {
+    await bootReady()
+    fake.sendIpc('shell:toggle-terminal')
+    fake.terminal.webContents.send.mockClear()
+    fake.sendIpc('shell:toggle-terminal')
+    expect(fake.terminal.webContents.send).not.toHaveBeenCalledWith('terminal:shown')
+  })
+
+  // reason: a page that has not finished loading drops what is sent to it,
+  // which is the panel's state when the rail is used in the first moments
+  // after boot — the case where an empty panel is least recoverable.
+  it('waits for the page when the panel is opened before it has loaded', async () => {
+    await bootReady()
+    fake.terminal.webContents.isLoading.mockReturnValue(true)
+    fake.terminal.webContents.send.mockClear()
+    fake.sendIpc('shell:toggle-terminal')
+    expect(fake.terminal.webContents.send).not.toHaveBeenCalledWith('terminal:shown')
+    await fake.emitWindow('terminal:did-finish-load')
+    expect(fake.terminal.webContents.send).toHaveBeenCalledWith('terminal:shown')
   })
 
   // reason: the editor's divider sits inside the tree, so its width is

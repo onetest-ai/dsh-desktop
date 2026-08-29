@@ -4,6 +4,11 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- **The terminal panel comes back with a shell in it.** Its page is loaded with the window and starts a shell once, at load — so closing the last tab (which takes the panel with it) left the rail's button reopening a strip of chrome with nothing in it, for as long as the window lived. Opening the panel now tells the page, which starts a shell when it has none and otherwise puts the keyboard back in the terminal that was showing. A panel opened in the first moments after boot waits for the page to finish loading rather than having the message dropped.
+- **A terminal repaints after losing its GPU context.** Disposing the WebGL renderer hands drawing back to xterm's DOM renderer, which starts from an empty screen: a macOS fullscreen transition takes the context away at a moment nothing is being written, so the panel stayed blank until the next keystroke.
+
 ## [0.3.0] - 2026-08-28
 
 ### Added

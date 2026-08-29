@@ -252,6 +252,27 @@ async function startViewTools(config: DesktopConfig): Promise<void> {
 }
 
 /**
+ * Tell the panel it is on screen.
+ *
+ * The page is loaded with the window, long before anyone opens the panel, and
+ * runs once: without this it comes back empty for good once its last tab
+ * closes, because nothing in the page runs a second time to start a shell.
+ */
+function tellTerminalShown(): void {
+  if (views === undefined || views.window.isDestroyed()) return
+  const target = views.terminal.webContents
+  // A page that has not finished loading drops what is sent to it, which is
+  // the panel's state for the first moments after boot.
+  if (target.isLoading()) {
+    target.once('did-finish-load', () => {
+      target.send('terminal:shown')
+    })
+    return
+  }
+  target.send('terminal:shown')
+}
+
+/**
  * Start a shell for the terminal panel.
  *
  * The directory is the workspace the tree is showing at the moment the panel
@@ -1905,6 +1926,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.on('shell:toggle-web', toggleWeb)
     ipcMain.on('shell:toggle-terminal', () => {
       toggleColumn('terminal')
+      if (columns.terminal.open) tellTerminalShown()
     })
     // The harness telling us which project it is working in — pushed by the
     // desktop plugin when the user switches session. Better than anything

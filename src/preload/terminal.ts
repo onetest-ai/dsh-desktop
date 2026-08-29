@@ -24,6 +24,11 @@ contextBridge.exposeInMainWorld('terminal', {
   onFailed: (listener: (id: number, reason: string) => void) => {
     ipcRenderer.on('terminal:failed', (_event, id: number, reason: string) => listener(id, reason))
   },
+  onShown: (listener: () => void) => {
+    ipcRenderer.on('terminal:shown', () => {
+      listener()
+    })
+  },
   askTheme: () => ipcRenderer.send('theme:ask'),
   onTheme: (listener: (dark: boolean) => void) => {
     ipcRenderer.on('theme', (_event, dark: boolean) => listener(dark))

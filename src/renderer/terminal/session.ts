@@ -85,7 +85,12 @@ export function createSession(
   try {
     const webgl = new WebglAddon()
     webgl.onContextLoss(() => {
+      // Disposing hands drawing back to the DOM renderer, which starts from
+      // an empty screen: without the repaint the panel stays blank until the
+      // shell writes again. macOS takes the GPU context away on a fullscreen
+      // transition, which is a moment nothing is being written.
       webgl.dispose()
+      term.refresh(0, term.rows - 1)
     })
     term.loadAddon(webgl)
   } catch {
