@@ -108,32 +108,37 @@ describe('the view tools server', () => {
     const answer = await rpc(url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
     const names = ((answer.result as { tools: { name: string }[] }).tools ?? []).map((tool) => tool.name)
     expect(names.sort()).toEqual([
-      'browse_page',
       'browser_click',
+      'browser_console',
       'browser_drag',
       'browser_evaluate',
       'browser_handle_dialogs',
       'browser_hover',
+      'browser_open',
       'browser_press_key',
-      'browser_read_console',
-      'browser_read_page',
+      'browser_read',
       'browser_resize',
       'browser_screenshot',
       'browser_select_option',
+      'browser_show',
+      'browser_snapshot',
       'browser_type',
       'browser_upload_file',
       'browser_wait_for',
-      'read_open_page',
-      'view_get_selection',
-      'view_open_file',
-      'view_open_url',
-      'view_show_diff',
+      'editor_open_file',
+      'editor_selection',
+      'editor_show_diff',
     ])
   })
 
   // reason: the model has a second, external browser through Playwright's own
   // MCP server, and its tools carry these same names. Every description here
   // has to say which browser it drives, or the two are indistinguishable.
+  //
+  // Two prefixes, and only two: `editor_` for the column beside the
+  // conversation, `browser_` for the page. A third — the old `view_`, plus
+  // `browse_page` and `read_open_page` standing outside both — is what had a
+  // model guessing `read_page` and being told it does not exist.
   it('says in every browser tool which browser it drives', async () => {
     const url = await serve(deps())
     await rpc(url, INITIALIZE)
@@ -151,7 +156,7 @@ describe('the view tools server', () => {
   it('reads a page it opened, title and address included', async () => {
     const d = deps()
     const url = await serve(d)
-    const result = await callTool(url, 'browse_page', { url: 'https://example.com' })
+    const result = await callTool(url, 'browser_open', { url: 'https://example.com' })
     expect(d.fetchPage).toHaveBeenCalledWith('https://example.com')
     expect(textOf(result)).toContain('A page')
     expect(textOf(result)).toContain('the content')
@@ -160,7 +165,7 @@ describe('the view tools server', () => {
   it.each(['file:///etc/passwd', 'javascript:alert(1)', 'not a url'])('refuses to read %s', async (target) => {
     const d = deps()
     const url = await serve(d)
-    const result = await callTool(url, 'browse_page', { url: target })
+    const result = await callTool(url, 'browser_open', { url: target })
     expect(d.fetchPage).not.toHaveBeenCalled()
     expect(result.isError).toBe(true)
   })
@@ -170,7 +175,7 @@ describe('the view tools server', () => {
       fetchPage: vi.fn(async () => ({ ok: false, reason: 'https://slow.example did not finish loading.' }) as const),
     })
     const url = await serve(d)
-    const result = await callTool(url, 'browse_page', { url: 'https://slow.example' })
+    const result = await callTool(url, 'browser_open', { url: 'https://slow.example' })
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('did not finish loading')
   })
@@ -180,14 +185,14 @@ describe('the view tools server', () => {
   it('reads whatever the browser is already showing', async () => {
     const d = deps()
     const url = await serve(d)
-    expect(textOf(await callTool(url, 'read_open_page'))).toContain('the content')
+    expect(textOf(await callTool(url, 'browser_read'))).toContain('the content')
     expect(d.readPage).toHaveBeenCalled()
   })
 
   it('says so when the browser has nothing open', async () => {
     const d = deps({ readPage: vi.fn(async () => ({ ok: false, reason: 'The browser has no page open yet.' }) as const) })
     const url = await serve(d)
-    const result = await callTool(url, 'read_open_page')
+    const result = await callTool(url, 'browser_read')
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('no page open')
   })
@@ -195,7 +200,7 @@ describe('the view tools server', () => {
   it('opens a file inside an open project', async () => {
     const d = deps()
     const url = await serve(d)
-    const result = await callTool(url, 'view_open_file', { path: '/p/demo/src/index.ts' })
+    const result = await callTool(url, 'editor_open_file', { path: '/p/demo/src/index.ts' })
     expect(d.openFile).toHaveBeenCalledWith('/p/demo', 'src/index.ts')
     expect(textOf(result)).toContain('src/index.ts')
   })
@@ -205,7 +210,7 @@ describe('the view tools server', () => {
   it('refuses a file outside every open project, and says so in the result', async () => {
     const d = deps()
     const url = await serve(d)
-    const result = await callTool(url, 'view_open_file', { path: '/etc/passwd' })
+    const result = await callTool(url, 'editor_open_file', { path: '/etc/passwd' })
     expect(d.openFile).not.toHaveBeenCalled()
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('not inside a project')
@@ -214,14 +219,14 @@ describe('the view tools server', () => {
   it('opens an https page', async () => {
     const d = deps()
     const url = await serve(d)
-    await callTool(url, 'view_open_url', { url: 'https://example.com' })
+    await callTool(url, 'browser_show', { url: 'https://example.com' })
     expect(d.openUrl).toHaveBeenCalledWith('https://example.com')
   })
 
   it.each(['file:///etc/passwd', 'javascript:alert(1)'])('refuses to load %s', async (target) => {
     const d = deps()
     const url = await serve(d)
-    const result = await callTool(url, 'view_open_url', { url: target })
+    const result = await callTool(url, 'browser_show', { url: target })
     expect(d.openUrl).not.toHaveBeenCalled()
     expect(result.isError).toBe(true)
   })
@@ -229,21 +234,21 @@ describe('the view tools server', () => {
   it('shows a proposed change without writing it', async () => {
     const d = deps()
     const url = await serve(d)
-    await callTool(url, 'view_show_diff', { path: '/p/demo/readme.md', proposed: '# new' })
+    await callTool(url, 'editor_show_diff', { path: '/p/demo/readme.md', proposed: '# new' })
     expect(d.showDiff).toHaveBeenCalledWith('/p/demo', 'readme.md', '# new')
   })
 
   it('refuses a diff for a file outside every open project', async () => {
     const d = deps()
     const url = await serve(d)
-    const result = await callTool(url, 'view_show_diff', { path: '/etc/hosts', proposed: 'x' })
+    const result = await callTool(url, 'editor_show_diff', { path: '/etc/hosts', proposed: 'x' })
     expect(d.showDiff).not.toHaveBeenCalled()
     expect(result.isError).toBe(true)
   })
 
   it('reports the editor selection', async () => {
     const url = await serve(deps())
-    expect(textOf(await callTool(url, 'view_get_selection'))).toBe('selected text')
+    expect(textOf(await callTool(url, 'editor_selection'))).toBe('selected text')
   })
 
   // reason: these tools drive the window in front of the user. Nothing off
@@ -270,7 +275,7 @@ describe('the view tools server', () => {
 describe('the browser tools', () => {
   it('numbers the page for the model to act on', async () => {
     const url = await serve(deps())
-    expect(textOf(await callTool(url, 'browser_read_page'))).toContain('ref=1 button "Go"')
+    expect(textOf(await callTool(url, 'browser_snapshot'))).toContain('ref=1 button "Go"')
   })
 
   it('clicks what it was told to, with the button it was told to use', async () => {
@@ -401,7 +406,7 @@ describe('the browser tools', () => {
 
   it('reads the console, and says so when there is nothing in it', async () => {
     const url = await serve(deps())
-    expect(textOf(await callTool(url, 'browser_read_console'))).toContain('Nothing has been logged')
+    expect(textOf(await callTool(url, 'browser_console'))).toContain('Nothing has been logged')
   })
 
   it('reads console entries with their level', async () => {
@@ -409,7 +414,7 @@ describe('the browser tools', () => {
       takeConsole: vi.fn(() => [{ level: 'error', text: 'TypeError: Lr.findDOMNode is not a function' }]),
     })
     const url = await serve(deps({ browser }))
-    expect(textOf(await callTool(url, 'browser_read_console'))).toBe(
+    expect(textOf(await callTool(url, 'browser_console'))).toBe(
       '[error] TypeError: Lr.findDOMNode is not a function',
     )
   })
@@ -450,5 +455,51 @@ describe('the server name the harness namespaces tools with', () => {
     const longest = `mcp__${VIEW_SERVER_NAME}__browser_select_option`
     expect(longest).toMatch(/^[A-Za-z0-9_-]+$/)
     expect(longest.length).toBeLessThanOrEqual(64)
+  })
+})
+
+describe('the shape of the tool surface', () => {
+  /**
+   * Every tool this server publishes.
+   * @param url - the server's endpoint.
+   * @returns their names.
+   */
+  async function names(url: string): Promise<string[]> {
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
+    return ((answer.result as { tools: { name: string }[] }).tools ?? []).map((tool) => tool.name)
+  }
+
+  // reason: a model reads the list and guesses the rest. Names that share a
+  // prefix per surface are guessable; three prefixes for two surfaces are not.
+  it('groups every tool under one of two prefixes', async () => {
+    const url = await serve(deps())
+    for (const name of await names(url)) {
+      expect(name, name).toMatch(/^(editor|browser)_/)
+    }
+  })
+
+  // reason: `browse_page`, `read_open_page` and `browser_read_page` were three
+  // names for three nearby things, close enough that a model reached for one
+  // that did not exist. Each of the three now says what it gives back.
+  it('names the three ways of getting at a page distinctly', async () => {
+    const url = await serve(deps())
+    const published = await names(url)
+    expect(published).toContain('browser_open')
+    expect(published).toContain('browser_read')
+    expect(published).toContain('browser_snapshot')
+    expect(published).not.toContain('browser_read_page')
+    expect(published).not.toContain('read_open_page')
+  })
+
+  // reason: past 64 characters the harness hashes the published name, and a
+  // hashed name is not one a model can predict from the others.
+  it('publishes every name verbatim under the harness contract', async () => {
+    const url = await serve(deps())
+    for (const name of await names(url)) {
+      const published = `mcp__desktop_views__${name}`
+      expect(published, published).toMatch(/^[A-Za-z0-9_-]+$/)
+      expect(published.length, published).toBeLessThanOrEqual(64)
+    }
   })
 })

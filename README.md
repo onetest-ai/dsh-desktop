@@ -174,18 +174,18 @@ The agent can drive these views through a set of tools, served over MCP on `127.
 
 | Tool | What it does |
 | --- | --- |
-| `view_open_file` | Shows a file in the editor. |
-| `view_open_url` | Loads an `http`/`https` page in the Web tab. |
-| `browse_page` | Opens a URL **and reads it back as text** — the agent's way to read the web through a real browser rather than a plain fetch. |
-| `read_open_page` | Reads whatever the browser is showing, including a page you navigated to yourself. |
-| `view_show_diff` | Shows a file beside the text the agent proposes for it, before anything is written. |
-| `view_get_selection` | Reads what you have selected in the editor. |
+| `editor_open_file` | Shows a file in the editor. |
+| `browser_show` | Loads an `http`/`https` page in the Web tab. |
+| `browser_open` | Opens a URL **and reads it back as text** — the agent's way to read the web through a real browser rather than a plain fetch. |
+| `browser_read` | Reads whatever the browser is showing, including a page you navigated to yourself. |
+| `editor_show_diff` | Shows a file beside the text the agent proposes for it, before anything is written. |
+| `editor_selection` | Reads what you have selected in the editor. |
 
 The browser can also be **driven**, through the Chrome DevTools protocol — the same protocol Playwright speaks — so a page cannot tell the input from your own:
 
 | Tool | What it does |
 | --- | --- |
-| `browser_read_page` | Numbers every interactive element with its role, name, id, and value. The numbers (`ref=N`) are how the tools below name an element, and they beat a CSS selector guessed from memory. |
+| `browser_snapshot` | Numbers every interactive element with its role, name, id, and value. The numbers (`ref=N`) are how the tools below name an element, and they beat a CSS selector guessed from memory. |
 | `browser_click`, `browser_hover` | Clicks or hovers, at the element's place on screen. |
 | `browser_type`, `browser_press_key` | Types key by key, so pickers and autocompletes react. Replacing a value selects the old one and types over it, so the field never passes through empty — a date picker handed an empty value unmounts the form around it. `Meta+a`, `Meta+c` and the rest carry the editing command the browser acts on, so they select and copy rather than merely being pressed. |
 | `browser_select_option` | Chooses in a native `<select>`, by value or by the label you read. |
@@ -194,7 +194,7 @@ The browser can also be **driven**, through the Chrome DevTools protocol — the
 | `browser_handle_dialogs` | Decides what happens to `alert`, `confirm`, and `prompt`. They are dismissed by default and always answered at once, since a dialog left open blocks the page; whatever appeared is reported with the action that caused it. |
 | `browser_wait_for` | Waits for an element or some visible text to appear or go — or, naming neither, simply for the time to pass. Also how you wait out something timed: a dialog a page opens seconds after a click is reported when this returns. |
 | `browser_evaluate` | Runs an expression in the page — for state the rendered text does not show, such as an input's `.value` or a `getBoundingClientRect()`. For reading, not for acting: one action per tool call, since a framework repaints after the expression has already returned. |
-| `browser_read_console` | Reads what the page logged, uncaught exceptions included. |
+| `browser_console` | Reads what the page logged, uncaught exceptions included. |
 | `browser_resize` | Overrides the viewport the page measures, without moving the window you arranged. |
 | `browser_screenshot` | Captures the page as a PNG. |
 

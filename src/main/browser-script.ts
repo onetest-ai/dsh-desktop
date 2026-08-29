@@ -9,7 +9,7 @@
 /**
  * How an element is named by a tool call.
  *
- * `ref=N` names a row of the last `browser_read_page`, `text=...` matches
+ * `ref=N` names a row of the last `browser_snapshot`, `text=...` matches
  * visible text, and anything else is a CSS selector.
  */
 export type Target = string

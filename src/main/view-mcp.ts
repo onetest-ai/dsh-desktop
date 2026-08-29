@@ -36,7 +36,7 @@ export interface ViewDeps {
 /**
  * Driving the built-in browser, as the tools use it.
  *
- * Every element is named the way `browser_read_page` numbered it, or by CSS
+ * Every element is named the way `browser_snapshot` numbered it, or by CSS
  * selector, or by `text=`; the implementation resolves all three.
  */
 export interface BrowserAutomation {
@@ -129,7 +129,7 @@ function buildServer(deps: ViewDeps): McpServer {
   const server = new McpServer({ name: 'dsh-desktop-views', version: '0.1.0' })
 
   server.registerTool(
-    'view_open_file',
+    'editor_open_file',
     {
       title: 'Open a file in the desktop editor',
       description:
@@ -145,11 +145,11 @@ function buildServer(deps: ViewDeps): McpServer {
   )
 
   server.registerTool(
-    'view_open_url',
+    'browser_show',
     {
-      title: 'Open a page in the desktop web view',
+      title: 'Show a page in the built-in browser',
       description:
-        "Show a web page in the desktop app's Web tab, beside the conversation. http and https only.",
+        "Put a web page on screen in the desktop app's built-in browser, beside the conversation, and return nothing. Use this to show the user a page. Use `browser_open` instead when you want to read the page yourself — it loads the same browser and hands back the text. http and https only.",
       inputSchema: { url: z.string().describe('The http or https URL to load.') },
     },
     ({ url }) => {
@@ -160,7 +160,7 @@ function buildServer(deps: ViewDeps): McpServer {
   )
 
   server.registerTool(
-    'view_show_diff',
+    'editor_show_diff',
     {
       title: 'Show a proposed change',
       description:
@@ -179,7 +179,7 @@ function buildServer(deps: ViewDeps): McpServer {
   )
 
   server.registerTool(
-    'browse_page',
+    'browser_open',
     {
       title: 'Read a web page in the desktop browser',
       description:
@@ -194,11 +194,11 @@ function buildServer(deps: ViewDeps): McpServer {
   )
 
   server.registerTool(
-    'read_open_page',
+    'browser_read',
     {
       title: 'Read the page the desktop browser is showing',
       description:
-        "Read whatever page the desktop app's built-in browser is currently showing as text — including one the user navigated to themselves. Use `browse_page` to open a URL of your own, and `browser_read_page` when you need the page's controls rather than its prose.",
+        "Read whatever page the desktop app's built-in browser is currently showing as text — including one the user navigated to themselves. Use `browser_open` to open a URL of your own, and `browser_snapshot` when you need the page's controls rather than its prose.",
       inputSchema: {},
     },
     async () => {
@@ -232,15 +232,15 @@ function buildServer(deps: ViewDeps): McpServer {
   const target = z
     .string()
     .describe(
-      'The element: `ref=N` from browser_read_page, a CSS selector, or `text=Some visible text`.',
+      'The element: `ref=N` from browser_snapshot, a CSS selector, or `text=Some visible text`.',
     )
 
   server.registerTool(
-    'browser_read_page',
+    'browser_snapshot',
     {
       title: 'List what can be acted on in the built-in browser',
       description:
-        "Number every interactive element on the page the desktop app's built-in browser is showing, with its role, name, id, and value. Call this before acting on a page and after anything changes it: the numbers it returns (`ref=N`) are how the other browser_* tools name an element, and they are more reliable than a CSS selector guessed from memory. Use `read_open_page` instead when you want the page's prose rather than its controls.",
+        "Number every interactive element on the page the desktop app's built-in browser is showing, with its role, name, id, and value. Call this before acting on a page and after anything changes it: the numbers it returns (`ref=N`) are how the other browser_* tools name an element, and they are more reliable than a CSS selector guessed from memory. Use `browser_read` instead when you want the page's prose rather than its controls.",
       inputSchema: {},
     },
     async () => await acted(await deps.browser.readPage()),
@@ -398,7 +398,7 @@ function buildServer(deps: ViewDeps): McpServer {
   )
 
   server.registerTool(
-    'browser_read_console',
+    'browser_console',
     {
       title: "Read the built-in browser's console",
       description:
@@ -446,7 +446,7 @@ function buildServer(deps: ViewDeps): McpServer {
   )
 
   server.registerTool(
-    'view_get_selection',
+    'editor_selection',
     {
       title: 'Read the editor selection',
       description:
