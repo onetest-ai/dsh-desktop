@@ -272,6 +272,74 @@ test('reopens the terminal panel with a shell in it', async () => {
   }
 })
 
+/**
+ * The seam beside the browser column is the thing that resizes it.
+ *
+ * A divider is not a view: it is the window's own page showing through an 8px
+ * gap the views leave. Nothing in the layout arithmetic proves the gap is
+ * actually reachable — a view laid a few pixels over it looks identical and
+ * swallows every drag — so this grabs the seam in the running app and checks
+ * the column moved. Fullscreen is covered because the window resizes by
+ * animation there, which is where a stale divider place would show up.
+ */
+test('resizes the browser column by dragging its seam', async () => {
+  const userDataDir = mkdtempSync(join(tmpdir(), 'dsh-desktop-divider-'))
+  const dshHome = provisionDshHome()
+  const app = await electron.launch({
+    executablePath: APP,
+    args: [`--user-data-dir=${userDataDir}`],
+    env: { ...process.env, DSH_HOME: dshHome },
+  })
+
+  /**
+   * The editor column's bounds, as the main process has them.
+   * @returns the pane view's bounds.
+   */
+  const editorBounds = async (): Promise<{ x: number; width: number }> =>
+    await app.evaluate(({ BrowserWindow }) => {
+      const [main] = BrowserWindow.getAllWindows().filter((each) => each.getContentSize()[0] > 800)
+      const [, pane] = main.contentView.children
+      return { x: pane.getBounds().x, width: pane.getBounds().width }
+    })
+
+  try {
+    const shell = await waitForWindowUrl(app, /shell\.html$/)
+    await shell.click('#rail-web')
+    await expect.poll(async () => (await editorBounds()).width, { timeout: 30_000 }).toBeGreaterThan(0)
+
+    for (const fullScreen of [false, true]) {
+      if (fullScreen) {
+        await app.evaluate(({ BrowserWindow }) => {
+          const [main] = BrowserWindow.getAllWindows().filter((each) => each.getContentSize()[0] > 800)
+          main.setFullScreen(true)
+        })
+        await expect
+          .poll(async () => await app.evaluate(({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows().some((each) => each.isFullScreen())), { timeout: 30_000 })
+          .toBe(true)
+      }
+
+      // The grab target must sit exactly where the column starts, or someone
+      // aiming at the seam they can see grabs nothing.
+      const before = await editorBounds()
+      const seam = await shell.locator('#divider-editor').boundingBox()
+      expect(seam, 'the editor divider has no box to grab').not.toBeNull()
+      expect(seam!.x + seam!.width, `divider is not against the column${fullScreen ? ' in fullscreen' : ''}`).toBe(before.x)
+
+      await shell.mouse.move(seam!.x + seam!.width / 2, seam!.y + 200)
+      await shell.mouse.down()
+      await shell.mouse.move(seam!.x + seam!.width / 2 - 200, seam!.y + 200, { steps: 10 })
+      await shell.mouse.up()
+
+      await expect
+        .poll(async () => (await editorBounds()).width, { timeout: 15_000 })
+        .toBeGreaterThan(before.width + 100)
+    }
+  } finally {
+    await app.close()
+  }
+})
+
 // reason: without the executable bit every terminal fails with a bare
 // `posix_spawnp failed.`, and the mode npm leaves it in is not executable.
 test('ships a pty helper the app may actually execute', () => {

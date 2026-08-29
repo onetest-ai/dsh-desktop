@@ -218,6 +218,14 @@ export function createWindow(columns: Columns): MainWindow {
   const views = { window, harness, pane, files, terminal, web }
   applyLayout(views, columns, false)
   window.on('resize', () => applyLayout(views, lastColumns, webShowing))
+  // Laid out again once the page can hear it. The rail and the dividers have
+  // no position in CSS — `shell.css` gives the rail `position: absolute` and
+  // nothing to place it by — so both come from the `shell:places` message
+  // alone. The pass above runs while `shell.html` is still loading, and a
+  // page mid-load drops what is sent to it: without this the rail sits at the
+  // window's left edge behind the harness view, invisible, and no divider has
+  // a gap to be grabbed by.
+  window.webContents.on('did-finish-load', () => applyLayout(views, lastColumns, webShowing))
 
   // Anything targeting a new window is an external link; hand it to the browser.
   harness.webContents.setWindowOpenHandler(({ url }) => {

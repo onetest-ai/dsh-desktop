@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  */
 
 const fake = vi.hoisted(() => {
+  const loadHandlers: Array<() => void> = []
   const domReadyHandlers: Array<() => void> = []
   const insertedCss: string[] = []
   const resizeHandlers: Array<() => void> = []
@@ -20,6 +21,7 @@ const fake = vi.hoisted(() => {
   const contents = (): Record<string, unknown> => ({
     on: (event: string, handler: () => void) => {
       if (event === 'dom-ready') domReadyHandlers.push(handler)
+      if (event === 'did-finish-load') loadHandlers.push(handler)
     },
     insertCSS: vi.fn(async (css: string) => {
       insertedCss.push(css)
@@ -45,7 +47,7 @@ const fake = vi.hoisted(() => {
     loadURL: vi.fn(async () => {}),
   }
 
-  return { domReadyHandlers, insertedCss, resizeHandlers, views, contents, windowInstance }
+  return { loadHandlers, domReadyHandlers, insertedCss, resizeHandlers, views, contents, windowInstance }
 })
 
 vi.mock('electron', () => ({
@@ -78,6 +80,8 @@ beforeEach(() => {
   // window of that size and every coordinate in it is off.
   fake.windowInstance.getContentSize.mockReturnValue([1280, 860])
   fake.domReadyHandlers.length = 0
+  fake.loadHandlers.length = 0
+  fake.windowInstance.webContents.send.mockClear()
   fake.insertedCss.length = 0
   fake.resizeHandlers.length = 0
   fake.views.length = 0
@@ -134,6 +138,23 @@ describe('the window\'s views', () => {
     expect(fake.views[0].bounds).toEqual({ x: 0, y: 0, width: 1280 - 30, height: 860 })
     expect(fake.views[1].visible).toBe(false)
     expect(fake.views[2].visible).toBe(false)
+  })
+
+  // reason: the rail and the dividers have no position in `shell.css` — they
+  // are placed only by `shell:places`. The first layout pass runs while the
+  // page is still loading, and a page mid-load drops what is sent to it: the
+  // rail then sits at the window's left edge behind the harness view, and no
+  // divider has a gap to be grabbed by.
+  it('places the rail and the dividers again once its page has loaded', async () => {
+    const { createWindow } = await import('./window')
+    createWindow(OPEN)
+    expect(fake.loadHandlers, 'nothing re-places the page after it loads').toHaveLength(1)
+    fake.windowInstance.webContents.send.mockClear()
+    for (const handler of fake.loadHandlers) handler()
+    expect(fake.windowInstance.webContents.send).toHaveBeenCalledWith(
+      'shell:places',
+      expect.objectContaining({ rail: expect.objectContaining({ x: 1280 - 30, width: 30 }) }),
+    )
   })
 
   // reason: the web view covers the editor column. Placed over the tab strip
