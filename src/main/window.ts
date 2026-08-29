@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, WebContentsView, net, protocol, shell } from 'electron'
+import { app, BrowserWindow, Menu, WebContentsView, net, protocol, shell, type MenuItemConstructorOptions } from 'electron'
 import { pathToFileURL } from 'node:url'
 import { join, normalize, sep } from 'node:path'
 import { errorPage } from './error-page'
@@ -346,10 +346,24 @@ export function showError(views: MainWindow, title: string, detail: string): voi
  * the standard clipboard shortcuts do not reach the renderer. Settings appears
  * both in the File menu (explicitly requested) and the app menu (macOS
  * convention), so `onSettings` is wired to both.
+ * Every pane this app can open has an item here, which is what gives it a
+ * keyboard shortcut: an accelerator on a menu item is scoped to this app,
+ * unlike `globalShortcut`, which takes the key from every other application
+ * for as long as this one runs.
+ *
+ * The developer items are left out of a packaged build. They are ours, not
+ * the user's — a DevTools window over the harness is a support call, not a
+ * feature.
  * @param onSettings - opens the settings window.
  * @param panes - shows or hides this app's own columns.
  */
-export function installMenu(onSettings: () => void, panes: { toggleFiles(): void; toggleWeb(): void }): void {
+export function installMenu(
+  onSettings: () => void,
+  panes: { toggleFiles(): void; toggleWeb(): void; toggleTerminal(): void },
+): void {
+  const developer: MenuItemConstructorOptions[] = app.isPackaged
+    ? []
+    : [{ role: 'toggleDevTools' }, { type: 'separator' }]
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
@@ -372,11 +386,11 @@ export function installMenu(onSettings: () => void, panes: { toggleFiles(): void
           // Web UI may want — and Cmd+W already closes a window.
           { label: 'Toggle File Tree', accelerator: 'CmdOrCtrl+Alt+B', click: panes.toggleFiles },
           { label: 'Toggle Browser', accelerator: 'CmdOrCtrl+Alt+W', click: panes.toggleWeb },
+          { label: 'Toggle Terminal', accelerator: 'CmdOrCtrl+Alt+J', click: panes.toggleTerminal },
           { type: 'separator' },
           { role: 'reload' },
           { role: 'forceReload' },
-          { role: 'toggleDevTools' },
-          { type: 'separator' },
+          ...developer,
           { role: 'resetZoom' },
           { role: 'zoomIn' },
           { role: 'zoomOut' },

@@ -4,6 +4,14 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 ## [Unreleased]
 
+### Added
+
+- **The terminal has a keyboard shortcut.** ⌘⌥J, alongside ⌘⌥B for the tree and ⌘⌥W for the browser. The rail's button has advertised that key in its tooltip since the panel shipped, but nothing registered it: an accelerator exists only where a menu item carries one. The rail and the menu now open the panel through one function, so neither can forget to tell the page to start a shell.
+
+### Changed
+
+- **DevTools is left out of packaged builds.** It stays in a development run, where it is ours to use.
+
 ### Fixed
 
 - **The terminal panel comes back with a shell in it.** Its page is loaded with the window and starts a shell once, at load — so closing the last tab (which takes the panel with it) left the rail's button reopening a strip of chrome with nothing in it, for as long as the window lived. Opening the panel now tells the page, which starts a shell when it has none and otherwise puts the keyboard back in the terminal that was showing. A panel opened in the first moments after boot waits for the page to finish loading rather than having the message dropped.

@@ -273,6 +273,18 @@ function tellTerminalShown(): void {
 }
 
 /**
+ * Show or hide the terminal panel.
+ *
+ * Shared by the rail's button and the View menu: opening the panel has to
+ * tell its page, which starts a shell when it has none, and two call sites
+ * doing that separately is one of them forgetting.
+ */
+function toggleTerminalPanel(): void {
+  toggleColumn('terminal')
+  if (columns.terminal.open) tellTerminalShown()
+}
+
+/**
  * Start a shell for the terminal panel.
  *
  * The directory is the workspace the tree is showing at the moment the panel
@@ -1853,6 +1865,7 @@ if (!app.requestSingleInstanceLock()) {
         toggleColumn('files')
       },
       toggleWeb,
+      toggleTerminal: toggleTerminalPanel,
     })
     try {
       const stored = loadConfig(CONFIG_PATH)
@@ -1924,10 +1937,7 @@ if (!app.requestSingleInstanceLock()) {
       toggleColumn('files')
     })
     ipcMain.on('shell:toggle-web', toggleWeb)
-    ipcMain.on('shell:toggle-terminal', () => {
-      toggleColumn('terminal')
-      if (columns.terminal.open) tellTerminalShown()
-    })
+    ipcMain.on('shell:toggle-terminal', toggleTerminalPanel)
     // The harness telling us which project it is working in — pushed by the
     // desktop plugin when the user switches session. Better than anything
     // this app can infer: selecting an existing session moves nothing on

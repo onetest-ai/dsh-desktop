@@ -47,11 +47,11 @@ const fake = vi.hoisted(() => {
     loadURL: vi.fn(async () => {}),
   }
 
-  return { loadHandlers, domReadyHandlers, insertedCss, resizeHandlers, views, contents, windowInstance }
+  return { loadHandlers, domReadyHandlers, insertedCss, resizeHandlers, views, contents, windowInstance, packaged: false }
 })
 
 vi.mock('electron', () => ({
-  app: { name: 'DeepSeek Harness' },
+  app: { name: 'DeepSeek Harness', get isPackaged() { return fake.packaged } },
   BrowserWindow: class {
     constructor() {
       return fake.windowInstance as unknown as InstanceType<typeof import('electron').BrowserWindow>
@@ -79,6 +79,7 @@ beforeEach(() => {
   // The resize test moves this; without a reset the next test lays out a
   // window of that size and every coordinate in it is off.
   fake.windowInstance.getContentSize.mockReturnValue([1280, 860])
+  fake.packaged = false
   fake.domReadyHandlers.length = 0
   fake.loadHandlers.length = 0
   fake.windowInstance.webContents.send.mockClear()
@@ -230,5 +231,55 @@ describe('the window\'s views', () => {
     applyLayout(views, CLOSED, true)
     const closed = (fake.windowInstance.webContents.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)
     expect(closed?.[1].open).toEqual({ editor: false, files: false, terminal: false, web: false })
+  })
+})
+
+describe('the application menu', () => {
+  /**
+   * Every item in the View menu, flattened.
+   * @returns the View submenu's items.
+   */
+  async function viewItems(): Promise<Array<{ label?: string; role?: string; accelerator?: string }>> {
+    const { installMenu } = await import('./window')
+    const { Menu } = await import('electron')
+    installMenu(vi.fn(), { toggleFiles: vi.fn(), toggleWeb: vi.fn(), toggleTerminal: vi.fn() })
+    const template = vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)?.[0] ?? []
+    const view = template.find((entry) => 'label' in entry && entry.label === 'View')
+    return (view as { submenu?: Array<{ label?: string; role?: string; accelerator?: string }> }).submenu ?? []
+  }
+
+  // reason: the rail's terminal button advertises ⌘⌥J in its tooltip. An
+  // accelerator only exists if a menu item carries it, so without this the
+  // tooltip named a shortcut that did nothing.
+  it('gives every pane on the rail a shortcut', async () => {
+    const items = await viewItems()
+    expect(items.filter((i) => i.accelerator !== undefined).map((i) => [i.label, i.accelerator])).toEqual([
+      ['Toggle File Tree', 'CmdOrCtrl+Alt+B'],
+      ['Toggle Browser', 'CmdOrCtrl+Alt+W'],
+      ['Toggle Terminal', 'CmdOrCtrl+Alt+J'],
+    ])
+  })
+
+  it('opens the terminal panel through the same path as the rail', async () => {
+    const { installMenu } = await import('./window')
+    const { Menu } = await import('electron')
+    const toggleTerminal = vi.fn()
+    installMenu(vi.fn(), { toggleFiles: vi.fn(), toggleWeb: vi.fn(), toggleTerminal })
+    const template = vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)?.[0] ?? []
+    const view = template.find((entry) => 'label' in entry && entry.label === 'View') as {
+      submenu: Array<{ label?: string; click?: () => void }>
+    }
+    view.submenu.find((i) => i.label === 'Toggle Terminal')?.click?.()
+    expect(toggleTerminal).toHaveBeenCalled()
+  })
+
+  // reason: DevTools is ours, not the user's — a DevTools window over the
+  // harness is a support call rather than a feature.
+  it('leaves DevTools out of a packaged build and keeps it while developing', async () => {
+    fake.packaged = true
+    expect((await viewItems()).map((i) => i.role)).not.toContain('toggleDevTools')
+    vi.resetModules()
+    fake.packaged = false
+    expect((await viewItems()).map((i) => i.role)).toContain('toggleDevTools')
   })
 })
