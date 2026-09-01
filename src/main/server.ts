@@ -23,8 +23,17 @@ export interface StartOptions {
   onSpawned?: (stop: () => Promise<void>) => void
 }
 
-/** The harness prints this once the webserver is listening. */
-const READY_PATTERN = /^dsh web: (http:\/\/127\.0\.0\.1:\d+)/
+/**
+ * The harness prints this once the webserver is listening.
+ *
+ * The capture runs to the first space so the loopback URL arrives whole,
+ * including the `?token=` query `dsh web` appends to authenticate the browser
+ * session. Stopping at the port drops that token, and the window then loads an
+ * unauthenticated URL and shows `dsh web authentication required; reopen the
+ * URL printed by dsh web.` The trailing ` (LAN: ...)` suffix is still left out,
+ * because it is separated by a space.
+ */
+const READY_PATTERN = /^dsh web: (http:\/\/127\.0\.0\.1:\d+\S*)/
 
 /** How much stderr to keep for failure reporting. */
 const STDERR_TAIL_LIMIT = 4000

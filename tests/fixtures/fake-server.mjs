@@ -6,6 +6,8 @@
 //   FAKE_MODE=stubborn    like ready, but ignores SIGTERM, so only SIGKILL ends it
 //   FAKE_MODE=exiting     forks a grandchild in the same process group, becomes
 //                         ready, then exits on its own, leaving the grandchild
+//   FAKE_MODE=token       like ready, but the ready line carries the ?token= query
+//                         that `dsh web` appends to authenticate the browser session
 //   FAKE_MODE=split       like ready, but the ready line arrives split across two
 //                         stdout chunks (mid-URL) with a real gap between them, so
 //                         they cannot coalesce into a single `data` event
@@ -13,6 +15,8 @@ import { spawn } from 'node:child_process'
 
 const mode = process.env.FAKE_MODE ?? 'ready'
 const port = process.env.FAKE_PORT ?? '54321'
+// base64url alphabet, matching a real launch token: proves `-` and `_` survive.
+const token = 'aB3-_xYz'
 
 console.log('some unrelated startup noise')
 console.log('dsh web: warming up')
@@ -42,6 +46,10 @@ if (mode === 'split') {
   setTimeout(() => {
     process.stdout.write(`${port} (LAN: http://192.168.1.5:${port})\n`)
   }, 50)
+} else if (mode === 'token') {
+  console.log(
+    `dsh web: http://127.0.0.1:${port}/?token=${token} (LAN: http://192.168.1.5:${port}/?token=${token})`,
+  )
 } else if (mode !== 'silent') {
   console.log(`dsh web: http://127.0.0.1:${port} (LAN: http://192.168.1.5:${port})`)
 }

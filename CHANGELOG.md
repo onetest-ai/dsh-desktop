@@ -4,6 +4,10 @@ Notable changes to the DeepSeek Harness desktop shell. Format follows [Keep a Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- **A local checkout no longer opens on `dsh web authentication required`.** `dsh web` authenticates the browser session with a launch token appended to the URL it prints (`http://127.0.0.1:<port>/?token=...`); the harness added that fence in `fix(web): authenticate the browser Host API`. The readiness pattern captured only as far as the port, so the token was dropped and the window loaded an unauthenticated URL — which the Host API answers with `dsh web authentication required; reopen the URL printed by dsh web.` The capture now runs to the first space, which keeps the query whole and still leaves out the trailing ` (LAN: ...)` suffix that follows it.
+
 ## [0.3.0] - 2026-08-29
 
 ### Added
