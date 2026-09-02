@@ -30,9 +30,11 @@ describe('findRepos', () => {
   })
 
   // reason: a dependency tree holds hundreds of repositories nobody is
-  // working in, and scanning it is slow as well as wrong.
+  // working in, and scanning it is slow as well as wrong. The fixture puts
+  // `.git` directly in node_modules because that is the only depth the scan
+  // reaches — a deeper one would pass whether or not SKIP existed.
   it('never looks inside node_modules', () => {
-    const root = tree('node_modules/pkg')
+    const root = tree('node_modules')
     expect(findRepos(root)).toEqual([])
   })
 
