@@ -50,7 +50,15 @@ Refreshes are serialised per repo, and a refresh already running is superseded r
 
 A commit message box at the top, with the branch name and sync counts above it. Then one collapsible group per repo — collapsed away entirely when only one repo was found, since the common case deserves no ceremony — and inside each, up to three sections: **Staged Changes**, **Changes**, **Untracked**.
 
-A row is a status letter, the filename, and the directory dimmed after it, coloured by status: green added, amber modified, red deleted, grey untracked. In the harness's own tokens, following its Appearance setting, like every other surface this app draws.
+A row is a checkbox, a status letter, the filename, and the directory dimmed after it, coloured by status: green added, amber modified, red deleted, grey untracked. In the harness's own tokens, following its Appearance setting, like every other surface this app draws.
+
+### The checkbox is a selection, not the index
+
+Ticking a file does not stage it. The tick says only *include this in the next commit*, and nothing runs until Commit is pressed. Each section header carries a tick of its own that selects or clears everything under it.
+
+**Tracked changes start ticked; untracked files start unticked.** Committing a file you had not noticed is how build output, local scratch files, and credentials end up in a repository, and an untracked file is by definition one git has never seen before.
+
+A file that was staged and then edited again appears in both **Staged Changes** and **Changes**, as it does in VS Code, with a tick in each. They mean different content: the staged row is the version already recorded, the changed row the edits made since.
 
 ## The diff
 
@@ -82,9 +90,23 @@ Per row, on hover and in the right-click menu: **Stage**, **Unstage**, **Discard
 
 **Discard is unrecoverable.** `git checkout --` throws work away with nothing in the reflog to bring it back. It is confirmed, naming the file — the way Delete in the tree already is — and Discard All names the count. This is the most dangerous control in the panel and is deliberately the most annoying.
 
-**Commit** commits what is staged. With nothing staged the button is disabled and says so, rather than offering to stage everything first as VS Code does: implicit staging is how people commit things they did not mean to, and this app's habit is to say what it will not do rather than guess.
+Staging and unstaging by hand remain, for the times the index is what you are thinking about; they are the same operations Commit performs for you, and the panel is consistent either way because the tick never claimed to be the index.
 
 Every action refreshes its own repo and nothing else. A git failure is reported as the repo's name and the first line of stderr — never a stack trace, the same rule the tray note follows for a plugin that would not load.
+
+## Committing
+
+Commit does the staging for you. There is no separate step, and it is never refused for having nothing staged — with a message written and something ticked, it commits.
+
+What it does, in order:
+
+1. `git add --` the ticked paths that are not already staged;
+2. `git reset --` any path that *is* staged but is not ticked;
+3. `git commit`.
+
+Step 2 is the one to understand. Without it, a file staged earlier and then unticked here would still be committed, because `git commit` commits the whole index. So the index is reconciled to the selection rather than left alone — **and it stays that way afterwards.** Unticking a staged file unstages it for good, not just for this commit. That is the honest cost of a tick that means something different from staging, and it is stated here rather than discovered.
+
+The button is disabled only when the message is empty or nothing is ticked, which are both simply nothing to do.
 
 ## The remote
 
