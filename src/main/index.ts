@@ -155,6 +155,21 @@ function setColumn(key: keyof Columns, next: { width?: number; open?: boolean })
 }
 
 /**
+ * The view the side column's rectangle is currently in.
+ *
+ * The tree and the git panel take turns in that column, and `applyLayout`
+ * gives the one that is not showing a 0x0 rectangle — so anything measuring
+ * the column has to ask the view that has it. Measuring `files` while the
+ * panel is up reads zero, and a zero committed at the end of a drag is stored
+ * as a width the user never chose.
+ * @param window - the window and its views.
+ * @returns whichever of the two is holding the column.
+ */
+function sideColumn(window: MainWindow): MainWindow['files'] {
+  return columns.files.view === 'git' ? window.git : window.files
+}
+
+/**
  * Show or hide the browser.
  *
  * The Web tab lives in the editor column, so opening the browser opens that
@@ -685,10 +700,21 @@ let gitOnPath = false
  * The `readProject` call already running, if there is one.
  *
  * A rebase in the terminal panel moves `.git` dozens of times a second, and
- * every move asks for a read. Handing the running promise to the second
- * caller means that burst costs one git rather than one per event.
+ * every move asks for a read; without this each event would start its own
+ * git. The project it was started for is held with it, because a read is only
+ * an answer to the project it was started for.
  */
-let gitReading: Promise<ProjectGit> | undefined
+let gitReading: { root: string; promise: Promise<ProjectGit> } | undefined
+
+/**
+ * Whether anything has changed since the running read began.
+ *
+ * A read that started before a change cannot see it, so its answer is stale
+ * the moment this is set — a caller waiting on it takes a fresh read instead.
+ * This is what makes a refresh superseded rather than queued: the change is
+ * remembered, not the request.
+ */
+let gitDirty = false
 
 /**
  * Read the current project's repositories.
@@ -696,6 +722,17 @@ let gitReading: Promise<ProjectGit> | undefined
  * A project with none, and no project at all, are both an empty list: the
  * panel says so in words and nothing is wrong. git missing from `PATH` is the
  * one state that names its own remedy, since the user can fix it.
+ *
+ * A caller arriving while a read is running waits it out and then takes that
+ * read's answer only if it was for the same project and nothing changed
+ * meanwhile; otherwise it starts one more. Two callers never run git at once,
+ * and neither is handed a snapshot of something it did not ask about.
+ *
+ * **Serialised per project, not per repo.** `readProject` reads every
+ * repository in one call, so one flag covers them all — an action on a single
+ * repository (Task 9) must not assume the same, since two repositories can be
+ * acted on at once and one waiting on the other would be a stall with no
+ * cause.
  * @returns what the panel should draw.
  */
 async function readCurrentGit(): Promise<ProjectGit> {
@@ -707,14 +744,31 @@ async function readCurrentGit(): Promise<ProjectGit> {
       return { ok: false, reason: 'git is not on your PATH. Add it under Settings → Advanced → Extra PATH entries.' }
     }
   }
-  if (gitReading !== undefined) return await gitReading
-  const running = readProject(project.path)
-  gitReading = running
-  try {
-    return await running
-  } finally {
-    gitReading = undefined
+  for (;;) {
+    const running = gitReading
+    if (running === undefined) break
+    // Waited out rather than joined blindly: a read of the previous project,
+    // or one that began before the change that prompted this call, answers a
+    // question nobody asked.
+    await running.promise.catch(() => undefined)
+    if (running.root === project.path && !gitDirty) return await running.promise
   }
+  gitDirty = false
+  const promise = readProject(project.path)
+  const started = { root: project.path, promise }
+  gitReading = started
+  // Cleared by a reaction registered here, before any waiter's — so a caller
+  // resuming from the loop above sees the slot free and starts the one more
+  // read the change it is carrying deserves.
+  void promise.then(
+    () => {
+      if (gitReading === started) gitReading = undefined
+    },
+    () => {
+      if (gitReading === started) gitReading = undefined
+    },
+  )
+  return await promise
 }
 
 /**
@@ -730,6 +784,9 @@ let gitNotify: ReturnType<typeof setTimeout> | undefined
 
 /** Tell the panel to read itself again, once the changes behind it have settled. */
 function notifyGitChanged(): void {
+  // Marked before the debounce, not after: a read already running started
+  // before this change and cannot report it, whenever the message goes out.
+  gitDirty = true
   if (gitNotify !== undefined) clearTimeout(gitNotify)
   gitNotify = setTimeout(() => {
     gitNotify = undefined
@@ -853,6 +910,11 @@ function pushTheme(): void {
     views.window.webContents,
     views.pane.webContents,
     views.files.webContents,
+    // The git panel is a page of this app's own like the rest: without this
+    // its body never gets `data-ds-dark-theme`, every `--dsw-alias-*` token
+    // resolves to the light value, and the panel renders white beside a dark
+    // harness — the failure 0.3.0 fixed for the Settings window.
+    views.git.webContents,
     views.terminal.webContents,
     ...(settings === undefined ? [] : [settings]),
   ]) {
@@ -2102,7 +2164,7 @@ if (!app.requestSingleInstanceLock()) {
         if (columns.editor.open) setTerminalHeight(windowX)
         else {
           const [full] = views.window.getContentSize()
-          const outside = columns.files.open ? views.files.getBounds().width + DIVIDER_WIDTH : 0
+          const outside = columns.files.open ? sideColumn(views).getBounds().width + DIVIDER_WIDTH : 0
           setColumn('terminal', { width: full - RAIL_WIDTH - windowX - outside })
         }
         return
@@ -2111,7 +2173,9 @@ if (!app.requestSingleInstanceLock()) {
       // Each column is measured inward from the rail, past whatever columns
       // sit outside it: dragging the editor's divider must not move the tree,
       // and neither reaches the strip at the edge.
-      const outside = key === 'editor' && columns.files.open ? views.files.getBounds().width + DIVIDER_WIDTH : 0
+      const outside = key === 'editor' && columns.files.open
+        ? sideColumn(views).getBounds().width + DIVIDER_WIDTH
+        : 0
       setColumn(key, { width: width - RAIL_WIDTH - windowX - outside })
     })
     ipcMain.on('shell:nudge-column', (_event, key: keyof Columns, delta: number) => {
@@ -2127,7 +2191,7 @@ if (!app.requestSingleInstanceLock()) {
       // stored width the clamp already refused would reopen at the wrong size.
       if (views !== undefined && !views.window.isDestroyed()) {
         if (columns.editor.open) columns.editor.width = views.pane.getBounds().width
-        if (columns.files.open) columns.files.width = views.files.getBounds().width
+        if (columns.files.open) columns.files.width = sideColumn(views).getBounds().width
       }
       storeColumns()
     })

@@ -14,7 +14,9 @@
     <span class="head-spacer"></span>
   </div>
   <section class="panel">
-    <p class="empty" id="git-empty">No repository in this project.</p>
+    <!-- Hidden until the first read lands: the panel would otherwise flash a
+         message about a project it has not looked at yet. -->
+    <p class="empty" id="git-empty" hidden>No repository in this project.</p>
     <div id="repos"></div>
   </section>
 </main>

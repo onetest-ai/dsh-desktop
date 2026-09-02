@@ -387,6 +387,16 @@ vi.mock('./workspaces', () => ({
 const readDirectoryMock = vi.fn(() => [] as unknown[])
 vi.mock('./file-tree', () => ({ readDirectory: (...args: unknown[]) => readDirectoryMock(...(args as [])) }))
 
+/** The panel's read, so a test can hold one open and watch what a second does. */
+const readProjectMock = vi.fn(async (root: string) => ({ ok: true as const, repos: [{ path: root }] }))
+vi.mock('./git-model', () => ({ readProject: (...args: unknown[]) => readProjectMock(...(args as [string])) }))
+const hasGitMock = vi.fn(async () => true)
+vi.mock('./git-find', () => ({
+  hasGit: () => hasGitMock(),
+  // No repositories to watch: this suite's project roots do not exist on disk.
+  findRepos: () => [],
+}))
+
 const preflightMock = vi.fn(() => ({ ok: true }))
 vi.mock('./preflight', () => ({ preflight: (...args: unknown[]) => preflightMock(...(args as [])) }))
 
@@ -1832,6 +1842,44 @@ describe('the side columns', () => {
     )
   })
 
+  // reason: whichever of the two side-column views is not showing is given a
+  // 0x0 rectangle, so measuring the tree while the panel is up reads zero —
+  // and `shell:commit-columns` fires at the end of ANY divider drag, so that
+  // zero would be stored as the column's width by dragging the editor's.
+  it('measures the side column from the view that is actually in it', async () => {
+    await bootReady()
+    fake.sendIpc('shell:toggle-git')
+    // The tree's view now has no bounds at all, exactly as `applyLayout`
+    // leaves it while the panel is showing.
+    fake.views.files.getBounds.mockReturnValue({ x: 0, y: 0, width: 0, height: 0 })
+    writeConfigMock.mockClear()
+    fake.sendIpc('shell:commit-columns')
+    expect(writeConfigMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        pane: expect.objectContaining({ files: { width: 220, open: true, view: 'git' } }),
+      }),
+    )
+  })
+
+  // reason: the editor is measured inward past whatever sits outside it, and
+  // the side column's width is what that is. Read off the empty view it is
+  // zero, and the editor jumps by the whole width of the panel beside it.
+  it('measures past the git panel when the editor divider is dragged', async () => {
+    await bootReady()
+    fake.sendIpc('pane:open-file', '/p/known', 'readme.md')
+    fake.sendIpc('shell:toggle-git')
+    fake.views.files.getBounds.mockReturnValue({ x: 0, y: 0, width: 0, height: 0 })
+    fake.sendIpc('shell:resize-column', 'editor', 600)
+    // 1280 window, 30 of rail, the drag at 600, past the 220-wide panel and
+    // its 8px divider.
+    expect(applyLayout).toHaveBeenLastCalledWith(
+      fake.views,
+      expect.objectContaining({ editor: expect.objectContaining({ width: 1280 - 30 - 600 - (220 + 8) }) }),
+      expect.any(Boolean),
+    )
+  })
+
   // reason: the editor is not something to open empty — it appears when a
   // file goes into it. The tree is the column a user opens by hand.
   it('opens the tree from the View menu, leaving the editor closed', async () => {
@@ -1879,6 +1927,100 @@ describe('the side columns', () => {
   // reason: the panel asks main for everything it draws, and with no project
   // there is nothing to read — an empty list rather than a failure, since
   // nothing is wrong.
+  /**
+   * Let every pending microtask run.
+   *
+   * `readCurrentGit` awaits `hasGit` before it ever calls `readProject`, so a
+   * test that gates the read has to give it that turn first.
+   * @returns resolution once the queue has drained.
+   */
+  const settle = async (): Promise<void> => {
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+  }
+
+  /**
+   * Hold the next read open, so a second one can be watched against it.
+   * @returns a function that lets the held read finish.
+   */
+  function gateNextRead(): () => void {
+    let open: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      open = () => resolve()
+    })
+    readProjectMock.mockImplementationOnce(async (root: string) => {
+      await gate
+      return { ok: true as const, repos: [{ path: `${root}#first` }] }
+    })
+    return () => open?.()
+  }
+
+  // reason: the spec says a refresh already running is superseded rather than
+  // queued. Handing the second caller the running promise would answer it with
+  // a snapshot taken before the change that prompted it — and, when the
+  // project moved meanwhile, with another project's repositories entirely.
+  it('takes one more read when a change lands while one is running', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/known', title: 'known', file: '/p/known/.dsh/mcp.json', declared: false, servers: [] },
+    ])
+    await bootReady()
+    fake.sendIpc('harness:workspace', '/p/known')
+    readProjectMock.mockClear()
+    const release = gateNextRead()
+    const first = fake.sendIpc('git:read') as Promise<unknown>
+    await settle()
+    // Something moved while that read was in flight; it began before the
+    // change and cannot report it.
+    await fake.emitWindow('focus')
+    const second = fake.sendIpc('git:read') as Promise<unknown>
+    await settle()
+    release()
+    await expect(first).resolves.toEqual({ ok: true, repos: [{ path: '/p/known#first' }] })
+    await expect(second).resolves.toEqual({ ok: true, repos: [{ path: '/p/known' }] })
+    // Two reads, not one and not one per caller: the second was superseded
+    // into exactly one more.
+    expect(readProjectMock).toHaveBeenCalledTimes(2)
+  })
+
+  // reason: a read is only an answer to the project it was started for.
+  it('never answers a read with the project it has just left', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/known', title: 'known', file: '/p/known/.dsh/mcp.json', declared: false, servers: [] },
+      { path: '/p/other', title: 'other', file: '/p/other/.dsh/mcp.json', declared: false, servers: [] },
+    ])
+    await bootReady()
+    fake.sendIpc('harness:workspace', '/p/known')
+    readProjectMock.mockClear()
+    const release = gateNextRead()
+    const first = fake.sendIpc('git:read') as Promise<unknown>
+    await settle()
+    fake.sendIpc('harness:workspace', '/p/other')
+    const second = fake.sendIpc('git:read') as Promise<unknown>
+    await settle()
+    release()
+    await expect(first).resolves.toEqual({ ok: true, repos: [{ path: '/p/known#first' }] })
+    await expect(second).resolves.toEqual({ ok: true, repos: [{ path: '/p/other' }] })
+  })
+
+  // reason: a burst of watcher events with nothing between them is one change,
+  // not one read each. A rebase in the terminal panel fires dozens a second.
+  it('runs one git for callers that arrive with nothing new between them', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/known', title: 'known', file: '/p/known/.dsh/mcp.json', declared: false, servers: [] },
+    ])
+    await bootReady()
+    fake.sendIpc('harness:workspace', '/p/known')
+    readProjectMock.mockClear()
+    const release = gateNextRead()
+    const first = fake.sendIpc('git:read') as Promise<unknown>
+    await settle()
+    const second = fake.sendIpc('git:read') as Promise<unknown>
+    await settle()
+    release()
+    await expect(first).resolves.toEqual({ ok: true, repos: [{ path: '/p/known#first' }] })
+    await expect(second).resolves.toEqual({ ok: true, repos: [{ path: '/p/known#first' }] })
+    expect(readProjectMock).toHaveBeenCalledTimes(1)
+  })
+
   it('reads no repositories when no project is open', async () => {
     readWorkspacesMock.mockReturnValue([])
     await bootReady()
@@ -1992,6 +2134,22 @@ describe('the side columns', () => {
     fake.views.files.webContents.send.mockClear()
     fake.sendIpc('theme:ask')
     expect(fake.views.files.webContents.send).toHaveBeenCalledWith('theme', true)
+  })
+
+  // reason: the git panel is a page of this app's own like the tree beside
+  // it. Left out of the push its body never gets `data-ds-dark-theme`, every
+  // `--dsw-alias-*` token resolves light, and it renders white beside a dark
+  // harness — the failure 0.3.0 fixed for the Settings window.
+  it('pushes the theme to every page of its own, the git panel included', async () => {
+    fake.nativeTheme.shouldUseDarkColors = true
+    await bootReady()
+    for (const view of [fake.views.pane, fake.views.files, fake.views.git, fake.views.terminal]) {
+      view.webContents.send.mockClear()
+    }
+    fake.sendIpc('theme:ask')
+    for (const view of [fake.views.pane, fake.views.files, fake.views.git, fake.views.terminal]) {
+      expect(view.webContents.send).toHaveBeenCalledWith('theme', true)
+    }
   })
 
   it('follows the harness over the machine when it names a theme', async () => {
