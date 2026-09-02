@@ -27,13 +27,19 @@ contextBridge.exposeInMainWorld('pane', {
   openFile: (root: string, relative: string) => ipcRenderer.send('pane:open-file', root, relative),
   createFile: (root: string, relative: string) => ipcRenderer.invoke('pane:create-file', root, relative),
   createFolder: (root: string, relative: string) => ipcRenderer.invoke('pane:create-folder', root, relative),
-  treeMenu: (target: { directory: boolean; pending: boolean }) => ipcRenderer.invoke('pane:tree-menu', target),
+  treeMenu: (target: { directory: boolean; pending: boolean; name: string }) =>
+    ipcRenderer.invoke('pane:tree-menu', target),
   renameEntry: (root: string, relative: string, name: string) =>
     ipcRenderer.invoke('pane:rename-entry', root, relative, name),
   deleteEntry: (root: string, relative: string, directory: boolean) =>
     ipcRenderer.invoke('pane:delete-entry', root, relative, directory),
   pasteEntry: (root: string, relative: string, into: string, move: boolean) =>
     ipcRenderer.invoke('pane:paste-entry', root, relative, into, move),
+  openInWeb: (root: string, relative: string) => ipcRenderer.send('pane:open-in-web', root, relative),
+  loadInWeb: (root: string, relative: string) => ipcRenderer.send('pane:load-in-web', root, relative),
+  onSaveForWeb: (listener: (root: string, relative: string) => void) => {
+    ipcRenderer.on('pane:save-for-web', (_event, root: string, relative: string) => listener(root, relative))
+  },
   revealEntry: (root: string, relative: string) => ipcRenderer.send('pane:reveal-entry', root, relative),
   copyPath: (root: string, relative: string) => ipcRenderer.send('pane:copy-path', root, relative),
   addToChat: (root: string, relative: string, directory: boolean) =>

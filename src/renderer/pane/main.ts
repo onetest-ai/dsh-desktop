@@ -190,6 +190,15 @@ el('toggle-preview').addEventListener('click', () => {
   renderPreview()
 })
 
+// Asked for by main when the tree's Open in Web names a file. Saving first
+// is what makes the preview the file as it stands: the web view loads from
+// disk, and unsaved edits are invisible to it.
+window.pane.onSaveForWeb((root, relative) => {
+  void editor.saveIfDirty(root, relative).then(() => {
+    window.pane.loadInWeb(root, relative)
+  })
+})
+
 // A preview is not a browser: a link opens where the user's links open.
 el('preview').addEventListener('click', (event) => {
   const url = openMarkdownLink(event.target as Element | null)

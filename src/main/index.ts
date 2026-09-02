@@ -1,6 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, shell, utilityProcess } from 'electron'
 import { accessSync, constants, existsSync, mkdirSync, renameSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { loadDeclaredPatchRows } from './bundle-patch'
 import { checkBinaries } from './check-binaries'
 import { DEFAULT_VIEW_TOOLS_PORT, loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
@@ -56,6 +57,7 @@ import { readTextFile, writeTextFile } from './file-io'
 import { createFile, createFolder } from './file-create'
 import { deleteEntry, pasteEntry, renameEntry } from './file-ops'
 import { treeMenu, type TreeAction } from './tree-menu'
+import { isWebPage } from './web-page'
 import { resolveInRoot } from './file-tree'
 import { watchProject, type ProjectWatch } from './project-watch'
 import type { HostEvent } from './pty-host'
@@ -65,6 +67,10 @@ import { BrowserSession } from './browser-cdp'
 import {
   click as clickElement,
   drag as dragElement,
+  dragCancel as cancelDrag,
+  dragDrop as dropDrag,
+  dragMove as moveDrag,
+  dragStart as beginDrag,
   hover as hoverElement,
   press as pressKey,
   readPage as readBrowserPage,
@@ -415,6 +421,10 @@ const browserAutomation: BrowserAutomation = {
   press: (key) => pressKey(browser, key),
   selectOption: (target, value) => chooseOption(browser, target, value),
   drag: (from, to, offset) => dragElement(browser, from, to, offset),
+  dragStart: (from) => beginDrag(browser, from),
+  dragMove: (to, offset) => moveDrag(browser, to, offset),
+  dragDrop: (to, offset) => dropDrag(browser, to, offset),
+  dragCancel: () => cancelDrag(browser),
   waitFor: (target, text, gone, seconds) => awaitCondition(browser, target, text, gone, seconds),
   evaluate: (expression) => browser.evaluate(expression),
   uploadFile: (target, path) => attachFile(browser, target, [path]),
@@ -517,6 +527,25 @@ function pushWebState(): void {
     canGoBack: webContents.navigationHistory.canGoBack(),
     canGoForward: webContents.navigationHistory.canGoForward(),
   })
+}
+
+/**
+ * The `file:` URL for a page inside an open project, if it may be shown.
+ *
+ * The only way a local file reaches the web view. `loadableUrl` still refuses
+ * `file:` for the address bar and for the agent's own `open`, so a page the
+ * user did not ask for cannot be pointed at their filesystem; this is the
+ * one path in, and it is gated on the project being open, the entry being
+ * inside it, and the name being one the view renders rather than shows as
+ * source.
+ * @param root - the project the entry is in.
+ * @param relative - the entry's path within it.
+ * @returns the URL to load, or undefined when it may not be shown.
+ */
+function webPageInProject(root: string, relative: string): string | undefined {
+  if (!knownProject(root) || !isWebPage(relative)) return undefined
+  const target = resolveInRoot(root, relative)
+  return target === undefined ? undefined : pathToFileURL(target).href
 }
 
 /**
@@ -729,12 +758,12 @@ function watchTheme(): void {
  */
 async function popTreeMenu(
   window: BrowserWindow,
-  target: { directory: boolean; pending: boolean },
+  target: { directory: boolean; pending: boolean; name: string },
 ): Promise<TreeAction | undefined> {
   return await new Promise<TreeAction | undefined>((resolve) => {
     let chosen: TreeAction | undefined
     const menu = Menu.buildFromTemplate(
-      treeMenu(target).map((item) =>
+      treeMenu({ ...target, web: !target.directory && isWebPage(target.name) }).map((item) =>
         'separator' in item
           ? { type: 'separator' as const }
           : {
@@ -1999,7 +2028,7 @@ if (!app.requestSingleInstanceLock()) {
     )
     // The tree's context menu. Native, so it looks like every other menu on
     // the machine, and popped from here since only main can.
-    ipcMain.handle('pane:tree-menu', async (_event, target: { directory: boolean; pending: boolean }) => {
+    ipcMain.handle('pane:tree-menu', async (_event, target: { directory: boolean; pending: boolean; name: string }) => {
       if (views === undefined || views.window.isDestroyed()) return undefined
       return await popTreeMenu(views.window, target)
     })
@@ -2026,6 +2055,22 @@ if (!app.requestSingleInstanceLock()) {
       })
       if (response !== 0) return { ok: false as const, reason: '' }
       return deleteEntry(root, relative)
+    })
+    // Asked for from the tree, which is its own page and cannot see what the
+    // editor is holding. The editor page saves the file if it has unsaved
+    // edits in it and asks for the load back, so what the web view shows is
+    // the file as it is rather than as it was last written.
+    ipcMain.on('pane:open-in-web', (_event, root: string, relative: string) => {
+      if (views === undefined || views.window.isDestroyed()) return
+      if (webPageInProject(root, relative) === undefined) return
+      views.pane.webContents.send('pane:save-for-web', root, relative)
+    })
+    // The load itself, asked for by the editor page once it has saved. The
+    // path is checked again rather than trusted: this channel is reachable
+    // from a renderer, and the first check was of what the tree sent.
+    ipcMain.on('pane:load-in-web', (_event, root: string, relative: string) => {
+      const url = webPageInProject(root, relative)
+      if (url !== undefined) openUrlInPane(url)
     })
     ipcMain.on('pane:reveal-entry', (_event, root: string, relative: string) => {
       if (!knownProject(root)) return

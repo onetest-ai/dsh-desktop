@@ -238,7 +238,32 @@ export class Editor {
    * @returns resolution once the write settled.
    */
   async save(): Promise<void> {
-    const tab = this.active
+    await this.saveTab(this.active)
+  }
+
+  /**
+   * Write one file back to disk, if it is open here with unsaved edits.
+   *
+   * The tree is its own page and cannot see these buffers, so anything that
+   * acts on a file as it stands — showing it in the web view, for one — has
+   * to come through here first. A file that is not open, or open and clean,
+   * is already what is on disk and needs no write.
+   * @param root - the project the file is in.
+   * @param relative - its path within the project.
+   * @returns resolution once any write settled.
+   */
+  async saveIfDirty(root: string, relative: string): Promise<void> {
+    const tab = this.tabs.find((each) => each.file.root === root && each.file.relative === relative)
+    if (tab === undefined || !this.isDirty(tab)) return
+    await this.saveTab(tab)
+  }
+
+  /**
+   * Write one tab back to disk.
+   * @param tab - the tab to write, or undefined for nothing to do.
+   * @returns resolution once the write settled.
+   */
+  private async saveTab(tab: Tab | undefined): Promise<void> {
     if (tab === undefined) return
     if (tab.mode === 'diff') {
       // A diff is a change to look at before it happens. Saving from one

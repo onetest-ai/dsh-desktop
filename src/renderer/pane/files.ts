@@ -132,7 +132,7 @@ let held: { relative: string; move: boolean } | undefined
 async function openMenu(relative: string, directory: boolean): Promise<void> {
   const project = tree.root
   if (project === undefined) return
-  const action = await window.pane.treeMenu({ directory, pending: held !== undefined })
+  const action = await window.pane.treeMenu({ directory, pending: held !== undefined, name: relative })
   switch (action) {
     case 'open': {
       tree.openFile(relative)
@@ -165,6 +165,10 @@ async function openMenu(relative: string, directory: boolean): Promise<void> {
     case 'delete': {
       const outcome = await window.pane.deleteEntry(project.path, relative, directory)
       await afterChange(outcome, [parentOf(relative)])
+      return
+    }
+    case 'open-in-web': {
+      window.pane.openInWeb(project.path, relative)
       return
     }
     case 'reveal': {

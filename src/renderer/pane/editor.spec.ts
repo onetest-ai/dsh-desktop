@@ -358,4 +358,34 @@ describe('Editor and files that are not text', () => {
     expect(editor.openTabs.length).toBe(0)
     expect(d.columnClosed).toBe(1)
   })
+
+  // reason: the tree is its own page and cannot see these buffers, so
+  // anything acting on a file as it stands has to save through here first.
+  describe('saveIfDirty', () => {
+    it('writes a file that is open with unsaved edits, even when another tab is showing', async () => {
+      const d = deps()
+      const editor = await withOpen(d, FILE, OTHER)
+      const tab = editor.openTabs.find((each) => each.file.relative === FILE.relative)
+      // The fake document is the buffer; a test edit is a write to it.
+      ;(tab?.document as unknown as { buffer: string }).buffer = 'edited'
+      expect(editor.current).toEqual(OTHER)
+
+      await editor.saveIfDirty(FILE.root, FILE.relative)
+      expect(d.writeFile).toHaveBeenCalledWith(FILE.root, FILE.relative, 'edited')
+    })
+
+    it('writes nothing for a file that is open and clean', async () => {
+      const d = deps()
+      const editor = await withOpen(d, FILE)
+      await editor.saveIfDirty(FILE.root, FILE.relative)
+      expect(d.writeFile).not.toHaveBeenCalled()
+    })
+
+    it('writes nothing for a file that is not open at all', async () => {
+      const d = deps()
+      const editor = await withOpen(d, FILE)
+      await editor.saveIfDirty('/p/demo', 'never-opened.html')
+      expect(d.writeFile).not.toHaveBeenCalled()
+    })
+  })
 })

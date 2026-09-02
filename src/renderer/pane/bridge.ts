@@ -20,10 +20,13 @@ declare global {
       openFile(root: string, relative: string): void
       createFile(root: string, relative: string): Promise<{ ok: true; relative: string } | { ok: false; reason: string }>
       createFolder(root: string, relative: string): Promise<{ ok: true; relative: string } | { ok: false; reason: string }>
-      treeMenu(target: { directory: boolean; pending: boolean }): Promise<string | undefined>
+      treeMenu(target: { directory: boolean; pending: boolean; name: string }): Promise<string | undefined>
       renameEntry(root: string, relative: string, name: string): Promise<OpResult>
       deleteEntry(root: string, relative: string, directory: boolean): Promise<OpResult>
       pasteEntry(root: string, relative: string, into: string, move: boolean): Promise<OpResult>
+      openInWeb(root: string, relative: string): void
+      loadInWeb(root: string, relative: string): void
+      onSaveForWeb(listener: (root: string, relative: string) => void): void
       revealEntry(root: string, relative: string): void
       copyPath(root: string, relative: string): void
       addToChat(root: string, relative: string, directory: boolean): void
