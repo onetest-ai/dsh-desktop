@@ -75,3 +75,28 @@ export async function diffSides(
     return { ok: true, original, modified: '' }
   }
 }
+
+/**
+ * The two sides of a row's diff, if that row may be read.
+ *
+ * `git:open-diff` is reachable from a renderer and names a repository and a
+ * path, which is not evidence of anything: the repository is checked against
+ * the repositories actually discovered in the currently open project, the
+ * same rule the web view's own local-file loading follows, rather than
+ * trusted because the panel drew the row.
+ * @param repo - the repository's directory, as the row named it.
+ * @param path - the file's path within it.
+ * @param section - which list the row was in.
+ * @param known - the repositories currently discovered in the open project.
+ * @returns both texts, or undefined when the row may not be read.
+ */
+export async function gitDiffFor(
+  repo: string,
+  path: string,
+  section: Section,
+  known: () => string[],
+): Promise<{ original: string; modified: string } | undefined> {
+  if (!known().includes(repo)) return undefined
+  const sides = await diffSides(repo, path, section)
+  return sides.ok ? { original: sides.original, modified: sides.modified } : undefined
+}

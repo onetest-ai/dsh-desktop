@@ -80,6 +80,16 @@ export interface Tab {
   /** The text as last read or written, which is what makes "dirty" answerable. */
   saved: string
   mode: TabMode
+  /**
+   * Which of the two callers opened a `diff` tab; meaningless otherwise.
+   *
+   * Both `showDiff` and `showTexts` produce `mode: 'diff'` tabs, but they are
+   * not the same kind of thing: one is an agent's proposal for a file that
+   * has not changed yet, the other a view of a change that already happened.
+   * The status line says which, since the wording that fits one is wrong for
+   * the other.
+   */
+  diffKind?: 'proposal' | 'git'
 }
 
 /**
@@ -198,6 +208,7 @@ export class Editor {
       document: this.deps.documents.openDiff(outcome.text, proposed, file.relative),
       saved: proposed,
       mode: 'diff',
+      diffKind: 'proposal',
     })
   }
 
@@ -221,6 +232,7 @@ export class Editor {
       document: this.deps.documents.openDiff(original, modified, file.relative, inline),
       saved: modified,
       mode: 'diff',
+      diffKind: 'git',
     })
   }
 
@@ -231,7 +243,16 @@ export class Editor {
   show(tab: Tab): void {
     this.active = tab
     tab.document.activate()
-    this.deps.say(tab.mode === 'diff' ? `Proposed change to ${tab.file.relative}` : tab.file.relative)
+    // A git diff is a view of a change that already happened, not a proposal
+    // to make one — the two `diff` tabs read the same but mean opposite
+    // things, so the wording says which this is.
+    this.deps.say(
+      tab.mode !== 'diff'
+        ? tab.file.relative
+        : tab.diffKind === 'git'
+          ? `Git diff for ${tab.file.relative}`
+          : `Proposed change to ${tab.file.relative}`,
+    )
     this.deps.render()
   }
 

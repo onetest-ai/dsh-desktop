@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { diffSides, readProject } from './git-model'
+import { diffSides, gitDiffFor, readProject } from './git-model'
 import type { GitResult } from './git-run'
 
 const ok = (out: string): GitResult => ({ code: 0, stdout: Buffer.from(out, 'utf8'), stderr: '' })
@@ -50,5 +50,20 @@ describe('readProject', () => {
     const run = vi.fn(async () => fail('fatal: not a git repository'))
     const out = await readProject(process.cwd(), run)
     expect(out.ok).toBe(false)
+  })
+})
+
+// reason: `git:open-diff` is reachable from a renderer and names a repository
+// and a path — neither is evidence of anything, so the repository is checked
+// against what was actually discovered in the open project rather than taken
+// on the row's word, the same rule the web view's own local-file loading
+// follows.
+describe('gitDiffFor', () => {
+  it('refuses a diff for a repository outside the open project', async () => {
+    expect(await gitDiffFor('/etc', 'passwd', 'changed', () => ['/p/demo'])).toBeUndefined()
+  })
+
+  it('allows one inside it', async () => {
+    expect(await gitDiffFor('/p/demo', 'a.ts', 'changed', () => ['/p/demo'])).toBeDefined()
   })
 })

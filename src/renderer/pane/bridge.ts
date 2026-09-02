@@ -58,6 +58,9 @@ declare global {
       readGit(): Promise<ProjectGitView>
       onGitChanged(listener: () => void): void
       openGitDiff(repo: string, path: string, section: RowGroup['section']): void
+      onDiffTexts(
+        listener: (root: string, relative: string, original: string, modified: string, inline: boolean) => void,
+      ): void
       askTheme(): void
       onTheme(listener: (dark: boolean) => void): void
     }

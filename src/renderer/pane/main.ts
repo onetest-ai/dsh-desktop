@@ -236,6 +236,13 @@ window.pane.onShowDiff((root, relative, proposed) => {
   void editor.showDiff({ root, relative }, proposed)
 })
 
+// Sent by main when a row in the git panel is clicked. Both sides come from
+// git, so nothing is read from disk and the file's own tab is left alone.
+window.pane.onDiffTexts((root, relative, original, modified, inline) => {
+  selectTab('editor', view)
+  editor.showTexts({ root, relative }, original, modified, inline)
+})
+
 // Read by main when a tool asks what the user has selected. A function on the
 // page rather than a channel, because main is the side that asks.
 ;(window as unknown as { __paneSelection: () => string }).__paneSelection = () => editor.selection()

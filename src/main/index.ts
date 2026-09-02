@@ -49,8 +49,9 @@ import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, cr
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
 import { DIVIDER_WIDTH, RAIL_WIDTH, nextSideView, type Columns, type SideView } from './layout'
-import { readProject, type ProjectGit } from './git-model'
+import { gitDiffFor, readProject, type ProjectGit } from './git-model'
 import { findRepos, hasGit } from './git-find'
+import type { Section } from './git-status'
 import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
@@ -769,6 +770,32 @@ async function readCurrentGit(): Promise<ProjectGit> {
     },
   )
   return await promise
+}
+
+/**
+ * Show a row's diff in the editor column.
+ *
+ * The repository and path are checked before anything is read, since
+ * `git:open-diff` is reachable from the panel's own renderer and neither is
+ * evidence of anything — see `gitDiffFor`. A row that fails the check, or
+ * whose diff git could not produce, is silently ignored rather than shown as
+ * an error: the panel already reflects the repositories it can see, so a
+ * mismatched click here would mean the project moved between the click and
+ * the answer, not something worth interrupting the user over.
+ * @param repo - the repository the row's file belongs to, as the row named it.
+ * @param path - the file's path within that repository.
+ * @param section - which list the row was in.
+ */
+async function openGitDiffInPane(repo: string, path: string, section: Section): Promise<void> {
+  const project = currentProject
+  const sides = await gitDiffFor(repo, path, section, () => (project === undefined ? [] : findRepos(project.path)))
+  if (sides === undefined) return
+  if (views === undefined || views.window.isDestroyed()) return
+  if (!columns.editor.open) {
+    setColumn('editor', { open: true })
+    storeColumns()
+  }
+  views.pane.webContents.send('pane:diff-texts', repo, path, sides.original, sides.modified, true)
 }
 
 /**
@@ -2207,6 +2234,11 @@ if (!app.requestSingleInstanceLock()) {
     // The panel's own read. Nothing about git reaches the renderer but this
     // result: the parsing, the spawning, and the serialisation are all here.
     ipcMain.handle('git:read', async () => await readCurrentGit())
+    // A row's diff. A send rather than an invoke: the editor column is
+    // main's to fill, and there is no answer for the panel to wait on.
+    ipcMain.on('git:open-diff', (_event, repo: string, path: string, section: Section) => {
+      void openGitDiffInPane(repo, path, section)
+    })
     ipcMain.on('shell:toggle-terminal', toggleTerminalPanel)
     // The harness telling us which project it is working in — pushed by the
     // desktop plugin when the user switches session. Better than anything

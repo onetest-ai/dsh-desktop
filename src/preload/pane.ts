@@ -84,4 +84,13 @@ contextBridge.exposeInMainWorld('pane', {
       listener(root, relative, proposed),
     )
   },
+  onDiffTexts: (
+    listener: (root: string, relative: string, original: string, modified: string, inline: boolean) => void,
+  ) => {
+    ipcRenderer.on(
+      'pane:diff-texts',
+      (_event, root: string, relative: string, original: string, modified: string, inline: boolean) =>
+        listener(root, relative, original, modified, inline),
+    )
+  },
 })
