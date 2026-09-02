@@ -2027,6 +2027,48 @@ describe('the side columns', () => {
     await expect(fake.sendIpc('git:read')).resolves.toEqual({ ok: true, repos: [] })
   })
 
+  /**
+   * Wait out the notification's settle window.
+   *
+   * Real timers rather than fake ones: this suite drives a module whose boot
+   * schedules timers of its own, and taking the clock away from it here would
+   * change more than the debounce under test.
+   * @returns resolution once a debounced notification would have been sent.
+   */
+  const settleNotify = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 300))
+  }
+
+  // reason: the panel's page is loaded with the window and redraws on every
+  // `git:changed`, whether or not the column is showing it. A user who has
+  // never pressed the rail button would otherwise pay a `git status` of every
+  // repository, and a rebuild of an invisible DOM, for every file the agent
+  // writes.
+  it('says nothing to the panel while the column is not showing it', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/known', title: 'known', file: '/p/known/.dsh/mcp.json', declared: false, servers: [] },
+    ])
+    await bootReady()
+    fake.views.git.webContents.send.mockClear()
+    await fake.emitWindow('focus')
+    await settleNotify()
+    expect(fake.views.git.webContents.send).not.toHaveBeenCalledWith('git:changed')
+  })
+
+  // reason: and nothing is lost by the silence — opening the column notifies,
+  // so the panel reads what it missed the moment anyone looks at it.
+  it('tells the panel to read again once the column is showing it', async () => {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/known', title: 'known', file: '/p/known/.dsh/mcp.json', declared: false, servers: [] },
+    ])
+    await bootReady()
+    fake.sendIpc('shell:toggle-git')
+    fake.views.git.webContents.send.mockClear()
+    await fake.emitWindow('focus')
+    await settleNotify()
+    expect(fake.views.git.webContents.send).toHaveBeenCalledWith('git:changed')
+  })
+
   it('opens the tree from the rail', async () => {
     await bootReady()
     fake.sendIpc('shell:toggle-files')

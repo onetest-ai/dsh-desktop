@@ -815,6 +815,12 @@ function notifyGitChanged(): void {
   // Marked before the debounce, not after: a read already running started
   // before this change and cannot report it, whenever the message goes out.
   gitDirty = true
+  // The panel's page is loaded with the window and lives on whether or not
+  // the column shows it, so an unwatched panel would answer every project
+  // write with a `git status` of every repository and a DOM rebuild nothing
+  // can see. `toggleSideView` notifies when the column opens, so the state
+  // this skips is read as soon as anyone looks at it.
+  if (!(columns.files.open && columns.files.view === 'git')) return
   if (gitNotify !== undefined) clearTimeout(gitNotify)
   gitNotify = setTimeout(() => {
     gitNotify = undefined
