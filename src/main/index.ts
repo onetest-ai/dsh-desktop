@@ -52,6 +52,7 @@ import { DIVIDER_WIDTH, RAIL_WIDTH, nextSideView, type Columns, type SideView } 
 import { gitDiffFor, readProject, type ProjectGit } from './git-model'
 import { findRepos, hasGit } from './git-find'
 import type { Section } from './git-status'
+import { setGitPath } from './git-run'
 import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
@@ -2117,6 +2118,11 @@ if (!app.requestSingleInstanceLock()) {
   // Before the app is ready, and before anything creates a window: Chromium
   // reads the privileged scheme table once, at startup.
   registerPaneScheme()
+
+  // Every git child runs under the PATH the harness child gets, not the bare
+  // one a Finder launch inherits. Asked per call, so Extra PATH entries added
+  // in Settings take effect without a restart.
+  setGitPath(probePath)
 
   void app.whenReady().then(async () => {
     servePane(() => readWorkspaces(DSH_HOME).map((workspace) => workspace.path))
