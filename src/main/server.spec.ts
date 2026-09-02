@@ -168,6 +168,11 @@ describe('startServer', () => {
     expect(running.url).toBe('http://127.0.0.1:61235')
   })
 
+  it('keeps the ?token= query the harness appends, still dropping the LAN suffix', async () => {
+    running = await startServer({ spec: fakeSpec('token', '61236'), timeoutMs: 10_000 })
+    expect(running.url).toBe('http://127.0.0.1:61236/?token=aB3-_xYz')
+  })
+
   it('ignores stdout noise that precedes the ready line', async () => {
     running = await startServer({ spec: fakeSpec('ready'), timeoutMs: 10_000 })
     expect(running.url).toBe('http://127.0.0.1:54321')
