@@ -1,5 +1,6 @@
+import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { findRepos } from './git-find'
 import { runGit } from './git-run'
 import { parseStatus, type RepoStatus, type Section } from './git-status'
@@ -97,6 +98,54 @@ export async function gitDiffFor(
   known: () => string[],
 ): Promise<{ original: string; modified: string } | undefined> {
   if (!known().includes(repo)) return undefined
+  if (pathInRepo(repo, path) === undefined) return undefined
   const sides = await diffSides(repo, path, section)
   return sides.ok ? { original: sides.original, modified: sides.modified } : undefined
+}
+
+/**
+ * Resolve a git-reported path inside a repository, or undefined when it
+ * escapes.
+ *
+ * `resolveInRoot` (`file-tree.ts`) does this for the tree, but it refuses a
+ * target that does not exist on disk — and a row for a file deleted in the
+ * working tree names exactly that, which `diffSides` deliberately still
+ * answers with `modified: ''` rather than a refusal. So this resolves through
+ * `realpath` the way `resolveInRoot` does, to catch a symlink pointing out of
+ * the repository, but falls back to the nearest existing ancestor when the
+ * path itself is missing — the file can be gone without its directory being
+ * gone too, and that ancestor is the part a symlink could still escape
+ * through.
+ *
+ * The repository is checked separately by the caller; this only answers
+ * whether `path` stays inside whichever repository it is given.
+ * @param repo - the repository's directory, already known to be a real one.
+ * @param path - the path within it, as git reported it.
+ * @returns the resolved path, or undefined when it names something outside `repo`.
+ */
+function pathInRepo(repo: string, path: string): string | undefined {
+  // An absolute path would silently replace the root below, the same escape
+  // `resolveInRoot` refuses for the same reason.
+  if (isAbsolute(path)) return undefined
+  let realRoot: string
+  try {
+    realRoot = realpathSync(repo)
+  } catch {
+    return undefined
+  }
+  const target = resolve(realRoot, path)
+  let real = target
+  try {
+    real = realpathSync(target)
+  } catch {
+    try {
+      // The file itself is gone; its directory usually is not, and that is
+      // as far up as a symlink still needs checking.
+      real = join(realpathSync(dirname(target)), basename(target))
+    } catch {
+      // Neither exists. Nothing will be read from it either way, and the
+      // `..` this might still carry was already collapsed by `resolve`.
+    }
+  }
+  return real === realRoot || real.startsWith(realRoot + sep) ? real : undefined
 }
