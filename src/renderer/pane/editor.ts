@@ -140,8 +140,12 @@ export class Editor {
    * @returns resolution once it is showing, or its failure reported.
    */
   async open(file: OpenFile): Promise<void> {
-    const already = this.find(file)
-    if (already !== undefined && already.mode === 'edit') {
+    // Matched on the mode too: a diff for this file may be open beside the
+    // editable tab, and the panel's whole point is reading the change and
+    // then editing the file. Closing the diff to open the file would undo
+    // half of what the user just did.
+    const already = this.findIn(file, 'edit')
+    if (already !== undefined) {
       this.show(already)
       return
     }
@@ -150,9 +154,6 @@ export class Editor {
       this.deps.say(outcome.reason)
       return
     }
-    // A diff for this file is replaced rather than joined: two tabs for one
-    // path, one of them read-only, is a puzzle rather than a convenience.
-    if (already !== undefined) this.drop(already)
     this.add({
       file,
       document: this.deps.documents.open(outcome.text, file.relative),
@@ -299,7 +300,10 @@ export class Editor {
    * @returns resolution once any write settled.
    */
   async saveIfDirty(root: string, relative: string): Promise<void> {
-    const tab = this.tabs.find((each) => each.file.root === root && each.file.relative === relative)
+    // The editable tab specifically: a diff for the same file may be open in
+    // front of it in the strip, and only an editable tab holds text that
+    // could need writing.
+    const tab = this.findIn({ root, relative }, 'edit')
     if (tab === undefined || !this.isDirty(tab)) return
     await this.saveTab(tab)
   }
@@ -350,10 +354,13 @@ export class Editor {
    * @returns resolution once reloaded, or the conflict reported.
    */
   async reload(file: OpenFile): Promise<void> {
-    const tab = this.find(file)
     // Only an editable tab holds text that could go stale: a diff is not a
-    // view of the file as it is, and a media tab reads the file itself.
-    if (tab === undefined || tab.mode !== 'edit') return
+    // view of the file as it is, and a media tab reads the file itself. Asked
+    // for by mode rather than filtered after the fact, or a diff open for the
+    // same file would match first and the editable tab behind it would keep
+    // showing text from before the change.
+    const tab = this.findIn(file, 'edit')
+    if (tab === undefined) return
     if (this.isDirty(tab)) {
       this.deps.say(`${file.relative} changed on disk. Save to overwrite, or reopen it to discard your edits.`)
       return

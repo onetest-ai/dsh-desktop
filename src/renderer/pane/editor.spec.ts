@@ -236,6 +236,34 @@ describe('Editor and changes made outside it', () => {
   })
 })
 
+// reason: a file may now hold two tabs, and the diff is added first — a
+// lookup by path alone finds it, sees a mode that is not `edit`, and returns.
+// The editable tab behind it would then never reload and never be written:
+// the user reads text from before the agent's change, and their own edits
+// stay on the floor. Both of these fail if the lookup is not mode-aware.
+describe('Editor with a diff and the file itself open at once', () => {
+  it('reloads the editable tab past a diff for the same file', async () => {
+    const d = deps()
+    const editor = new Editor(d)
+    editor.showTexts(FILE, 'index', 'working', false)
+    await editor.open(FILE)
+    ;(d.readFile as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, text: 'changed' })
+    await editor.reload(FILE)
+    expect(editor.openTabs.map((tab) => tab.mode)).toEqual(['diff', 'edit'])
+    expect(editor.openTabs[1].document.text()).toBe('changed')
+  })
+
+  it('saves the editable tab past a diff for the same file', async () => {
+    const d = deps()
+    const editor = new Editor(d)
+    editor.showTexts(FILE, 'index', 'working', false)
+    await editor.open(FILE)
+    d.documents.made[1].buffer = 'my edits'
+    await editor.saveIfDirty(FILE.root, FILE.relative)
+    expect(d.writeFile).toHaveBeenCalledWith(FILE.root, FILE.relative, 'my edits')
+  })
+})
+
 describe('Editor and proposed changes', () => {
   it('shows a file beside the text proposed for it', async () => {
     const d = deps()
@@ -278,13 +306,17 @@ describe('Editor and proposed changes', () => {
     expect(d.said.some((message) => message.includes('unsaved edits'))).toBe(true)
   })
 
-  it('goes back to editing when the file is opened after a diff', async () => {
+  // reason: a diff and the file it is about are two tabs, not two claims on
+  // one — opening the file brings up an editable tab and leaves the diff
+  // where it was, which is the whole point of reading a change and then
+  // making one.
+  it('opens an editable tab beside a diff rather than closing it', async () => {
     const d = deps()
     const editor = new Editor(d)
     await editor.showDiff(FILE, '# proposed')
     await editor.open(FILE)
-    expect(editor.openTabs.length).toBe(1)
-    expect(editor.openTabs[0].mode).toBe('edit')
+    expect(editor.openTabs.map((tab) => tab.mode)).toEqual(['diff', 'edit'])
+    // The editable one is what is showing, and what a save writes.
     await editor.save()
     expect(d.writeFile).toHaveBeenCalled()
   })
