@@ -138,7 +138,7 @@ export function monacoDocuments(host: HTMLElement): Documents {
         destroy: () => element.remove(),
       }
     },
-    openDiff: (original, proposed, name) => {
+    openDiff: (original, proposed, name, inline = false) => {
       const element = layer()
       counter += 1
       const left = monaco.editor.createModel(original, undefined, uriFor(name, `ondisk${String(counter)}`))
@@ -146,7 +146,8 @@ export function monacoDocuments(host: HTMLElement): Documents {
       const editor = monaco.editor.createDiffEditor(element, {
         ...options(),
         readOnly: true,
-        renderSideBySide: true,
+        // One pane rather than two: a git diff is read the way a patch is.
+        renderSideBySide: !inline,
       })
       editor.setModel({ original: left, modified: right })
       return document_(element, only, editor.getModifiedEditor(), right, () => {

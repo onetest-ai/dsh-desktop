@@ -40,13 +40,15 @@ export interface Documents {
    */
   openMedia(url: string, name: string): Document
   /**
-   * Open a file beside the text proposed for it, read-only on both sides.
-   * @param original - the file as it is on disk.
-   * @param proposed - the text proposed for it.
+   * Open two texts beside each other, read-only on both sides.
+   * @param original - the left-hand text.
+   * @param proposed - the right-hand text.
    * @param name - the file's path, which chooses the language.
+   * @param inline - true for one pane rather than two; defaults to two, which
+   *   is what an agent's proposal has always shown.
    * @returns the document, not yet showing.
    */
-  openDiff(original: string, proposed: string, name: string): Document
+  openDiff(original: string, proposed: string, name: string, inline?: boolean): Document
 }
 
 /** What the editor needs from main and from the editor library. */
@@ -200,6 +202,29 @@ export class Editor {
   }
 
   /**
+   * Show a diff between two texts the caller already has.
+   *
+   * Unlike `showDiff`, neither side is read from disk and the file's own
+   * editor tab is left alone — a git diff is a second view of a file rather
+   * than a proposal to replace what the user is editing, so it neither
+   * closes that tab nor refuses because it has unsaved edits.
+   * @param file - which file the diff is about.
+   * @param original - the left-hand text.
+   * @param modified - the right-hand text.
+   * @param inline - true for one pane rather than two.
+   */
+  showTexts(file: OpenFile, original: string, modified: string, inline: boolean): void {
+    const already = this.findIn(file, 'diff')
+    if (already !== undefined) this.drop(already)
+    this.add({
+      file,
+      document: this.deps.documents.openDiff(original, modified, file.relative, inline),
+      saved: modified,
+      mode: 'diff',
+    })
+  }
+
+  /**
    * Bring one tab forward.
    * @param tab - the tab to show.
    */
@@ -340,6 +365,22 @@ export class Editor {
    */
   private find(file: OpenFile): Tab | undefined {
     return this.tabs.find((tab) => tab.file.root === file.root && tab.file.relative === file.relative)
+  }
+
+  /**
+   * The tab for one file in one mode.
+   *
+   * A file may have an editor tab and a git diff tab open at once, so the
+   * mode is part of a tab's identity: looking one up by path alone would
+   * return whichever was opened first and close the wrong one.
+   * @param file - the file to look for.
+   * @param mode - which of its tabs is wanted.
+   * @returns the tab, or undefined.
+   */
+  private findIn(file: OpenFile, mode: Tab['mode']): Tab | undefined {
+    return this.tabs.find(
+      (tab) => tab.file.root === file.root && tab.file.relative === file.relative && tab.mode === mode,
+    )
   }
 
   /**

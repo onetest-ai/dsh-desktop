@@ -57,7 +57,7 @@ function deps(overrides: Omit<Partial<EditorDeps>, 'documents'> = {}): Fake {
         made.push(made1)
         return made1
       },
-      openDiff: (_original: string, proposed: string) => {
+      openDiff: (_original: string, proposed: string, _name: string, _inline?: boolean) => {
         const made1 = document(proposed)
         made.push(made1)
         return made1
@@ -387,5 +387,39 @@ describe('Editor and files that are not text', () => {
       await editor.saveIfDirty('/p/demo', 'never-opened.html')
       expect(d.writeFile).not.toHaveBeenCalled()
     })
+  })
+})
+
+// reason: `showDiff` reads disk as the original because it was written for
+// an agent proposing a change. A git diff supplies both sides itself.
+describe('showTexts', () => {
+  it('opens a diff from two texts, reading nothing from disk', async () => {
+    const d = deps()
+    const editor = await withOpen(d, FILE)
+    ;(d.readFile as ReturnType<typeof vi.fn>).mockClear()
+    editor.showTexts({ root: '/p/demo', relative: 'x.ts' }, 'before', 'after', true)
+    expect(d.readFile).not.toHaveBeenCalled()
+    expect(editor.openTabs.some((tab) => tab.mode === 'diff')).toBe(true)
+  })
+
+  // reason: a file with unsaved edits is exactly when its diff is most
+  // worth seeing. `showDiff` refuses in that case, to protect the user's
+  // work from an agent's proposal; that rule does not apply here.
+  it('leaves the editor tab open, and opens beside it even when dirty', async () => {
+    const d = deps()
+    const editor = await withOpen(d, FILE)
+    const tab = editor.openTabs[0]
+    ;(tab.document as unknown as { buffer: string }).buffer = 'edited'
+    editor.showTexts(FILE, 'before', 'after', true)
+    expect(editor.openTabs.length).toBe(2)
+    expect(editor.openTabs.filter((each) => each.mode === 'diff').length).toBe(1)
+    expect(editor.openTabs.some((each) => each.mode === 'edit')).toBe(true)
+  })
+
+  it('replaces its own diff tab rather than stacking them up', async () => {
+    const editor = await withOpen(deps(), FILE)
+    editor.showTexts(FILE, 'a', 'b', true)
+    editor.showTexts(FILE, 'c', 'd', true)
+    expect(editor.openTabs.filter((each) => each.mode === 'diff').length).toBe(1)
   })
 })
