@@ -16,7 +16,8 @@ const SKIP = new Set(['node_modules', '.git'])
  * A `.git` that is a file rather than a directory is a worktree or a
  * submodule, and counts: `existsSync` is deliberately not a directory check.
  * @param root - the project directory.
- * @returns absolute paths, the root first when it is itself a repository.
+ * @returns absolute paths, the root first when it is itself a repository, the
+ * rest in name order.
  */
 export function findRepos(root: string): string[] {
   const found: string[] = []
@@ -26,6 +27,10 @@ export function findRepos(root: string): string[] {
     entries = readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !SKIP.has(entry.name))
       .map((entry) => entry.name)
+      // `readdir` order is the filesystem's, so the panel's repositories
+      // would otherwise reorder themselves between two reads of an unchanged
+      // project.
+      .sort((left, right) => left.localeCompare(right))
   } catch {
     // A project that has gone away reads as no repositories, which is the
     // same thing from the panel's side.

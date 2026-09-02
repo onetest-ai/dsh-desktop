@@ -22,6 +22,15 @@ describe('findRepos', () => {
     expect(findRepos(root).sort()).toEqual([join(root, 'alpha'), join(root, 'beta')])
   })
 
+  // reason: `readdir` answers in the filesystem's order, which is neither
+  // sorted nor stable — the panel would reorder its repositories between two
+  // reads of a project nothing had happened to. The fixture is created in
+  // reverse so the order asserted cannot be the order they were made in.
+  it('reports repositories in name order, whatever order they were created in', () => {
+    const root = tree('zulu', 'mike', 'alpha')
+    expect(findRepos(root)).toEqual([join(root, 'alpha'), join(root, 'mike'), join(root, 'zulu')])
+  })
+
   // reason: a project that is itself a repository and holds checkouts is the
   // case that prompted scanning at all.
   it('finds the root and its children together', () => {

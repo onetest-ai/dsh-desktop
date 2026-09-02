@@ -192,7 +192,14 @@ function draw(): void {
  * @returns resolution once the panel has been redrawn.
  */
 async function refresh(): Promise<void> {
-  latest = await window.pane.readGit()
+  try {
+    latest = await window.pane.readGit()
+  } catch (error) {
+    // Nothing on the other side of the bridge rejects today. Without this it
+    // would not have to: one that did would leave `latest` unset, which draws
+    // as a blank panel with no message and no way to ask again.
+    latest = { ok: false, reason: `Source control could not be read: ${(error as Error).message}` }
+  }
   draw()
 }
 

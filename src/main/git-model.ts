@@ -112,10 +112,12 @@ export async function gitDiffFor(
  * working tree names exactly that, which `diffSides` deliberately still
  * answers with `modified: ''` rather than a refusal. So this resolves through
  * `realpath` the way `resolveInRoot` does, to catch a symlink pointing out of
- * the repository, but falls back to the nearest existing ancestor when the
- * path itself is missing — the file can be gone without its directory being
- * gone too, and that ancestor is the part a symlink could still escape
- * through.
+ * the repository, but falls back to resolving the containing directory alone
+ * — exactly one level, not a walk up — when the path itself is missing: the
+ * file can be gone without its directory being gone too, and that directory
+ * is the part a symlink could still escape through. A path whose directory is
+ * also missing is resolved no further; nothing will be read from it either
+ * way, and `resolve` has already collapsed any `..` it carried.
  *
  * The repository is checked separately by the caller; this only answers
  * whether `path` stays inside whichever repository it is given.

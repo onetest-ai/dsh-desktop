@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -56,6 +56,32 @@ describe('diffSides', () => {
     const run = vi.fn(async () => fail("fatal: path 'a.ts' does not exist in 'HEAD'"))
     expect(await diffSides('/r', 'a.ts', 'staged', run)).toMatchObject({ ok: true, original: '' })
   })
+
+  // reason: `modified` is the right-hand side of every row in two of the
+  // three sections, and it comes from the working tree rather than from git.
+  // A fixture whose file does not exist reads as `''` whatever the code does,
+  // so this one is really on disk: without it, a regression that always
+  // returned an empty working-tree side would pass the whole suite.
+  it('reads the working tree for the modified side of an unstaged change', async () => {
+    const { repo } = demoTree()
+    const run = vi.fn(async () => ok('indexed\n'))
+    expect(await diffSides(repo, 'sub/file.ts', 'changed', run)).toEqual({
+      ok: true,
+      original: 'indexed\n',
+      modified: 'inside\n',
+    })
+  })
+
+  it('reads the working tree for the modified side of an untracked file', async () => {
+    const { repo } = demoTree()
+    writeFileSync(join(repo, 'new.ts'), 'brand new\n')
+    const run = vi.fn(async () => ok('unused'))
+    expect(await diffSides(repo, 'new.ts', 'untracked', run)).toEqual({
+      ok: true,
+      original: '',
+      modified: 'brand new\n',
+    })
+  })
 })
 
 describe('readProject', () => {
@@ -110,6 +136,17 @@ describe('gitDiffFor', () => {
   it('refuses a path resolving into a sibling that shares a name prefix', async () => {
     const { repo } = demoTree()
     expect(await gitDiffFor(repo, '../demo-other/secret.txt', 'changed', () => [repo])).toBeUndefined()
+  })
+
+  // reason: `..` and an absolute path are both collapsed or caught before
+  // anything touches the disk; a symlink is the case only `realpath` sees,
+  // and it is the one a repository can carry innocently — a link to a shared
+  // directory beside it, and a row named through that link reads a file the
+  // repository does not contain.
+  it('refuses a path leading through a symlink out of the repository', async () => {
+    const { repo, sibling } = demoTree()
+    symlinkSync(sibling, join(repo, 'link'))
+    expect(await gitDiffFor(repo, 'link/secret.txt', 'changed', () => [repo])).toBeUndefined()
   })
 
   // reason: a row for a file deleted in the working tree names a path with
