@@ -587,3 +587,92 @@ body {
   border-radius: 50%;
   background: var(--dsw-specific-sidebar-fill);
 }
+
+/*
+ * The source-control panel.
+ *
+ * The four status colours are the only names in this file that are not
+ * upstream's, because upstream has no notion of a changed file. Each is
+ * defined as one of its alias tokens rather than as a literal, so they follow
+ * the harness's Appearance setting exactly as every other surface here does —
+ * and they are declared on `body`, which is the element the vendored sheets
+ * define their own tokens on.
+ */
+body {
+  /* Added, staged or otherwise: the same green upstream uses for a success. */
+  --dsh-git-added: var(--dsw-alias-state-success-primary);
+  /* Modified: upstream's warn amber, which is what "changed, not yet dealt
+     with" reads as beside the other three. */
+  --dsh-git-modified: var(--dsw-alias-state-warn-primary);
+  /* Deleted: upstream's error red. */
+  --dsh-git-deleted: var(--dsw-alias-state-error-primary);
+  /* Untracked: dimmed rather than coloured — git has never seen the file, so
+     it is not a change to anything yet. */
+  --dsh-git-untracked: var(--dsw-alias-label-tertiary);
+}
+
+/* One repository. Given a header only when there is more than one, since a
+   heading naming the project you are already in tells you nothing. */
+.repo {
+  margin-bottom: 8px;
+}
+
+.repo-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 3px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.repo-head:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* The branch, and how far it is from its remote. Dimmed: it is context for
+   the name beside it, not a second heading. */
+.repo-branch {
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Staged Changes, Changes, Untracked. Upper-cased and small, the way a
+   section heading reads in a sidebar that is scanned rather than read. */
+.section-title {
+  margin: 8px 0 2px;
+  padding: 0 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.git-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Fixed width so the names line up under each other whatever letter a row
+   carries; coloured by the row, which is the only thing status decides here. */
+.git-status {
+  display: flex;
+  flex: none;
+  justify-content: center;
+  width: 12px;
+  font-family: var(--ds-font-family-code);
+  font-weight: 600;
+}

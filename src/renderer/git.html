@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Source Control</title>
+<!-- The harness's own tokens, vendored; see vendor/dsh-theme/README.md. -->
+<link rel="stylesheet" href="theme/base.css">
+<link rel="stylesheet" href="theme/design-platform.css">
+<link rel="stylesheet" href="pane.css">
+<body class="files">
+<main class="pane">
+  <!-- Not a picker, for the tree's reason: which project is open is the
+       harness's to decide. -->
+  <div class="column-head">
+    <span class="project-name" id="git-title">Source Control</span>
+    <span class="head-spacer"></span>
+  </div>
+  <section class="panel">
+    <p class="empty" id="git-empty">No repository in this project.</p>
+    <div id="repos"></div>
+  </section>
+</main>
+<script src="git-bundle.js"></script>

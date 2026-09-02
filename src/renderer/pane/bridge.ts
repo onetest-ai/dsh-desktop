@@ -1,4 +1,16 @@
 import type { Project, TreeEntry } from './tree.ts'
+import type { RepoStatusView, RowGroup } from './git-rows.ts'
+
+/**
+ * What the git panel is showing, or why it is showing nothing.
+ *
+ * Declared here rather than imported from main's `git-model.ts`: the renderer
+ * never imports from `src/main`, and this is the shape that crosses the
+ * bridge, not main's own model.
+ */
+export type ProjectGitView =
+  | { ok: true; repos: { path: string; name: string; status: RepoStatusView }[] }
+  | { ok: false; reason: string }
 
 /** What an operation on one entry reports back. */
 export type OpResult = { ok: true; relative: string } | { ok: false; reason: string }
@@ -43,6 +55,9 @@ declare global {
       webForward(): void
       webReload(): void
       onWebState(listener: (state: { url: string; canGoBack: boolean; canGoForward: boolean }) => void): void
+      readGit(): Promise<ProjectGitView>
+      onGitChanged(listener: () => void): void
+      openGitDiff(repo: string, path: string, section: RowGroup['section']): void
       askTheme(): void
       onTheme(listener: (dark: boolean) => void): void
     }

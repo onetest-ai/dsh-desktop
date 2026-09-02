@@ -63,10 +63,44 @@ export interface ColumnState {
   open: boolean
 }
 
+/** Which view the side column is showing. */
+export type SideView = 'files' | 'git'
+
+/**
+ * The side column's stored state.
+ *
+ * One column with a choice of view rather than two columns: the tree and the
+ * git panel are rarely read at once, and neither earns permanent horizontal
+ * space on a laptop.
+ */
+export interface SideColumnState extends ColumnState {
+  view: SideView
+}
+
+/**
+ * What a rail button does to the side column.
+ *
+ * The tree and the git panel share one column, as Explorer and Source
+ * Control share one VS Code sidebar. Pressing the button for the view
+ * already showing closes the column; pressing the other one switches to it
+ * without closing anything.
+ * @param state - whether the column is open, and what it is showing.
+ * @param pressed - the view whose rail button was pressed.
+ * @returns the column's next state.
+ */
+export function nextSideView(
+  state: { open: boolean; view: SideView },
+  pressed: SideView,
+): { open: boolean; view: SideView } {
+  if (state.open && state.view === pressed) return { open: false, view: state.view }
+  return { open: true, view: pressed }
+}
+
 /** The two columns this app puts beside the harness. */
 export interface Columns {
   editor: ColumnState
-  files: ColumnState
+  /** The side column, holding either the file tree or the git panel. */
+  files: SideColumnState
   /**
    * The terminal panel, whose stored `width` is what it claims for itself when
    * no column is open to sit under.

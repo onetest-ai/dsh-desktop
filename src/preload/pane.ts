@@ -69,6 +69,16 @@ contextBridge.exposeInMainWorld('pane', {
   onShowWeb: (listener: () => void) => {
     ipcRenderer.on('pane:show-web', () => listener())
   },
+  // The git panel's three channels. The read is an invoke because the panel
+  // waits on it; the change notice is a push because only main knows when a
+  // watcher fired; the diff is a send because the editor column is main's to
+  // fill and there is no answer to wait for.
+  readGit: () => ipcRenderer.invoke('git:read'),
+  onGitChanged: (listener: () => void) => {
+    ipcRenderer.on('git:changed', () => listener())
+  },
+  openGitDiff: (repo: string, path: string, section: string) =>
+    ipcRenderer.send('git:open-diff', repo, path, section),
   onShowDiff: (listener: (root: string, relative: string, proposed: string) => void) => {
     ipcRenderer.on('pane:diff', (_event, root: string, relative: string, proposed: string) =>
       listener(root, relative, proposed),

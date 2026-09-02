@@ -65,7 +65,14 @@ export interface DesktopConfig {
    */
   pane?: {
     editor: { width: number; open: boolean }
-    files: { width: number; open: boolean }
+    /**
+     * The side column, which holds either the file tree or the git panel.
+     *
+     * `view` is absent from every file written before the git panel existed,
+     * so it is read as `files` rather than refused — the column that has
+     * always been the tree opens as the tree.
+     */
+    files: { width: number; open: boolean; view: 'files' | 'git' }
     /**
      * The terminal panel. Absent in a file written before it existed, which
      * opens it closed at its default size rather than refusing to load.
@@ -231,7 +238,7 @@ function paneState(value: unknown): DesktopConfig['pane'] {
   const height = (terminal as { height?: unknown } | null)?.height
   return {
     editor: both[0],
-    files: both[1],
+    files: { ...both[1], view: (files as { view?: unknown } | null)?.view === 'git' ? 'git' : 'files' },
     // The panel needs a height as well as a width, and one without is not a
     // panel this can restore — it opens at the default instead.
     ...(panel === undefined || typeof height !== 'number' || !Number.isFinite(height) || height <= 0

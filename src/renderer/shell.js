@@ -65,12 +65,19 @@ window.shell.onPlaces((places) => {
   rail.style.left = `${places.rail.x}px`
   rail.style.width = `${places.rail.width}px`
   document.getElementById('rail-files').setAttribute('aria-pressed', String(places.open.files))
+  document.getElementById('rail-git').setAttribute('aria-pressed', String(places.open.git))
   document.getElementById('rail-web').setAttribute('aria-pressed', String(places.open.web))
   document.getElementById('rail-terminal').setAttribute('aria-pressed', String(places.open.terminal))
 })
 
 document.getElementById('rail-files').addEventListener('click', () => {
   window.shell.toggleFiles()
+})
+// The tree and source control take turns in one column, so each button says
+// only which view was pressed; main works out whether that opens, switches, or
+// closes it.
+document.getElementById('rail-git').addEventListener('click', () => {
+  window.shell.toggleGit()
 })
 document.getElementById('rail-web').addEventListener('click', () => {
   window.shell.toggleWeb()

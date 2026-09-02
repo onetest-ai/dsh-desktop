@@ -48,7 +48,9 @@ import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, cr
 } from './window'
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
-import { DIVIDER_WIDTH, RAIL_WIDTH, type Columns } from './layout'
+import { DIVIDER_WIDTH, RAIL_WIDTH, nextSideView, type Columns, type SideView } from './layout'
+import { readProject, type ProjectGit } from './git-model'
+import { findRepos, hasGit } from './git-find'
 import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
@@ -124,7 +126,7 @@ let views: MainWindow | undefined
  */
 const columns: Columns = {
   editor: { width: DEFAULT_EDITOR_WIDTH, open: false },
-  files: { width: DEFAULT_FILES_WIDTH, open: false },
+  files: { width: DEFAULT_FILES_WIDTH, open: false, view: 'files' },
   terminal: { width: DEFAULT_TERMINAL_WIDTH, height: DEFAULT_TERMINAL_HEIGHT, open: false },
 }
 
@@ -177,6 +179,24 @@ function toggleWeb(): void {
 function toggleColumn(key: keyof Columns): void {
   setColumn(key, { open: !columns[key].open })
   storeColumns()
+}
+
+/**
+ * Put one of the side column's two views up, or close the column.
+ *
+ * The one path the rail button and the menu item both take. 0.3.0 shipped a
+ * fix for the terminal, where they did not: the rail did work the menu item
+ * never learned about, so the shortcut opened a panel with nothing in it.
+ * @param pressed - the view whose button or menu item was used.
+ */
+function toggleSideView(pressed: SideView): void {
+  const next = nextSideView({ open: columns.files.open, view: columns.files.view }, pressed)
+  columns.files.view = next.view
+  setColumn('files', { open: next.open })
+  storeColumns()
+  // Opening the panel is one of the moments its status is stale: it has been
+  // showing whatever was true when it was last put away.
+  if (next.open && next.view === 'git') notifyGitChanged()
 }
 
 /**
@@ -624,6 +644,9 @@ function showProject(project?: { path: string; title: string }): void {
   if (moved) watchCurrentProject()
   if (views === undefined || views.window.isDestroyed()) return
   views.files.webContents.send('pane:project', currentProject)
+  // The panel follows the project the tree does; a moved project is a
+  // different set of repositories entirely.
+  if (moved) notifyGitChanged()
 }
 
 /**
@@ -637,12 +660,121 @@ function showProject(project?: { path: string; title: string }): void {
 function watchCurrentProject(): void {
   projectWatcher?.close()
   projectWatcher = undefined
+  closeGitWatchers()
   const root = currentProject?.path
   if (root === undefined) return
   projectWatcher = watchProject(root, (relative) => {
     if (views === undefined || views.window.isDestroyed()) return
     views.files.webContents.send('pane:project-changed', root, relative)
+    // An edit to a tracked file changes what git reports about it, so the
+    // same watch serves both — for everything outside `.git`.
+    notifyGitChanged()
   })
+  watchRepos(root)
+}
+
+/**
+ * Whether git could be run at all, once it has been asked.
+ *
+ * Cached only when the answer was yes: a no is worth asking again, since the
+ * user's remedy is to name git's directory under Settings and come back.
+ */
+let gitOnPath = false
+
+/**
+ * The `readProject` call already running, if there is one.
+ *
+ * A rebase in the terminal panel moves `.git` dozens of times a second, and
+ * every move asks for a read. Handing the running promise to the second
+ * caller means that burst costs one git rather than one per event.
+ */
+let gitReading: Promise<ProjectGit> | undefined
+
+/**
+ * Read the current project's repositories.
+ *
+ * A project with none, and no project at all, are both an empty list: the
+ * panel says so in words and nothing is wrong. git missing from `PATH` is the
+ * one state that names its own remedy, since the user can fix it.
+ * @returns what the panel should draw.
+ */
+async function readCurrentGit(): Promise<ProjectGit> {
+  const project = currentProject
+  if (project === undefined) return { ok: true, repos: [] }
+  if (!gitOnPath) {
+    gitOnPath = await hasGit()
+    if (!gitOnPath) {
+      return { ok: false, reason: 'git is not on your PATH. Add it under Settings → Advanced → Extra PATH entries.' }
+    }
+  }
+  if (gitReading !== undefined) return await gitReading
+  const running = readProject(project.path)
+  gitReading = running
+  try {
+    return await running
+  } finally {
+    gitReading = undefined
+  }
+}
+
+/**
+ * How long git changes are collected before the panel is told.
+ *
+ * A single `git commit` writes the index, HEAD, and a ref within a few
+ * milliseconds of each other; without this each one would be a separate read.
+ */
+const GIT_SETTLE_MS = 200
+
+/** The pending `git:changed`, so a burst of them arrives as one. */
+let gitNotify: ReturnType<typeof setTimeout> | undefined
+
+/** Tell the panel to read itself again, once the changes behind it have settled. */
+function notifyGitChanged(): void {
+  if (gitNotify !== undefined) clearTimeout(gitNotify)
+  gitNotify = setTimeout(() => {
+    gitNotify = undefined
+    if (views === undefined || views.window.isDestroyed()) return
+    views.git.webContents.send('git:changed')
+  }, GIT_SETTLE_MS)
+  gitNotify.unref?.()
+}
+
+/**
+ * Watches over each repository's own `.git`, closed when the project moves.
+ *
+ * The project watcher cannot serve here: it drops everything under `.git` (see
+ * `IGNORED` in `file-tree.ts`), which is exactly where staging, committing,
+ * and fetching are recorded. Working-tree edits still arrive through it.
+ */
+let gitWatchers: FSWatcher[] = []
+
+/** Stop watching every repository's `.git`. */
+function closeGitWatchers(): void {
+  for (const watcher of gitWatchers) watcher.close()
+  gitWatchers = []
+}
+
+/**
+ * Watch each repository in the current project for git's own writes.
+ *
+ * Recursive over `.git`, which covers `index`, `HEAD`, and everything under
+ * `refs` in one watch rather than three per repository — and catches the
+ * files git actually writes, which are temporaries renamed into place.
+ * @param root - the project directory.
+ */
+function watchRepos(root: string): void {
+  for (const repo of findRepos(root)) {
+    try {
+      const watcher = watch(join(repo, '.git'), { recursive: true, persistent: false }, () => {
+        notifyGitChanged()
+      })
+      gitWatchers.push(watcher)
+    } catch (error) {
+      // A repository that cannot be watched still reads; the panel refreshes
+      // when the window is focused instead.
+      console.warn(`dsh-desktop: ${repo} could not be watched for git changes: ${(error as Error).message}`)
+    }
+  }
 }
 
 /**
@@ -1801,6 +1933,7 @@ async function shutdown(): Promise<void> {
   workspaceWatcher = undefined
   projectWatcher?.close()
   projectWatcher = undefined
+  closeGitWatchers()
   // The install child is reaped first and unconditionally: it is in neither
   // the lifecycle chain nor `child`, so nothing below would ever find it, and
   // an unreaped `npm` keeps writing into $DSH_HOME after Electron is gone.
@@ -1913,7 +2046,10 @@ if (!app.requestSingleInstanceLock()) {
     alignDefaultPlugins(DSH_HOME)
     installMenu(showSettings, {
       toggleFiles: () => {
-        toggleColumn('files')
+        toggleSideView('files')
+      },
+      toggleGit: () => {
+        toggleSideView('git')
       },
       toggleWeb,
       toggleTerminal: toggleTerminalPanel,
@@ -1935,7 +2071,11 @@ if (!app.requestSingleInstanceLock()) {
         // stored `true` would put an empty editor on screen offering to be
         // closed.
         columns.editor = { width: stored.config.pane.editor.width, open: false }
-        columns.files = { ...stored.config.pane.files }
+        // `view` is absent from every config written before the git panel, and
+        // `loadConfig` fills it in — the fallback here is for a stored object
+        // that reached this build by any other route.
+        const side = stored.config.pane.files
+        columns.files = { ...side, view: side.view === 'git' ? 'git' : 'files' }
         // The panel's size is restored but never its open state, for the
         // editor's reason: a terminal exists because someone opened one, and
         // reopening it at launch would start a shell nobody asked for.
@@ -1994,9 +2134,15 @@ if (!app.requestSingleInstanceLock()) {
     // The rail's two buttons. The editor is not among them: it is not
     // something to open empty, and appears when a file goes into it.
     ipcMain.on('shell:toggle-files', () => {
-      toggleColumn('files')
+      toggleSideView('files')
+    })
+    ipcMain.on('shell:toggle-git', () => {
+      toggleSideView('git')
     })
     ipcMain.on('shell:toggle-web', toggleWeb)
+    // The panel's own read. Nothing about git reaches the renderer but this
+    // result: the parsing, the spawning, and the serialisation are all here.
+    ipcMain.handle('git:read', async () => await readCurrentGit())
     ipcMain.on('shell:toggle-terminal', toggleTerminalPanel)
     // The harness telling us which project it is working in — pushed by the
     // desktop plugin when the user switches session. Better than anything
@@ -2202,6 +2348,12 @@ if (!app.requestSingleInstanceLock()) {
         revealPending = false
         revealWindow()
       }
+    })
+    // Anything at all can move a repository while this app is not the one in
+    // front — the agent's own tools, another editor, a shell. Coming back is
+    // the moment the panel is about to be read, so it is the moment to check.
+    window.on('focus', () => {
+      notifyGitChanged()
     })
     window.on('close', (event) => {
       // Closing the window leaves the app running in the tray; only a quit,

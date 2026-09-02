@@ -6,6 +6,7 @@ import {
   MIN_TERMINAL_HEIGHT,
   RAIL_WIDTH,
   layout,
+  nextSideView,
   type Columns,
 } from './layout'
 
@@ -16,7 +17,7 @@ const BOUNDS = { width: 1280, height: 860 }
 function columns(overrides: Partial<Columns> = {}): Columns {
   return {
     editor: { width: 520, open: false },
-    files: { width: 240, open: false },
+    files: { width: 240, open: false, view: 'files' },
     terminal: { width: 720, height: 240, open: false },
     ...overrides,
   }
@@ -247,5 +248,17 @@ describe('the terminal panel', () => {
   it('covers the window exactly, top to bottom', () => {
     const places = layout(BOUNDS, withPanel({ editor: { width: 520, open: true } }))
     expect(places.editor.height + places.terminalDivider.height + places.terminal.height).toBe(860)
+  })
+})
+
+describe('nextSideView', () => {
+  // reason: the tree and the git panel take turns in one column, so pressing
+  // a rail button either switches the view or closes the column — pressing
+  // git while git is showing must not leave the column open and empty.
+  it('switches the side column between its two views, and closes on a repeat', () => {
+    expect(nextSideView({ open: true, view: 'files' }, 'git')).toEqual({ open: true, view: 'git' })
+    expect(nextSideView({ open: true, view: 'git' }, 'git')).toEqual({ open: false, view: 'git' })
+    expect(nextSideView({ open: false, view: 'git' }, 'git')).toEqual({ open: true, view: 'git' })
+    expect(nextSideView({ open: true, view: 'git' }, 'files')).toEqual({ open: true, view: 'files' })
   })
 })

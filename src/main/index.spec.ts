@@ -83,6 +83,11 @@ const fake = vi.hoisted(() => {
     // `index.ts` tells the tree which project to show.
     webContents: { send: vi.fn() },
   }
+  // The git panel: `index.ts` tells it when to read itself again.
+  const git = {
+    getBounds: vi.fn(() => ({ x: 0, y: 0, width: 220, height: 860 })),
+    webContents: { send: vi.fn() },
+  }
   // The terminal panel: `index.ts` pushes it the theme and the shell's output.
   const terminal = {
     getBounds: vi.fn(() => ({ x: 0, y: 620, width: 740, height: 240 })),
@@ -113,7 +118,7 @@ const fake = vi.hoisted(() => {
       },
     },
   }
-  const views = { window, harness, pane, files, terminal, web }
+  const views = { window, harness, pane, files, git, terminal, web }
 
   const app = {
     requestSingleInstanceLock: vi.fn(() => true),
@@ -1820,7 +1825,7 @@ describe('the side columns', () => {
       expect.objectContaining({
         pane: {
           editor: { width: 520, open: true },
-          files: { width: 220, open: true },
+          files: { width: 220, open: true, view: 'files' },
           terminal: { width: 720, height: 240, open: false },
         },
       }),
@@ -1848,6 +1853,36 @@ describe('the side columns', () => {
       expect.objectContaining({ files: expect.objectContaining({ open: false }) }),
       expect.any(Boolean),
     )
+  })
+
+  // reason: 0.3.0 shipped a fix for the terminal, where the rail and the menu
+  // did not share a path and the shortcut opened a panel with nothing in it.
+  // The side column now has two views and three ways to change it.
+  it('switches the side column between the tree and source control, from either the rail or the menu', async () => {
+    await bootReady()
+    const menu = installMenuMock.mock.calls[0][1] as { toggleFiles(): void; toggleGit(): void }
+    const side = (): { open: boolean; view: string } =>
+      (applyLayout as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(-1)?.[1] as never
+
+    fake.sendIpc('shell:toggle-git')
+    expect(side()).toMatchObject({ files: { open: true, view: 'git' } })
+    // The tree's own button switches the column rather than closing it.
+    menu.toggleFiles()
+    expect(side()).toMatchObject({ files: { open: true, view: 'files' } })
+    // And pressing the view already showing closes the column.
+    fake.sendIpc('shell:toggle-files')
+    expect(side()).toMatchObject({ files: { open: false, view: 'files' } })
+    menu.toggleGit()
+    expect(side()).toMatchObject({ files: { open: true, view: 'git' } })
+  })
+
+  // reason: the panel asks main for everything it draws, and with no project
+  // there is nothing to read — an empty list rather than a failure, since
+  // nothing is wrong.
+  it('reads no repositories when no project is open', async () => {
+    readWorkspacesMock.mockReturnValue([])
+    await bootReady()
+    await expect(fake.sendIpc('git:read')).resolves.toEqual({ ok: true, repos: [] })
   })
 
   it('opens the tree from the rail', async () => {
@@ -2007,7 +2042,9 @@ describe('the side columns', () => {
     await bootReady()
     expect(createWindow).toHaveBeenCalledWith({
       editor: { width: 600, open: false },
-      files: { width: 300, open: true },
+      // A stored config predating the git panel names no view; the column
+      // that has always been the tree opens as the tree.
+      files: { width: 300, open: true, view: 'files' },
       // A stored config predating the terminal opens it closed, at its
       // default size, rather than refusing to load.
       terminal: { width: 720, height: 240, open: false },
