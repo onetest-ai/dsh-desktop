@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { discard, stage, unstage } from './git-actions'
+import { commit, discard, stage, unstage } from './git-actions'
 import type { GitResult } from './git-run'
 
 const ok = (): GitResult => ({ code: 0, stdout: Buffer.alloc(0), stderr: '' })
@@ -43,6 +43,62 @@ describe('unstage', () => {
     const run = vi.fn(async () => ok())
     await unstage('/r', ['a.ts'], run)
     expect(run).toHaveBeenCalledWith('/r', ['restore', '--staged', '--', 'a.ts'])
+  })
+})
+
+describe('commit', () => {
+  // reason: the tick means "include this", and `git commit` commits the whole
+  // index — so anything staged but unticked would ride along. Reconciling the
+  // index to the selection is the only way the commit matches what was asked
+  // for, and the spec states the consequence: an unticked file that was
+  // staged is unstaged, and stays that way.
+  it('stages what is ticked, unstages what is staged but is not, then commits', async () => {
+    const run = vi.fn(async () => ok())
+    expect(await commit('/r', 'a message', ['new.ts', 'both.ts'], ['both.ts', 'unwanted.ts'], run)).toEqual({
+      ok: true,
+    })
+    expect(run.mock.calls.map((call) => call[1])).toEqual([
+      ['add', '--', 'new.ts', 'both.ts'],
+      ['restore', '--staged', '--', 'unwanted.ts'],
+      ['commit', '-m', 'a message'],
+    ])
+  })
+
+  it('skips the reconciliation commands it has nothing for', async () => {
+    const run = vi.fn(async () => ok())
+    await commit('/r', 'm', ['a.ts'], ['a.ts'], run)
+    expect(run.mock.calls.map((call) => call[1])).toEqual([
+      ['add', '--', 'a.ts'],
+      ['commit', '-m', 'm'],
+    ])
+  })
+
+  // reason: committing with nothing ticked would make an empty commit, and
+  // committing with no message opens an editor that has no terminal to
+  // appear in — the panel disables the button for both, and this is the
+  // second door.
+  it('refuses an empty message and an empty selection, without running git', async () => {
+    const run = vi.fn(async () => ok())
+    expect(await commit('/r', '   ', ['a.ts'], [], run)).toEqual({
+      ok: false,
+      reason: 'Write a commit message first.',
+    })
+    expect(await commit('/r', 'm', [], [], run)).toEqual({
+      ok: false,
+      reason: 'Tick at least one file to commit.',
+    })
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  // reason: a failing hook is the common case, and its own output is the
+  // only thing that says what to fix.
+  it('reports a failure without committing anything after it', async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(ok())
+      .mockResolvedValueOnce(fail('hook declined the commit'))
+    const out = await commit('/r', 'm', ['a.ts'], [], run)
+    expect(out).toEqual({ ok: false, reason: 'hook declined the commit' })
   })
 })
 

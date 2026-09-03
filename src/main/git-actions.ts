@@ -55,6 +55,44 @@ export async function unstage(repo: string, paths: string[], run: typeof runGit 
 }
 
 /**
+ * Commit exactly what is ticked.
+ *
+ * Three commands, in order, because `git commit` commits the whole index:
+ * ticked paths are staged, paths that are staged but not ticked are
+ * unstaged, and only then is the commit made. Without the middle step a file
+ * staged earlier and unticked here would be committed anyway.
+ *
+ * That step has a consequence worth knowing: the index is reconciled to the
+ * selection rather than left alone, and it stays that way afterwards.
+ * Unticking a staged file unstages it for good, not only for this commit.
+ * @param repo - the repository.
+ * @param message - the commit message, as typed.
+ * @param selected - the paths ticked in the panel.
+ * @param staged - the paths currently in the index.
+ * @param run - how to run git.
+ * @returns success, or why nothing was committed.
+ */
+export async function commit(
+  repo: string,
+  message: string,
+  selected: string[],
+  staged: string[],
+  run: typeof runGit = runGit,
+): Promise<ActionOutcome> {
+  if (message.trim() === '') return { ok: false, reason: 'Write a commit message first.' }
+  if (selected.length === 0) return { ok: false, reason: 'Tick at least one file to commit.' }
+  const adding = await stage(repo, selected, run)
+  if (!adding.ok) return adding
+  const dropping = await unstage(
+    repo,
+    staged.filter((path) => !selected.includes(path)),
+    run,
+  )
+  if (!dropping.ok) return dropping
+  return await act(repo, ['commit', '-m', message], run)
+}
+
+/**
  * Throw away changes to the named paths.
  *
  * Two commands, because they are two different things: a tracked file is
