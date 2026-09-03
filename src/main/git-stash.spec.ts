@@ -5,6 +5,8 @@ import type { GitResult } from './git-run'
 const bytes = (...lines: string[]): Buffer => Buffer.from(`${lines.join('\n')}\n`, 'utf8')
 const ok = (): GitResult => ({ code: 0, stdout: Buffer.alloc(0), stderr: '' })
 const fail = (why: string): GitResult => ({ code: 1, stdout: Buffer.alloc(0), stderr: why })
+/** A stash's own commit, as `rev-parse` and `stash list --format=%H` give it. */
+const sha = '5f4dcc3b5aa765d61d8327deb882cf99'
 
 describe('parseStashes', () => {
   it('reads the ref, the branch it was made on, and the message', () => {
@@ -36,10 +38,28 @@ describe('parseStashes', () => {
 })
 
 describe('pushStash', () => {
-  it('pushes the working tree with the message it was given', async () => {
-    const run = vi.fn(async () => ok())
-    expect(await pushStash('/r', 'wip thing', run)).toEqual({ ok: true })
-    expect(run).toHaveBeenCalledWith('/r', ['stash', 'push', '-m', 'wip thing'])
+  // reason: `stash@{0}` is a position, not an identity. Anything else
+  // stashing in the same repository — the agent this app runs beside the
+  // panel, with `pull --rebase --autostash` — slides every entry down one, so
+  // a caller that pops by position pops someone else's work. The sha is the
+  // only handle that cannot move, and it must come back from the push.
+  it('names the entry it created by sha', async () => {
+    const run = vi.fn(async (_repo: string, args: string[]) =>
+      args[0] === 'rev-parse' ? { code: 0, stdout: Buffer.from(`${sha}\n`), stderr: '' } : ok(),
+    )
+    expect(await pushStash('/r', 'wip thing', run)).toEqual({ ok: true, ref: sha })
+    expect(run.mock.calls.map((call) => call[1])).toEqual([
+      ['stash', 'push', '-m', 'wip thing'],
+      ['rev-parse', 'stash@{0}'],
+    ])
+  })
+
+  // reason: the stash was made. Reporting a failure because git would not
+  // name it would send the user looking for changes that are safely in the
+  // list — so it is a success with no ref, which the chain treats as a stop.
+  it('still reports success when the entry could not be named', async () => {
+    const run = vi.fn(async (_repo: string, args: string[]) => (args[0] === 'rev-parse' ? fail('bad revision') : ok()))
+    expect(await pushStash('/r', 'wip', run)).toEqual({ ok: true })
   })
 
   it('pushes without a message when none was written', async () => {
@@ -75,6 +95,36 @@ describe('applyStash', () => {
       ['stash', 'apply', 'stash@{0}'],
       ['stash', 'pop', 'stash@{0}'],
     ])
+  })
+
+  // reason: a sha identifies the entry, but git refuses `stash pop <sha>` for
+  // anything that is not a reflog entry, so the position has to be looked up
+  // — from the list as it is now, not from where the caller last saw it.
+  it('pops the position the sha is at now, not the one it was at', async () => {
+    const run = vi.fn(async (_repo: string, args: string[]) =>
+      args[1] === 'list'
+        ? { code: 0, stdout: Buffer.from(`stash@{0} 9999999\nstash@{1} ${sha}\n`), stderr: '' }
+        : ok(),
+    )
+    expect(await applyStash('/r', sha, true, run)).toEqual({ ok: true })
+    expect(run.mock.calls.map((call) => call[1])).toEqual([
+      ['stash', 'list', '--format=%gd %H'],
+      ['stash', 'pop', 'stash@{1}'],
+    ])
+  })
+
+  // reason: applying the wrong entry is silent and unrecoverable — someone
+  // else's work lands in the tree and, for a pop, their stash is deleted. A
+  // sha that has gone is a refusal, never a fall back to `stash@{0}`.
+  it('refuses when the sha is no longer in the list, naming it', async () => {
+    const run = vi.fn(async (_repo: string, args: string[]) =>
+      args[1] === 'list' ? { code: 0, stdout: Buffer.from('stash@{0} 9999999\n'), stderr: '' } : ok(),
+    )
+    const out = await applyStash('/r', sha, true, run)
+    expect(out.ok).toBe(false)
+    expect(out.ok ? '' : out.reason).toContain(sha)
+    // And nothing was applied.
+    expect(run.mock.calls.map((call) => call[1])).toEqual([['stash', 'list', '--format=%gd %H']])
   })
 
   // reason: a pop that conflicts leaves the stash in place and the tree

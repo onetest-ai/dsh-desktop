@@ -102,6 +102,10 @@ contextBridge.exposeInMainWorld('pane', {
   checkoutBranch: (repo: string, name: string, remote: boolean) =>
     ipcRenderer.invoke('git:checkout', repo, name, remote),
   createBranch: (repo: string, name: string) => ipcRenderer.invoke('git:create-branch', repo, name),
+  // The push answers with the sha of the entry it created, and the apply
+  // takes either that or a `stash@{n}`: a position is whatever is on top of
+  // the stack at the moment it is read, which is not the same entry a moment
+  // later if anything else in the repository stashed in between.
   pushStash: (repo: string, message: string) => ipcRenderer.invoke('git:stash-push', repo, message),
   applyStash: (repo: string, ref: string, pop: boolean) => ipcRenderer.invoke('git:stash-apply', repo, ref, pop),
   dropStash: (repo: string, ref: string) => ipcRenderer.invoke('git:stash-drop', repo, ref),

@@ -279,6 +279,25 @@ function branchTag(repo: RepoView): HTMLElement {
 }
 
 /**
+ * Put the keyboard back on a repository's branch control.
+ *
+ * `draw` restores focus by `data-key` only when a control with that key is
+ * still there, and every one of these paths removes the control that was
+ * pressed — the branch item, the menu, the prompt — without drawing a
+ * replacement. Without this, `activeElement` falls to `<body>` and a keyboard
+ * user is returned to the top of the panel, which is the reach the rows were
+ * restructured to give them. The branch button is where they were before the
+ * list opened, and it is the nearest thing to the note or header that
+ * replaced it.
+ * @param repo - the repository's path.
+ */
+function focusBranch(repo: string): void {
+  const key = keyOf(repo, '', '', 'branch')
+  const button = [...el('repos').querySelectorAll<HTMLElement>('[data-key]')].find((node) => node.dataset.key === key)
+  button?.focus()
+}
+
+/**
  * Switch to one branch, offering to stash when git refuses.
  *
  * Attempted rather than prevented: git carries uncommitted changes across
@@ -293,6 +312,7 @@ function pickBranch(repo: RepoView, branch: BranchRowView): void {
   branchMenu = undefined
   blocking = undefined
   draw()
+  focusBranch(repo.path)
   void window.pane.checkoutBranch(repo.path, branch.name, branch.remote).then((out) => {
     if (out.ok) return
     // With no list of files this is an ordinary failure — a ref that does not
@@ -321,6 +341,11 @@ function pickBranch(repo: RepoView, branch: BranchRowView): void {
  * The offer is cleared once the stash exists, whatever happens afterwards:
  * the files it names are no longer in the working tree, so leaving it up
  * would invite a second stash of nothing.
+ *
+ * The entry is put back by the sha the push named, not by its position. A
+ * stash the push could not name stops the chain before the switch: the work
+ * is safe in the list and the user is told where, which is the only honest
+ * answer when there is no handle that survives another process stashing.
  * @param at - the refused switch: the repository, the branch, and the files git named.
  * @returns resolution once the chain has finished or stopped.
  */
@@ -333,15 +358,24 @@ async function stashAndSwitch(at: { repo: string; name: string; remote: boolean 
   }
   blocking = undefined
   draw()
+  // The sha the push answered with, never `stash@{0}`. The checkout below
+  // takes anything from tens of milliseconds to seconds on a large tree, and
+  // an agent stashing in the same repository during that window — this app
+  // exists to have one running beside the panel, and `pull --rebase
+  // --autostash` makes a real entry — would take the top of the stack. Popping
+  // by position would then apply the agent's work, delete its stash, strand
+  // the user's, and report a successful switch.
+  const ref = pushed.ref
+  if (ref === undefined) {
+    say(`Your changes are stashed, but git would not name the entry, so nothing was switched. Put it back from the Stashes list.`)
+    return
+  }
   const again = await window.pane.checkoutBranch(at.repo, at.name, at.remote)
   if (!again.ok) {
     say(`Your changes are stashed, but the switch to ${at.name} failed. ${again.reason}`)
     return
   }
-  // The stash just pushed is the top of the list, which is what every other
-  // stash command means by no ref at all — named here so the panel is never
-  // ambiguous about which entry it is putting back.
-  const restored = await window.pane.applyStash(at.repo, 'stash@{0}', true)
+  const restored = await window.pane.applyStash(at.repo, ref, true)
   if (!restored.ok) {
     say(`Switched to ${at.name}, but your changes are still stashed: the pop failed. ${restored.reason}`)
   }
@@ -390,6 +424,7 @@ function branchList(repo: RepoView): HTMLElement {
       if (branch.current) {
         branchMenu = undefined
         draw()
+        focusBranch(repo.path)
         return
       }
       pickBranch(repo, branch)
@@ -416,20 +451,6 @@ function branchList(repo: RepoView): HTMLElement {
     draw()
   })
   menu.append(make)
-  // Escape shuts it and puts the keyboard back on the control that opened it.
-  // Without this the only way out of the list is to tab through every branch
-  // in it, since the button that opened it is above it in the order.
-  menu.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return
-    event.preventDefault()
-    branchMenu = undefined
-    draw()
-    const key = keyOf(repo.path, '', '', 'branch')
-    const button = [...el('repos').querySelectorAll<HTMLElement>('[data-key]')].find(
-      (node) => node.dataset.key === key,
-    )
-    button?.focus()
-  })
   return menu
 }
 
@@ -460,6 +481,7 @@ function promptFor(repo: RepoView, kind: 'branch' | 'stash'): HTMLInputElement {
     if (event.key === 'Escape') {
       asking = undefined
       draw()
+      focusBranch(repo.path)
       return
     }
     if (event.key !== 'Enter') return
@@ -467,6 +489,7 @@ function promptFor(repo: RepoView, kind: 'branch' | 'stash'): HTMLInputElement {
     const text = input.value
     asking = undefined
     draw()
+    focusBranch(repo.path)
     // A blank branch name is refused by main, which owns git's own naming
     // rules; a blank stash message is allowed, because the message is
     // optional and git writes its own `WIP on …` when there is none.
@@ -830,7 +853,20 @@ function drawRepo(repo: RepoView, alone: boolean): HTMLElement {
 
   // Both of these hang under the header rather than inside it: the header is
   // one line, and neither the list nor the note fits on it.
-  if (branchMenu === repo.path && asking === undefined) block.append(branchList(repo))
+  if (branchMenu === repo.path && asking === undefined) {
+    block.append(branchList(repo))
+    // Bound on the whole repository rather than on the list: opening the menu
+    // leaves the keyboard on the branch button, which is outside it, so a
+    // handler on the list itself would do nothing until the user had tabbed
+    // into it — and tabbing in is the thing Escape is there to avoid.
+    block.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      branchMenu = undefined
+      draw()
+      focusBranch(repo.path)
+    })
+  }
   if (blocking?.repo === repo.path) block.append(blockedNote(blocking))
 
   if (!shut) {

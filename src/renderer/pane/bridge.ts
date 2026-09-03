@@ -79,7 +79,10 @@ declare global {
       commitFiles(repo: string, message: string, add: string[], keep: string[], staged: string[]): Promise<GitResult>
       checkoutBranch(repo: string, name: string, remote: boolean): Promise<GitResult & { blocked?: string[] }>
       createBranch(repo: string, name: string): Promise<GitResult>
-      pushStash(repo: string, message: string): Promise<GitResult>
+      // The sha of what was created comes back with it: `stash@{0}` is a
+      // position, and anything else stashing in the same repository — the
+      // agent in the terminal panel — moves every entry down one.
+      pushStash(repo: string, message: string): Promise<GitResult & { ref?: string }>
       applyStash(repo: string, ref: string, pop: boolean): Promise<GitResult>
       dropStash(repo: string, ref: string): Promise<GitResult>
       onDiffTexts(

@@ -29,6 +29,9 @@ interface StubRepo {
 /** What one git write answered with, and a blocked checkout's file list. */
 type StubResult = { ok: true } | { ok: false; reason: string; blocked?: string[] }
 
+/** The sha a stubbed `pushStash` names the entry it created with. */
+const PUSHED = 'e3b0c44298fc1c149afbf4c8996fb924'
+
 /** What the stub bridge recorded, alongside the calls the panel makes on it. */
 interface StubBridge {
   readGit: () => Promise<unknown>
@@ -47,7 +50,7 @@ interface StubBridge {
   ) => Promise<{ ok: true } | { ok: false; reason: string }>
   checkoutBranch: (repo: string, name: string, remote: boolean) => Promise<StubResult>
   createBranch: (repo: string, name: string) => Promise<StubResult>
-  pushStash: (repo: string, message: string) => Promise<StubResult>
+  pushStash: (repo: string, message: string) => Promise<StubResult & { ref?: string }>
   applyStash: (repo: string, ref: string, pop: boolean) => Promise<StubResult>
   dropStash: (repo: string, ref: string) => Promise<StubResult>
   askTheme: () => void
@@ -86,6 +89,14 @@ function stubBridge(options: {
   checkout?: StubResult[]
   /** What `pushStash` answers. */
   stashPush?: StubResult
+  /**
+   * The sha `pushStash` names its entry with, or null for one it could not.
+   *
+   * A sha rather than `stash@{0}`: main answers with the identity of the
+   * entry it created, and a test that let the panel pop a position would not
+   * notice the panel doing the same.
+   */
+  stashRef?: string | null
   /** What `applyStash` answers. */
   stashApply?: StubResult
   /** What `createBranch` answers. */
@@ -114,7 +125,8 @@ function stubBridge(options: {
     },
     pushStash: async (repo, message) => {
       gitCalls.push(['stash-push', repo, message])
-      return options.stashPush ?? { ok: true }
+      if (options.stashPush !== undefined) return options.stashPush
+      return options.stashRef === null ? { ok: true } : { ok: true, ref: options.stashRef ?? PUSHED }
     },
     applyStash: async (repo, ref, pop) => {
       gitCalls.push(['stash-apply', repo, ref, pop])
@@ -610,15 +622,21 @@ describe('the git panel', () => {
   // reason: the button that opened the list sits above it in the tab order,
   // so without Escape the only way out of an open list is to tab through
   // every branch in it.
-  it('shuts the branch list on Escape and hands the keyboard back', async () => {
+  it('shuts the branch list on Escape from the control that opened it', async () => {
     const bridge = stubBridge({
       repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
     })
     await load(bridge)
-    openBranches()
-    const menu = document.querySelector('.branch-menu') as HTMLElement
-    branchItem('feature').focus()
-    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    // As a keyboard user opens it: focus the branch control and press it. The
+    // menu is drawn below that control, so focus stays outside the list — a
+    // handler bound to the list would never hear this Escape at all.
+    const opener = document.querySelector('.repo-branch') as HTMLButtonElement
+    opener.focus()
+    opener.click()
+    const button = document.querySelector('.repo-branch') as HTMLButtonElement
+    expect(document.querySelector('.branch-menu')).not.toBeNull()
+    expect(document.activeElement).toBe(button)
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     expect(document.querySelector('.branch-menu')).toBeNull()
     expect(document.activeElement).toBe(document.querySelector('.repo-branch'))
     expect(bridge.gitCalls).toEqual([])
@@ -670,7 +688,7 @@ describe('the git panel', () => {
       ['checkout', '/r', 'feature', false],
       ['stash-push', '/r', 'Switching to feature'],
       ['checkout', '/r', 'feature', false],
-      ['stash-apply', '/r', 'stash@{0}', true],
+      ['stash-apply', '/r', PUSHED, true],
     ])
     // Nothing failed, so nothing is said and the offer is gone.
     expect(note()).toBe('')
@@ -832,6 +850,95 @@ describe('the git panel', () => {
       ['stash-apply', '/r', 'stash@{1}', true],
       ['stash-drop', '/r', 'stash@{1}'],
     ])
+  })
+
+  // reason: `stash@{0}` is a position. The checkout between the push and the
+  // pop takes anything up to seconds on a large tree, and an agent stashing in
+  // the same repository during that window takes the top of the stack — so
+  // popping by position would apply the agent's work, delete its entry,
+  // strand the user's, and report a successful switch.
+  it('pops the entry the push named, not whatever is on top of the stack', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
+      checkout: [{ ok: false, reason: 'error: local changes', blocked: ['a.ts'] }, { ok: true }],
+      stashRef: 'ffffffffffffffffffffffffffffffff',
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('feature').click()
+    await settle()
+    ;(document.querySelector('.branch-blocked button') as HTMLButtonElement).click()
+    await settle()
+    const applied = bridge.gitCalls.filter((call) => call[0] === 'stash-apply')
+    expect(applied).toEqual([['stash-apply', '/r', 'ffffffffffffffffffffffffffffffff', true]])
+    expect(note()).toBe('')
+  })
+
+  // reason: with no handle that survives another process stashing, there is
+  // nothing safe to pop. Stopping before the switch leaves the work in the
+  // list and says where it is, which is the only honest answer.
+  it('stops before the switch when the push could not name its entry', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
+      checkout: [{ ok: false, reason: 'error: local changes', blocked: ['a.ts'] }, { ok: true }],
+      stashRef: null,
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('feature').click()
+    await settle()
+    ;(document.querySelector('.branch-blocked button') as HTMLButtonElement).click()
+    await settle()
+    expect(bridge.gitCalls).toEqual([
+      ['checkout', '/r', 'feature', false],
+      ['stash-push', '/r', 'Switching to feature'],
+    ])
+    expect(note()).toContain('stashed')
+    expect(note()).toContain('nothing was switched')
+  })
+
+  // reason: `draw` restores focus only to a control that is still there, and
+  // picking a branch removes the item that was pressed. Focus would fall to
+  // `<body>`, putting a keyboard user back at the top of the panel — and, on
+  // the blocked path, several tabs away from the one control the note exists
+  // for.
+  it('keeps the keyboard on the branch control after a branch is picked', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
+      checkout: [{ ok: false, reason: 'error: local changes', blocked: ['a.ts'] }],
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('feature').click()
+    expect(document.activeElement).toBe(document.querySelector('.repo-branch'))
+    await settle()
+    // And the blocked note drawing under it does not take the keyboard away.
+    expect(document.querySelector('.branch-blocked')).not.toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('.repo-branch'))
+  })
+
+  // reason: nothing happens and nothing is drawn, so a lost focus here is
+  // invisible — the panel simply stops responding to the keyboard.
+  it('keeps the keyboard on the branch control after picking the current branch', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'main', upstream: '', current: true, remote: false }] })],
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('main').click()
+    expect(document.querySelector('.branch-menu')).toBeNull()
+    expect(bridge.gitCalls).toEqual([])
+    expect(document.activeElement).toBe(document.querySelector('.repo-branch'))
+  })
+
+  it('keeps the keyboard on the branch control when the header prompt is cancelled', async () => {
+    await load(stubBridge({ repos: [repo({})] }))
+    openBranches()
+    ;(document.querySelector('.branch-new') as HTMLButtonElement).click()
+    const input = document.querySelector('.branch-input') as HTMLInputElement
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(document.querySelector('.branch-input')).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('.repo-branch'))
   })
 
   it('draws no Stashes section when there are none', async () => {
