@@ -72,6 +72,7 @@ declare global {
       readGit(): Promise<ProjectGitView>
       onGitChanged(listener: () => void): void
       openGitDiff(repo: string, path: string, section: RowGroup['section']): void
+      gitRowMenu(section: RowGroup['section']): Promise<string | undefined>
       stageFiles(repo: string, paths: string[]): Promise<GitResult>
       unstageFiles(repo: string, paths: string[]): Promise<GitResult>
       discardFiles(repo: string, tracked: string[], untracked: string[]): Promise<GitResult>

@@ -79,6 +79,10 @@ contextBridge.exposeInMainWorld('pane', {
   },
   openGitDiff: (repo: string, path: string, section: string) =>
     ipcRenderer.send('git:open-diff', repo, path, section),
+  // The row's right-click menu. Native and popped in main, like the tree's:
+  // an in-page menu would be the only menu in this app that does not look
+  // like the machine's.
+  gitRowMenu: (section: string) => ipcRenderer.invoke('git:row-menu', section),
   // The panel's writes. Invokes, every one: main answers each with whether it
   // worked and why not, and two of them raise a confirmation there first — a
   // send would have nothing to wait on and no answer to show. Main validates

@@ -63,7 +63,7 @@ import { loadableUrl } from './view-tools'
 import { readTextFile, writeTextFile } from './file-io'
 import { createFile, createFolder } from './file-create'
 import { deleteEntry, pasteEntry, renameEntry } from './file-ops'
-import { treeMenu, type TreeAction } from './tree-menu'
+import { gitRowMenu, treeMenu, type GitRowAction, type MenuChoice, type TreeAction } from './tree-menu'
 import { isWebPage } from './web-page'
 import { resolveInRoot } from './file-tree'
 import { watchProject, type ProjectWatch } from './project-watch'
@@ -1150,22 +1150,24 @@ function watchTheme(): void {
 }
 
 /**
- * Show the tree's context menu and wait for a choice.
+ * Show a native context menu and wait for a choice.
  *
- * The menu's items are decided in `treeMenu`, which has no Electron in it;
- * this only turns them into a native menu and reports what was chosen.
+ * Which items a menu holds is decided by a pure function with no Electron in
+ * it; this only turns them into a native menu and reports what was chosen.
+ * Generic in the action so each caller gets its own vocabulary back rather
+ * than the union of every menu in the app.
  * @param window - the window to pop over.
- * @param target - what the menu was opened on.
+ * @param items - the entries to show, in order.
  * @returns the action chosen, or undefined when the menu was dismissed.
  */
-async function popTreeMenu(
+async function popMenu<Action extends string>(
   window: BrowserWindow,
-  target: { directory: boolean; pending: boolean; name: string },
-): Promise<TreeAction | undefined> {
-  return await new Promise<TreeAction | undefined>((resolve) => {
-    let chosen: TreeAction | undefined
+  items: (MenuChoice<Action> | { separator: true })[],
+): Promise<Action | undefined> {
+  return await new Promise<Action | undefined>((resolve) => {
+    let chosen: Action | undefined
     const menu = Menu.buildFromTemplate(
-      treeMenu({ ...target, web: !target.directory && isWebPage(target.name) }).map((item) =>
+      items.map((item) =>
         'separator' in item
           ? { type: 'separator' as const }
           : {
@@ -1181,6 +1183,21 @@ async function popTreeMenu(
     // chosen — including nothing, when the menu was dismissed.
     menu.popup({ window, callback: () => resolve(chosen) })
   })
+}
+
+/**
+ * Show the tree's context menu and wait for a choice.
+ *
+ * The menu's items are decided in `treeMenu`, which has no Electron in it.
+ * @param window - the window to pop over.
+ * @param target - what the menu was opened on.
+ * @returns the action chosen, or undefined when the menu was dismissed.
+ */
+async function popTreeMenu(
+  window: BrowserWindow,
+  target: { directory: boolean; pending: boolean; name: string },
+): Promise<TreeAction | undefined> {
+  return await popMenu(window, treeMenu({ ...target, web: !target.directory && isWebPage(target.name) }))
 }
 
 /** Refusal for a root that is not a project the harness has opened. */
@@ -2475,6 +2492,13 @@ if (!app.requestSingleInstanceLock()) {
         return out
       },
     )
+    // A row's right-click menu. Native, popped from here since only main can,
+    // and carrying no path of its own: what was clicked is the renderer's to
+    // remember, and every action it leads to is validated on its own channel.
+    ipcMain.handle('git:row-menu', async (_event, section: Section) => {
+      if (views === undefined || views.window.isDestroyed()) return undefined
+      return await popMenu<GitRowAction>(views.window, gitRowMenu(section))
+    })
     ipcMain.handle('git:checkout', async (_event, repo: string, name: string, remote: boolean) => {
       const out = await gitCheckoutFor(repo, name, remote, gitRepoPaths)
       notifyGitChanged()

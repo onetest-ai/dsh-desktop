@@ -623,17 +623,32 @@ body {
   gap: 5px;
   width: 100%;
   padding: 3px 4px;
-  border: none;
   border-radius: 6px;
-  background: transparent;
   color: var(--dsw-alias-label-primary);
-  font: inherit;
   font-weight: 500;
+}
+
+/* The part that collapses the repository. A sibling of the header's actions
+   rather than their parent: a button inside a button is invalid, and a press
+   meant for Stage All would open and shut the section under it. */
+.repo-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.repo-head:hover {
+.repo-head:hover,
+.repo-head:focus-within {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
@@ -691,9 +706,10 @@ body {
   padding: 0;
 }
 
-/* Icon, name, path, status — in that order, so the eye runs down a single
-   column of filenames and reads status as a column of its own rather than
-   as a prefix to each name. */
+/* Tick, then the row proper, then the actions and the status letter. The row
+   is a container and not itself the button: an input and three buttons nested
+   inside a button are invalid, and every one of them would also open the diff.
+   */
 .git-rows .row {
   display: flex;
   gap: 6px;
@@ -701,6 +717,125 @@ body {
   width: 100%;
   min-width: 0;
   padding: 3px 6px 3px 4px;
+  cursor: default;
+}
+
+/* Icon, name, path — in that order, so the eye runs down a single column of
+   filenames and reads status as a column of its own rather than as a prefix
+   to each name. This is what opens the diff, and it takes the row's width so
+   the whole line is a target. */
+.row-open {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The selection, not the index. Sized to the icon column beside it so the
+   filenames still line up down the list. */
+.git-tick {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--dsw-alias-interactive-primary, currentColor);
+}
+
+/* Stage, Discard, and the repository's three. Out of the way until the row is
+   pointed at or tabbed into: a column of glyphs on every row would compete
+   with the filenames, which are what the list is for. Focus counts as well as
+   hover, or the keyboard could never reach them. */
+.row-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  align-items: center;
+  opacity: 0;
+}
+
+.row:hover .row-actions,
+.row:focus-within .row-actions,
+.repo-head:hover .row-actions,
+.repo-head:focus-within .row-actions {
+  opacity: 1;
+}
+
+.row-action {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.row-action:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The commit box. Two rows to start and four at most: a message that has
+   grown past four rows is one being written in the wrong place, and a box
+   that keeps growing pushes the file list off the panel. */
+.commit {
+  display: flex;
+  gap: 6px;
+  flex-direction: column;
+  margin: 0 0 8px;
+}
+
+.commit-message {
+  min-height: 40px;
+  max-height: 76px;
+  padding: 5px 6px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 6px;
+  background: var(--dsw-alias-surface-primary, transparent);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  resize: vertical;
+}
+
+.commit-button {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.commit-button:disabled {
+  color: var(--dsw-alias-label-tertiary);
+  cursor: default;
+}
+
+/* Why an action did not run. The repo's name and git's first line, which is
+   what main sends — never a stack trace. */
+.git-note {
+  margin: 0 0 8px;
+  padding: 0 4px;
+  color: var(--dsh-git-deleted);
+  font-size: 11px;
 }
 
 /* The filename never truncates: it is the thing being looked for, and an

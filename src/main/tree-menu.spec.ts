@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { treeMenu, type TreeMenuItem } from './tree-menu'
+import { gitRowMenu, treeMenu, type GitMenuItem, type TreeMenuItem } from './tree-menu'
 
 /** The actions a menu offers, in order, separators dropped. */
-const actions = (items: TreeMenuItem[]): string[] =>
-  items.filter((item): item is Exclude<TreeMenuItem, { separator: true }> => !('separator' in item)).map((item) => item.action)
+const actions = (items: (TreeMenuItem | GitMenuItem)[]): string[] =>
+  items
+    .filter((item): item is Exclude<TreeMenuItem | GitMenuItem, { separator: true }> => !('separator' in item))
+    .map((item) => item.action)
 
 describe('treeMenu', () => {
   it('offers a folder the things you do to a folder', () => {
@@ -83,5 +85,34 @@ describe('treeMenu', () => {
   it('puts Open in Web next to Open', () => {
     const items = actions(treeMenu({ directory: false, pending: false, web: true }))
     expect(items.slice(0, 2)).toEqual(['open', 'open-in-web'])
+  })
+})
+
+describe('gitRowMenu', () => {
+  // reason: a row already in the index has nothing to stage and nothing in
+  // the working tree to discard, and offering either is an invitation to run
+  // a command that does nothing or throws away the wrong copy.
+  it('offers a staged row only the way back out of the index', () => {
+    const items = actions(gitRowMenu('staged'))
+    expect(items).toEqual(['open-diff', 'unstage'])
+    expect(items).not.toContain('stage')
+    expect(items).not.toContain('discard')
+  })
+
+  it('offers a changed row Stage and Discard, and not Unstage', () => {
+    const items = actions(gitRowMenu('changed'))
+    expect(items).toEqual(['open-diff', 'stage', 'discard'])
+    expect(items).not.toContain('unstage')
+  })
+
+  it('offers an untracked row the same as a changed one', () => {
+    expect(actions(gitRowMenu('untracked'))).toEqual(['open-diff', 'stage', 'discard'])
+  })
+
+  // reason: the ellipsis is the app's promise that a thing asks before it
+  // acts, and Discard is the one control in the panel with no undo.
+  it('marks Discard as asking first', () => {
+    const discard = gitRowMenu('changed').find((item) => 'action' in item && item.action === 'discard')
+    expect(discard).toEqual({ action: 'discard', label: 'Discard…' })
   })
 })
