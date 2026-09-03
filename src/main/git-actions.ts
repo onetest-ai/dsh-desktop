@@ -8,10 +8,12 @@ export type ActionOutcome = { ok: true } | { ok: false; reason: string }
  *
  * git writes a usable sentence first and hints, stacks, and advice after it.
  * A panel row is one line wide, and the rest belongs in the terminal.
+ *
+ * Shared by git modules to ensure the fallback message never drifts between them.
  * @param stderr - what git wrote.
  * @returns the first line, or a fallback when it wrote nothing.
  */
-function firstLine(stderr: string): string {
+export function firstLine(stderr: string): string {
   return stderr.split('\n')[0].trim() || 'git failed without saying why.'
 }
 

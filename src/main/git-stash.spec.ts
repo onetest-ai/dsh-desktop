@@ -55,6 +55,15 @@ describe('pushStash', () => {
     const run = vi.fn(async () => ({ code: 0, stdout: Buffer.from('No local changes to save\n'), stderr: '' }))
     expect(await pushStash('/r', '', run)).toEqual({ ok: false, reason: 'There is nothing to stash.' })
   })
+
+  // reason: a git that times out or fails at the exec level can exit
+  // non-zero with nothing on stderr, and the panel then shows an empty
+  // message — which is worse than a wrong one, because the user cannot tell
+  // whether anything happened. The fallback guards against this.
+  it('reports a fallback when git failed with empty stderr', async () => {
+    const run = vi.fn(async () => ({ code: 1, stdout: Buffer.alloc(0), stderr: '' }))
+    expect(await pushStash('/r', 'wip', run)).toEqual({ ok: false, reason: 'git failed without saying why.' })
+  })
 })
 
 describe('applyStash', () => {

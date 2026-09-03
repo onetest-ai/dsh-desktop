@@ -1,4 +1,5 @@
 import type { ActionOutcome } from './git-actions'
+import { firstLine } from './git-actions'
 import { runGit } from './git-run'
 
 /** One stash entry, as the panel lists it. */
@@ -62,7 +63,7 @@ export async function listStashes(repo: string, run: typeof runGit = runGit): Pr
 export async function pushStash(repo: string, message: string, run: typeof runGit = runGit): Promise<ActionOutcome> {
   const args = message.trim() === '' ? ['stash', 'push'] : ['stash', 'push', '-m', message]
   const out = await run(repo, args)
-  if (out.code !== 0) return { ok: false, reason: out.stderr.split('\n')[0].trim() }
+  if (out.code !== 0) return { ok: false, reason: firstLine(out.stderr) }
   if (out.stdout.toString('utf8').includes('No local changes to save')) {
     return { ok: false, reason: 'There is nothing to stash.' }
   }
@@ -85,7 +86,7 @@ export async function applyStash(
   run: typeof runGit = runGit,
 ): Promise<ActionOutcome> {
   const out = await run(repo, ['stash', pop ? 'pop' : 'apply', ref])
-  return out.code === 0 ? { ok: true } : { ok: false, reason: out.stderr.split('\n')[0].trim() }
+  return out.code === 0 ? { ok: true } : { ok: false, reason: firstLine(out.stderr) }
 }
 
 /**
@@ -97,5 +98,5 @@ export async function applyStash(
  */
 export async function dropStash(repo: string, ref: string, run: typeof runGit = runGit): Promise<ActionOutcome> {
   const out = await run(repo, ['stash', 'drop', ref])
-  return out.code === 0 ? { ok: true } : { ok: false, reason: out.stderr.split('\n')[0].trim() }
+  return out.code === 0 ? { ok: true } : { ok: false, reason: firstLine(out.stderr) }
 }

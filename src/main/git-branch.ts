@@ -1,4 +1,5 @@
 import type { ActionOutcome } from './git-actions'
+import { firstLine } from './git-actions'
 import { runGit } from './git-run'
 
 /** One branch, as the menu draws it. */
@@ -100,7 +101,7 @@ export async function checkout(
   const out = await run(repo, args)
   if (out.code === 0) return { ok: true }
   const blocked = blockedFiles(out.stderr)
-  const reason = out.stderr.split('\n')[0].trim() || 'git failed without saying why.'
+  const reason = firstLine(out.stderr)
   return blocked === undefined ? { ok: false, reason } : { ok: false, reason, blocked }
 }
 
@@ -117,7 +118,5 @@ export async function checkout(
 export async function createBranch(repo: string, name: string, run: typeof runGit = runGit): Promise<ActionOutcome> {
   if (name.trim() === '') return { ok: false, reason: 'Name the branch first.' }
   const out = await run(repo, ['checkout', '-b', name])
-  return out.code === 0
-    ? { ok: true }
-    : { ok: false, reason: out.stderr.split('\n')[0].trim() || 'git failed without saying why.' }
+  return out.code === 0 ? { ok: true } : { ok: false, reason: firstLine(out.stderr) }
 }
