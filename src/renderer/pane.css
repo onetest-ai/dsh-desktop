@@ -666,16 +666,179 @@ body {
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* The branch is a control, not a label: it opens the list of them. Styled to
+   read as the dimmed tag it was, since what it says is still context for the
+   name beside it — the press is discovered by hovering it, the way the row
+   actions are. */
 .repo-branch {
   display: flex;
   gap: 3px;
   align-items: center;
   overflow: hidden;
+  flex: none;
+  max-width: 60%;
+  padding: 1px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
   color: var(--dsw-alias-label-secondary);
+  font: inherit;
   font-size: 11px;
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.repo-branch:hover,
+.repo-branch[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.repo-branch span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The branch list. In the flow under the header rather than floating over the
+   panel: it is a short list in a narrow column, and a popup would have to be
+   positioned, dismissed on scroll, and kept out of the window's edge for no
+   gain over pushing the rows down for as long as it is open. */
+.branch-menu {
+  display: flex;
+  gap: 1px;
+  flex-direction: column;
+  margin: 2px 0 4px;
+  padding: 3px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 6px;
+  background: var(--dsw-alias-surface-primary, transparent);
+}
+
+.branch-item {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  overflow: hidden;
+  padding: 3px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.branch-item:hover,
+.branch-item:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* A fixed column for the tick, so the names line up whether or not the branch
+   is the one you are on. */
+.branch-mark {
+  flex: none;
+  width: 9px;
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.branch-item-name {
+  overflow: hidden;
+  flex: 0 1 auto;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-current .branch-item-name {
+  font-weight: 600;
+}
+
+/* What it tracks, dimmed: it qualifies the name rather than being one. */
+.branch-upstream {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--dsw-alias-label-tertiary);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-divider {
+  margin: 4px 0 2px;
+  padding: 0 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.branch-new {
+  margin-top: 2px;
+  border-top: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 0 0 4px 4px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The header's inline prompt, for a branch name or a stash message. Takes the
+   whole line because it takes the header's place. */
+.branch-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 5px;
+  border: 1px solid var(--dsw-alias-interactive-primary, currentColor);
+  border-radius: 4px;
+  background: var(--dsw-alias-surface-primary, transparent);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
+/* What git refused, and the one thing offered about it. Amber rather than
+   red: nothing has gone wrong yet, and the switch is still available. */
+.branch-blocked {
+  display: flex;
+  gap: 6px;
+  flex-direction: column;
+  align-items: flex-start;
+  margin: 2px 0 4px;
+  padding: 6px;
+  border: 1px solid var(--dsh-git-modified);
+  border-radius: 6px;
+}
+
+.branch-blocked-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.branch-blocked-button {
+  padding: 3px 8px;
+  border: none;
+  border-radius: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* A stash row has no tick and no status letter: it is not a file, and the
+   selection means "include in the next commit", which a stash cannot be. */
+.stash-row {
+  padding-left: 6px;
+}
+
+.stash-message {
+  overflow: hidden;
+  flex: 0 1 auto;
+  text-overflow: ellipsis;
 }
 
 /* Staged Changes, Changes, Untracked. Upper-cased and small, the way a

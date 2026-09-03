@@ -65,6 +65,32 @@ const selection = new Selection()
 let chosenRepo: string | undefined
 
 /**
+ * Which repository's branch list is open, by path, or undefined for none.
+ *
+ * Held outside the drawing so a refresh a watcher asked for does not shut a
+ * list the user is reading — status is re-read whenever anything under `.git`
+ * moves, which on a busy repository is while the menu is open.
+ */
+let branchMenu: string | undefined
+
+/**
+ * The inline text prompt in a repository header, and what has been typed.
+ *
+ * The text lives here rather than only in the element for the commit box's
+ * reason: `#repos` is rebuilt by every refresh, so a name half-typed into an
+ * input that a watcher redrew would otherwise be gone.
+ */
+let asking: { repo: string; kind: 'branch' | 'stash'; text: string } | undefined
+
+/**
+ * The switch git refused, and the files it named as being in the way.
+ *
+ * Kept per panel rather than per repository because only one switch is ever
+ * being offered: the note is the answer to the last branch that was picked.
+ */
+let blocking: { repo: string; name: string; remote: boolean; files: string[] } | undefined
+
+/**
  * How to bring each drawn checkbox back in line with the selection.
  *
  * Rebuilt by every `draw`, and run instead of one: a tick changes no layout,
@@ -139,6 +165,24 @@ function run(act: () => Promise<GitResult>): void {
  * @returns the button.
  */
 function rowAction(key: string, label: string, glyph: string, act: () => Promise<GitResult>): HTMLButtonElement {
+  return iconButton(key, label, glyph, () => {
+    run(act)
+  })
+}
+
+/**
+ * One glyph button in the same shape as a row's actions.
+ *
+ * Separate from `rowAction` because not every one of them is a git write: the
+ * header's Stash opens a prompt, and a button that answered with a promise it
+ * did not have would have to lie about what `run` reports.
+ * @param key - a name for the control that outlives this element, so a redraw can put focus back on it.
+ * @param label - what it does, for the tooltip and the screen reader.
+ * @param glyph - the character to show.
+ * @param press - what to do when it is pressed.
+ * @returns the button.
+ */
+function iconButton(key: string, label: string, glyph: string, press: () => void): HTMLButtonElement {
   const button = document.createElement('button')
   button.type = 'button'
   button.className = 'row-action'
@@ -146,9 +190,7 @@ function rowAction(key: string, label: string, glyph: string, act: () => Promise
   button.title = label
   button.setAttribute('aria-label', label)
   button.textContent = glyph
-  button.addEventListener('click', () => {
-    run(act)
-  })
+  button.addEventListener('click', press)
   return button
 }
 
@@ -213,14 +255,314 @@ function branchLine(status: RepoStatusView): string {
  * @param status - the repository's state.
  * @returns the element, ready to append.
  */
-function branchTag(status: RepoStatusView): HTMLElement {
-  const tag = document.createElement('span')
+function branchTag(repo: RepoView): HTMLElement {
+  const tag = document.createElement('button')
+  tag.type = 'button'
   tag.className = 'repo-branch'
+  tag.dataset.key = keyOf(repo.path, '', '', 'branch')
+  tag.title = `Switch branch in ${repo.name}`
+  tag.setAttribute('aria-label', `Branch ${repo.status.branch}. Switch branch.`)
+  tag.setAttribute('aria-expanded', String(branchMenu === repo.path))
   tag.append(icon('branch', 12))
   const text = document.createElement('span')
-  text.textContent = branchLine(status)
+  text.textContent = branchLine(repo.status)
   tag.append(text)
+  // A sibling of the collapse toggle, never inside it: a button within a
+  // button is invalid markup, and the press would also fold the repository
+  // away under the menu it just opened.
+  tag.addEventListener('click', () => {
+    branchMenu = branchMenu === repo.path ? undefined : repo.path
+    asking = undefined
+    draw()
+  })
   return tag
+}
+
+/**
+ * Switch to one branch, offering to stash when git refuses.
+ *
+ * Attempted rather than prevented: git carries uncommitted changes across
+ * whenever they do not collide, and a panel that refused on sight would make
+ * the branch list useless exactly when it is reached for — mid-change,
+ * wanting to look at something else.
+ * @param repo - the repository to switch.
+ * @param branch - the branch that was picked, whose `remote` flag decides whether the local tracking branch is created.
+ */
+function pickBranch(repo: RepoView, branch: BranchRowView): void {
+  say('')
+  branchMenu = undefined
+  blocking = undefined
+  draw()
+  void window.pane.checkoutBranch(repo.path, branch.name, branch.remote).then((out) => {
+    if (out.ok) return
+    // With no list of files this is an ordinary failure — a ref that does not
+    // resolve, a hook that refused — and there is nothing to offer to stash.
+    if (out.blocked === undefined || out.blocked.length === 0) {
+      say(out.reason)
+      return
+    }
+    blocking = { repo: repo.path, name: branch.name, remote: branch.remote, files: out.blocked }
+    draw()
+  })
+}
+
+/**
+ * Stash the working tree, switch, and put the stash back on the far side.
+ *
+ * Three writes in order, and any one of them failing stops the rest and says
+ * which step it was. A half-done switch reported as success is the worst
+ * outcome available here: the user would believe they are on the new branch
+ * with their work restored, when they may be on the old one with the work in
+ * a stash they were never told about. The pop is the step most likely to go
+ * wrong — it can conflict on the far side, which leaves the stash in place
+ * and the tree half-merged, and main reports that as a failure for exactly
+ * this reason.
+ *
+ * The offer is cleared once the stash exists, whatever happens afterwards:
+ * the files it names are no longer in the working tree, so leaving it up
+ * would invite a second stash of nothing.
+ * @param at - the refused switch: the repository, the branch, and the files git named.
+ * @returns resolution once the chain has finished or stopped.
+ */
+async function stashAndSwitch(at: { repo: string; name: string; remote: boolean }): Promise<void> {
+  say('')
+  const pushed = await window.pane.pushStash(at.repo, `Switching to ${at.name}`)
+  if (!pushed.ok) {
+    say(`Nothing was switched: the stash failed. ${pushed.reason}`)
+    return
+  }
+  blocking = undefined
+  draw()
+  const again = await window.pane.checkoutBranch(at.repo, at.name, at.remote)
+  if (!again.ok) {
+    say(`Your changes are stashed, but the switch to ${at.name} failed. ${again.reason}`)
+    return
+  }
+  // The stash just pushed is the top of the list, which is what every other
+  // stash command means by no ref at all — named here so the panel is never
+  // ambiguous about which entry it is putting back.
+  const restored = await window.pane.applyStash(at.repo, 'stash@{0}', true)
+  if (!restored.ok) {
+    say(`Switched to ${at.name}, but your changes are still stashed: the pop failed. ${restored.reason}`)
+  }
+}
+
+/**
+ * The list a branch button opens: local branches, then remote-tracking ones.
+ *
+ * Drawn in the page rather than popped as a native menu, unlike the row's
+ * right-click menu: this one is opened by a left click on a control that is
+ * part of the panel, and it has to be reachable by tab like everything else
+ * the panel added.
+ * @param repo - the repository whose branches these are.
+ * @returns the menu, ready to append.
+ */
+function branchList(repo: RepoView): HTMLElement {
+  const menu = document.createElement('div')
+  menu.className = 'branch-menu'
+  menu.setAttribute('role', 'group')
+  menu.setAttribute('aria-label', `Branches in ${repo.name}`)
+  const item = (branch: BranchRowView): HTMLButtonElement => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'branch-item'
+    button.dataset.key = keyOf(repo.path, 'branch', branch.name, 'pick')
+    if (branch.current) button.classList.add('branch-current')
+    const mark = document.createElement('span')
+    mark.className = 'branch-mark'
+    // The current branch is marked rather than left out: a list missing the
+    // one you are on reads as a list that has lost it.
+    mark.textContent = branch.current ? '✓' : ''
+    button.append(mark)
+    const name = document.createElement('span')
+    name.className = 'branch-item-name'
+    name.textContent = branch.name
+    button.append(name)
+    if (branch.upstream !== '') {
+      const upstream = document.createElement('span')
+      upstream.className = 'branch-upstream'
+      upstream.textContent = branch.upstream
+      button.append(upstream)
+    }
+    button.addEventListener('click', () => {
+      // Switching to the branch you are on is a no-op that git reports as a
+      // success, so it is not offered as one.
+      if (branch.current) {
+        branchMenu = undefined
+        draw()
+        return
+      }
+      pickBranch(repo, branch)
+    })
+    return button
+  }
+  for (const branch of repo.branches.filter((one) => !one.remote)) menu.append(item(branch))
+  const remotes = repo.branches.filter((one) => one.remote)
+  if (remotes.length > 0) {
+    const divider = document.createElement('p')
+    divider.className = 'branch-divider'
+    divider.textContent = 'Remote'
+    menu.append(divider)
+    for (const branch of remotes) menu.append(item(branch))
+  }
+  const make = document.createElement('button')
+  make.type = 'button'
+  make.className = 'branch-item branch-new'
+  make.dataset.key = keyOf(repo.path, 'branch', '', 'new')
+  make.textContent = 'New branch…'
+  make.addEventListener('click', () => {
+    branchMenu = undefined
+    asking = { repo: repo.path, kind: 'branch', text: '' }
+    draw()
+  })
+  menu.append(make)
+  // Escape shuts it and puts the keyboard back on the control that opened it.
+  // Without this the only way out of the list is to tab through every branch
+  // in it, since the button that opened it is above it in the order.
+  menu.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    branchMenu = undefined
+    draw()
+    const key = keyOf(repo.path, '', '', 'branch')
+    const button = [...el('repos').querySelectorAll<HTMLElement>('[data-key]')].find(
+      (node) => node.dataset.key === key,
+    )
+    button?.focus()
+  })
+  return menu
+}
+
+/**
+ * The header's inline text prompt, for a new branch or a stash message.
+ *
+ * Commits on Enter and cancels on Escape, in the header's own place rather
+ * than in a dialog: naming a branch is one field, and a modal for one field
+ * is a modal that has to be dismissed before the list it came from can be
+ * read again.
+ * @param repo - the repository the prompt belongs to.
+ * @param kind - which prompt it is, which decides what Enter runs.
+ * @returns the input, ready to append.
+ */
+function promptFor(repo: RepoView, kind: 'branch' | 'stash'): HTMLInputElement {
+  const input = document.createElement('input')
+  input.type = 'text'
+  input.className = 'branch-input'
+  input.dataset.key = keyOf(repo.path, '', '', `ask-${kind}`)
+  input.value = asking?.text ?? ''
+  const label = kind === 'branch' ? 'New branch name' : 'Stash message'
+  input.placeholder = kind === 'branch' ? 'Branch name' : 'Message (optional)'
+  input.setAttribute('aria-label', `${label} for ${repo.name}`)
+  input.addEventListener('input', () => {
+    if (asking !== undefined) asking.text = input.value
+  })
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      asking = undefined
+      draw()
+      return
+    }
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    const text = input.value
+    asking = undefined
+    draw()
+    // A blank branch name is refused by main, which owns git's own naming
+    // rules; a blank stash message is allowed, because the message is
+    // optional and git writes its own `WIP on …` when there is none.
+    if (kind === 'branch') run(() => window.pane.createBranch(repo.path, text))
+    else run(() => window.pane.pushStash(repo.path, text))
+  })
+  return input
+}
+
+/**
+ * The note shown when git refused a switch, carrying the offer to stash.
+ * @param at - the refused switch and the files git named.
+ * @returns the note, ready to append.
+ */
+function blockedNote(at: { repo: string; name: string; remote: boolean; files: string[] }): HTMLElement {
+  const note = document.createElement('div')
+  note.className = 'branch-blocked'
+  const text = document.createElement('p')
+  text.className = 'branch-blocked-text'
+  // The files are the content of the offer: an offer that cannot say what it
+  // would stash is a shrug with a button on it.
+  text.textContent = `Switching to ${at.name} would overwrite ${at.files.join(', ')}.`
+  note.append(text)
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'branch-blocked-button'
+  button.dataset.key = keyOf(at.repo, 'branch', at.name, 'stash-and-switch')
+  button.textContent = 'Stash and switch'
+  // A button, never automatic: an automatic stash-and-pop churns the stash on
+  // switches that never needed one, and a pop can conflict on the far side.
+  button.addEventListener('click', () => {
+    void stashAndSwitch(at)
+  })
+  note.append(button)
+  return note
+}
+
+/**
+ * The Stashes section, drawn only when the repository has one.
+ *
+ * Below the file sections: a stash is what is not in the working tree, and
+ * putting it above the files that are would read as part of them.
+ * @param repo - the repository whose stashes these are.
+ * @returns the heading and the list, ready to append.
+ */
+function drawStashes(repo: RepoView): DocumentFragment {
+  const fragment = document.createDocumentFragment()
+  const heading = document.createElement('p')
+  heading.className = 'section-title'
+  const title = document.createElement('span')
+  title.textContent = 'Stashes'
+  heading.append(title)
+  const count = document.createElement('span')
+  count.className = 'section-count'
+  count.textContent = String(repo.stashes.length)
+  heading.append(count)
+  fragment.append(heading)
+
+  const list = document.createElement('ul')
+  list.className = 'git-rows'
+  for (const stash of repo.stashes) {
+    const item = document.createElement('li')
+    const row = document.createElement('div')
+    row.className = 'row stash-row'
+
+    const message = document.createElement('span')
+    message.className = 'git-name stash-message'
+    // A stash git named for itself still has a ref, which is the only handle
+    // the user has on it.
+    message.textContent = stash.message === '' ? stash.ref : stash.message
+    row.append(message)
+
+    const where = document.createElement('span')
+    where.className = 'git-dir'
+    where.textContent = stash.branch
+    row.append(where)
+
+    const actions = document.createElement('span')
+    actions.className = 'row-actions'
+    const at = (what: string): string => keyOf(repo.path, 'stash', stash.ref, what)
+    actions.append(
+      rowAction(at('apply'), `Apply ${stash.ref}`, '⇡', () => window.pane.applyStash(repo.path, stash.ref, false)),
+    )
+    actions.append(
+      rowAction(at('pop'), `Pop ${stash.ref}`, '⤒', () => window.pane.applyStash(repo.path, stash.ref, true)),
+    )
+    // Unrecoverable in the way Discard is, and confirmed in main for the same
+    // reason: a dropped stash is reachable only by a hash never shown here.
+    actions.append(rowAction(at('drop'), `Drop ${stash.ref}`, '✕', () => window.pane.dropStash(repo.path, stash.ref)))
+    row.append(actions)
+
+    item.append(row)
+    list.append(item)
+  }
+  fragment.append(list)
+  return fragment
 }
 
 /**
@@ -416,6 +758,18 @@ function repoActions(repo: RepoView): HTMLElement {
       ),
     )
   }
+  // Stash takes the working tree, so it is offered only when there is one to
+  // take: `git stash push` leaves untracked files alone, and on a repository
+  // whose only changes are untracked it would report having stashed nothing.
+  if (staged.length + changed.length > 0) {
+    actions.append(
+      iconButton(at('stash'), 'Stash', '⇣', () => {
+        branchMenu = undefined
+        asking = { repo: repo.path, kind: 'stash', text: '' }
+        draw()
+      }),
+    )
+  }
   return actions
 }
 
@@ -440,34 +794,49 @@ function drawRepo(repo: RepoView, alone: boolean): HTMLElement {
 
   const head = document.createElement('div')
   head.className = 'repo-head'
-  if (alone) {
-    head.append(branchTag(repo.status))
+  // The prompt takes the header's place rather than sitting beside it: one
+  // field needs no dialog, and the header is where the control that opened it
+  // was, so the eye does not have to go looking.
+  if (asking?.repo === repo.path) {
+    head.append(promptFor(repo, asking.kind))
   } else {
-    const toggle = document.createElement('button')
-    toggle.type = 'button'
-    toggle.className = 'repo-toggle'
-    toggle.dataset.key = keyOf(repo.path, '', '', 'toggle')
-    toggle.setAttribute('aria-expanded', String(!shut))
-    // The tree's own twisty, so the two views in this column open the same way.
-    const twisty = icon(shut ? 'triangleRight' : 'chevronDown', 12)
-    twisty.classList.add('repo-twisty')
-    toggle.append(twisty)
-    const name = document.createElement('span')
-    name.className = 'repo-name'
-    name.textContent = repo.name
-    toggle.append(name)
-    toggle.append(branchTag(repo.status))
-    toggle.addEventListener('click', () => {
-      if (collapsed.has(repo.path)) collapsed.delete(repo.path)
-      else collapsed.add(repo.path)
-      draw()
-    })
-    head.append(toggle)
+    if (!alone) {
+      const toggle = document.createElement('button')
+      toggle.type = 'button'
+      toggle.className = 'repo-toggle'
+      toggle.dataset.key = keyOf(repo.path, '', '', 'toggle')
+      toggle.setAttribute('aria-expanded', String(!shut))
+      // The tree's own twisty, so the two views in this column open the same way.
+      const twisty = icon(shut ? 'triangleRight' : 'chevronDown', 12)
+      twisty.classList.add('repo-twisty')
+      toggle.append(twisty)
+      const name = document.createElement('span')
+      name.className = 'repo-name'
+      name.textContent = repo.name
+      toggle.append(name)
+      toggle.addEventListener('click', () => {
+        if (collapsed.has(repo.path)) collapsed.delete(repo.path)
+        else collapsed.add(repo.path)
+        draw()
+      })
+      head.append(toggle)
+    }
+    // The branch is a control now, so it is a sibling of the toggle rather
+    // than part of it — nesting it would be a button inside a button.
+    head.append(branchTag(repo))
+    head.append(repoActions(repo))
   }
-  head.append(repoActions(repo))
   block.append(head)
 
-  if (!shut) for (const group of groups) block.append(drawSection(repo, group))
+  // Both of these hang under the header rather than inside it: the header is
+  // one line, and neither the list nor the note fits on it.
+  if (branchMenu === repo.path && asking === undefined) block.append(branchList(repo))
+  if (blocking?.repo === repo.path) block.append(blockedNote(blocking))
+
+  if (!shut) {
+    for (const group of groups) block.append(drawSection(repo, group))
+    if (repo.stashes.length > 0) block.append(drawStashes(repo))
+  }
   return block
 }
 
@@ -622,6 +991,14 @@ function draw(): void {
   if (focused !== undefined) {
     const again = [...into.querySelectorAll<HTMLElement>('[data-key]')].find((node) => node.dataset.key === focused)
     again?.focus()
+  }
+  // A prompt that has just replaced a header is typed into immediately or it
+  // is nothing but a gap where the branch used to be. Only when nothing in
+  // the panel already has the keyboard, so a redraw a watcher asked for does
+  // not take focus off whatever the user moved to.
+  if (asking !== undefined) {
+    const box = into.querySelector<HTMLInputElement>('.branch-input')
+    if (box !== null && !into.contains(document.activeElement)) box.focus()
   }
   syncCommit()
 }

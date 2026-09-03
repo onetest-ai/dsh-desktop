@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { EntryView, RepoStatusView } from './git-rows.ts'
+import type { BranchRowView, EntryView, RepoStatusView, StashRowView } from './git-rows.ts'
 
 /**
  * The panel's markup, cut to the elements it writes into or reads by name.
@@ -22,9 +22,12 @@ interface StubRepo {
   path: string
   name: string
   status: RepoStatusView
-  branches: never[]
-  stashes: never[]
+  branches: BranchRowView[]
+  stashes: StashRowView[]
 }
+
+/** What one git write answered with, and a blocked checkout's file list. */
+type StubResult = { ok: true } | { ok: false; reason: string; blocked?: string[] }
 
 /** What the stub bridge recorded, alongside the calls the panel makes on it. */
 interface StubBridge {
@@ -42,10 +45,23 @@ interface StubBridge {
     keep: string[],
     staged: string[],
   ) => Promise<{ ok: true } | { ok: false; reason: string }>
+  checkoutBranch: (repo: string, name: string, remote: boolean) => Promise<StubResult>
+  createBranch: (repo: string, name: string) => Promise<StubResult>
+  pushStash: (repo: string, message: string) => Promise<StubResult>
+  applyStash: (repo: string, ref: string, pop: boolean) => Promise<StubResult>
+  dropStash: (repo: string, ref: string) => Promise<StubResult>
   askTheme: () => void
   onTheme: () => void
   /** Fire the `git:changed` listener the panel registered, as main would. */
   fire: () => void
+  /**
+   * Every branch and stash call in the order they were made, named.
+   *
+   * One list rather than one per call: the stash-and-switch chain is about
+   * order across three different operations, and separate lists cannot say
+   * whether the pop came before or after the second checkout.
+   */
+  gitCalls: unknown[][]
   /** Every `commitFiles`, argument for argument. */
   commitCalls: unknown[][]
   /** Every `stageFiles`, `unstageFiles` and `discardFiles`, named. */
@@ -66,12 +82,49 @@ function stubBridge(options: {
   fail?: boolean
   menu?: string
   read?: () => Promise<unknown>
+  /** What each `checkoutBranch` answers, in order; the last one repeats. */
+  checkout?: StubResult[]
+  /** What `pushStash` answers. */
+  stashPush?: StubResult
+  /** What `applyStash` answers. */
+  stashApply?: StubResult
+  /** What `createBranch` answers. */
+  branch?: StubResult
 }): StubBridge {
   const commitCalls: unknown[][] = []
   const actionCalls: unknown[][] = []
   const diffCalls: unknown[][] = []
+  const gitCalls: unknown[][] = []
+  let checkouts = 0
+  const nextCheckout = (): StubResult => {
+    const answers = options.checkout ?? [{ ok: true }]
+    const answer = answers[Math.min(checkouts, answers.length - 1)]
+    checkouts += 1
+    return answer
+  }
   let changed: (() => void) | undefined
   return {
+    checkoutBranch: async (repo, name, remote) => {
+      gitCalls.push(['checkout', repo, name, remote])
+      return nextCheckout()
+    },
+    createBranch: async (repo, name) => {
+      gitCalls.push(['create-branch', repo, name])
+      return options.branch ?? { ok: true }
+    },
+    pushStash: async (repo, message) => {
+      gitCalls.push(['stash-push', repo, message])
+      return options.stashPush ?? { ok: true }
+    },
+    applyStash: async (repo, ref, pop) => {
+      gitCalls.push(['stash-apply', repo, ref, pop])
+      return options.stashApply ?? { ok: true }
+    },
+    dropStash: async (repo, ref) => {
+      gitCalls.push(['stash-drop', repo, ref])
+      return { ok: true }
+    },
+    gitCalls,
     readGit: options.read ?? (async () => ({ ok: true, repos: options.repos ?? [] })),
     onGitChanged: (listener: () => void) => {
       changed = listener
@@ -124,25 +177,52 @@ async function load(bridge: StubBridge): Promise<void> {
 /** One repository for the stub, with only the sections that were named. */
 function repo(sections: {
   path?: string
+  branch?: string
   staged?: EntryView[]
   changed?: EntryView[]
   untracked?: EntryView[]
+  branches?: BranchRowView[]
+  stashes?: StashRowView[]
 }): StubRepo {
   const path = sections.path ?? '/r'
   return {
     path,
     name: path.slice(path.lastIndexOf('/') + 1),
     status: {
-      branch: 'main',
+      branch: sections.branch ?? 'main',
       ahead: 0,
       behind: 0,
       staged: sections.staged ?? [],
       changed: sections.changed ?? [],
       untracked: sections.untracked ?? [],
     },
-    branches: [],
-    stashes: [],
+    branches: sections.branches ?? [],
+    stashes: sections.stashes ?? [],
   }
+}
+
+/** Let every pending microtask in a chain of awaits settle. */
+async function settle(): Promise<void> {
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve()
+}
+
+/** Open the branch list on the first repository drawn. */
+function openBranches(): void {
+  ;(document.querySelector('.repo-branch') as HTMLButtonElement).click()
+}
+
+/** Press one branch in the open list, by the name it shows. */
+function branchItem(name: string): HTMLButtonElement {
+  const node = [...document.querySelectorAll('.branch-item')].find(
+    (item) => item.querySelector('.branch-item-name')?.textContent === name,
+  )
+  if (node === undefined) throw new Error(`no branch item for ${name}`)
+  return node as HTMLButtonElement
+}
+
+/** The panel's note line, which is where a refused action says why. */
+function note(): string {
+  return (document.getElementById('git-note') as HTMLElement).textContent ?? ''
 }
 
 /** What the panel is saying when it has nothing to list. */
@@ -500,6 +580,264 @@ describe('the git panel', () => {
     expect([...heads[1].querySelectorAll('.row-action')].map((node) => node.getAttribute('aria-label'))).toEqual([
       'Stage all',
       'Discard all',
+      'Stash',
     ])
+  })
+
+  it('opens the branch list from the header, remote-tracking ones under a divider', async () => {
+    const bridge = stubBridge({
+      repos: [
+        repo({
+          branches: [
+            { name: 'main', upstream: 'origin/main', current: true, remote: false },
+            { name: 'feature', upstream: '', current: false, remote: false },
+            { name: 'origin/other', upstream: '', current: false, remote: true },
+          ],
+        }),
+      ],
+    })
+    await load(bridge)
+    expect(document.querySelector('.branch-menu')).toBeNull()
+    openBranches()
+    const items = [...document.querySelectorAll('.branch-item-name')].map((node) => node.textContent)
+    expect(items).toEqual(['main', 'feature', 'origin/other'])
+    expect(document.querySelector('.branch-divider')?.textContent).toBe('Remote')
+    // The one you are on is marked rather than left out.
+    expect(branchItem('main').classList.contains('branch-current')).toBe(true)
+    expect((document.querySelector('.branch-new') as HTMLElement).textContent).toBe('New branch…')
+  })
+
+  // reason: the button that opened the list sits above it in the tab order,
+  // so without Escape the only way out of an open list is to tab through
+  // every branch in it.
+  it('shuts the branch list on Escape and hands the keyboard back', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
+    })
+    await load(bridge)
+    openBranches()
+    const menu = document.querySelector('.branch-menu') as HTMLElement
+    branchItem('feature').focus()
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(document.querySelector('.branch-menu')).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('.repo-branch'))
+    expect(bridge.gitCalls).toEqual([])
+  })
+
+  // reason: a remote-tracking branch checked out without the flag detaches
+  // HEAD instead of creating the local branch that follows it, which is what
+  // anyone picking `origin/other` off a list means by it. The name alone
+  // cannot be classified — a local `feature/thing` has a slash too.
+  it('checks a remote-tracking branch out as a remote one', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'origin/other', upstream: '', current: false, remote: true }] })],
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('origin/other').click()
+    await settle()
+    expect(bridge.gitCalls).toEqual([['checkout', '/r', 'origin/other', true]])
+  })
+
+  it('shows the reason and offers nothing when a switch fails for another cause', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
+      checkout: [{ ok: false, reason: 'r: pathspec did not match' }],
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('feature').click()
+    await settle()
+    expect(note()).toBe('r: pathspec did not match')
+    expect(document.querySelector('.branch-blocked')).toBeNull()
+  })
+
+  it('offers to stash when a switch is blocked, naming what is in the way', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
+      checkout: [{ ok: false, reason: 'error: local changes', blocked: ['a.ts', 'src/b.ts'] }, { ok: true }],
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('feature').click()
+    await settle()
+    const offer = document.querySelector('.branch-blocked')
+    expect(offer?.textContent).toContain('a.ts')
+    expect(offer?.textContent).toContain('src/b.ts')
+    ;(offer?.querySelector('button') as HTMLButtonElement).click()
+    await settle()
+    expect(bridge.gitCalls).toEqual([
+      ['checkout', '/r', 'feature', false],
+      ['stash-push', '/r', 'Switching to feature'],
+      ['checkout', '/r', 'feature', false],
+      ['stash-apply', '/r', 'stash@{0}', true],
+    ])
+    // Nothing failed, so nothing is said and the offer is gone.
+    expect(note()).toBe('')
+    expect(document.querySelector('.branch-blocked')).toBeNull()
+  })
+
+  // reason: the stash is what makes the second checkout possible. Carrying on
+  // after it failed would run a checkout git has already refused and then pop
+  // whatever stash happened to be on top — someone else's work, from before.
+  it('stops the chain when the stash fails, and says so', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
+      checkout: [{ ok: false, reason: 'error: local changes', blocked: ['a.ts'] }, { ok: true }],
+      stashPush: { ok: false, reason: 'r: there is nothing to stash' },
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('feature').click()
+    await settle()
+    ;(document.querySelector('.branch-blocked button') as HTMLButtonElement).click()
+    await settle()
+    expect(bridge.gitCalls).toEqual([
+      ['checkout', '/r', 'feature', false],
+      ['stash-push', '/r', 'Switching to feature'],
+    ])
+    expect(note()).toContain('stash failed')
+    expect(note()).toContain('nothing to stash')
+  })
+
+  // reason: the work is now in a stash the user never asked for. Reporting
+  // this as a success would leave them on the old branch believing they are
+  // on the new one, with their changes nowhere they can see.
+  it('stops the chain when the second switch fails, and says the work is stashed', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
+      checkout: [
+        { ok: false, reason: 'error: local changes', blocked: ['a.ts'] },
+        { ok: false, reason: 'r: index.lock exists' },
+      ],
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('feature').click()
+    await settle()
+    ;(document.querySelector('.branch-blocked button') as HTMLButtonElement).click()
+    await settle()
+    expect(bridge.gitCalls).toEqual([
+      ['checkout', '/r', 'feature', false],
+      ['stash-push', '/r', 'Switching to feature'],
+      ['checkout', '/r', 'feature', false],
+    ])
+    expect(note()).toContain('stashed')
+    expect(note()).toContain('index.lock')
+  })
+
+  // reason: a pop can conflict on the far side, which leaves the stash in
+  // place and the tree half-merged. That is a failure, and a chain that
+  // reported it as a completed switch would send the user off believing their
+  // work was restored when it is still in the stash.
+  it('reports a pop that failed rather than calling the switch done', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
+      checkout: [{ ok: false, reason: 'error: local changes', blocked: ['a.ts'] }, { ok: true }],
+      stashApply: { ok: false, reason: 'r: CONFLICT in a.ts' },
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('feature').click()
+    await settle()
+    ;(document.querySelector('.branch-blocked button') as HTMLButtonElement).click()
+    await settle()
+    expect(note()).toContain('pop failed')
+    expect(note()).toContain('still stashed')
+    expect(note()).toContain('CONFLICT in a.ts')
+  })
+
+  it('creates a branch from the header prompt on Enter, and cancels on Escape', async () => {
+    const bridge = stubBridge({ repos: [repo({ branches: [] })] })
+    await load(bridge)
+    openBranches()
+    ;(document.querySelector('.branch-new') as HTMLButtonElement).click()
+    const input = document.querySelector('.branch-input') as HTMLInputElement
+    expect(document.activeElement).toBe(input)
+    input.value = 'wip'
+    input.dispatchEvent(new Event('input'))
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(document.querySelector('.branch-input')).toBeNull()
+    expect(bridge.gitCalls).toEqual([])
+    openBranches()
+    ;(document.querySelector('.branch-new') as HTMLButtonElement).click()
+    const again = document.querySelector('.branch-input') as HTMLInputElement
+    again.value = 'wip'
+    again.dispatchEvent(new Event('input'))
+    again.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    await settle()
+    expect(bridge.gitCalls).toEqual([['create-branch', '/r', 'wip']])
+  })
+
+  // reason: `#repos` is rebuilt by every refresh, and a watcher fires
+  // whenever anything under `.git` moves. A name half-typed into an input the
+  // redraw threw away is a name the user types twice.
+  it('keeps a half-typed branch name across a refresh', async () => {
+    const bridge = stubBridge({ repos: [repo({})] })
+    await load(bridge)
+    openBranches()
+    ;(document.querySelector('.branch-new') as HTMLButtonElement).click()
+    const input = document.querySelector('.branch-input') as HTMLInputElement
+    input.value = 'half'
+    input.dispatchEvent(new Event('input'))
+    bridge.fire()
+    await settle()
+    expect((document.querySelector('.branch-input') as HTMLInputElement).value).toBe('half')
+  })
+
+  it('stashes the working tree with the message typed in the header', async () => {
+    const bridge = stubBridge({ repos: [repo({ changed: [{ path: 'a.ts', status: 'M' }] })] })
+    await load(bridge)
+    const head = document.querySelector('.repo-head') as HTMLElement
+    ;(head.querySelector('button[aria-label="Stash"]') as HTMLButtonElement).click()
+    const input = document.querySelector('.branch-input') as HTMLInputElement
+    input.value = 'the thing I was doing'
+    input.dispatchEvent(new Event('input'))
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    await settle()
+    expect(bridge.gitCalls).toEqual([['stash-push', '/r', 'the thing I was doing']])
+  })
+
+  // reason: `git stash push` leaves untracked files where they are, so on a
+  // repository whose only changes are untracked the button would report
+  // having stashed nothing.
+  it('offers Stash only when there is a working tree to take', async () => {
+    const bridge = stubBridge({ repos: [repo({ untracked: [{ path: 'new.ts', status: '?' }] })] })
+    await load(bridge)
+    expect(document.querySelector('button[aria-label="Stash"]')).toBeNull()
+  })
+
+  it('lists the stashes with the branch they were made on, and acts on one', async () => {
+    const bridge = stubBridge({
+      repos: [
+        repo({
+          stashes: [
+            { ref: 'stash@{0}', branch: 'main', message: 'the thing' },
+            { ref: 'stash@{1}', branch: 'feature', message: 'another' },
+          ],
+        }),
+      ],
+    })
+    await load(bridge)
+    const rows = [...document.querySelectorAll('.stash-row')]
+    expect(rows).toHaveLength(2)
+    expect(rows[0].querySelector('.stash-message')?.textContent).toBe('the thing')
+    expect(rows[0].querySelector('.git-dir')?.textContent).toBe('main')
+    for (const label of ['Apply stash@{1}', 'Pop stash@{1}', 'Drop stash@{1}']) {
+      ;(rows[1].querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement).click()
+    }
+    await settle()
+    expect(bridge.gitCalls).toEqual([
+      ['stash-apply', '/r', 'stash@{1}', false],
+      ['stash-apply', '/r', 'stash@{1}', true],
+      ['stash-drop', '/r', 'stash@{1}'],
+    ])
+  })
+
+  it('draws no Stashes section when there are none', async () => {
+    await load(stubBridge({ repos: [repo({ changed: [{ path: 'a.ts', status: 'M' }] })] }))
+    const titles = [...document.querySelectorAll('.section-title')].map((node) => node.textContent ?? '')
+    expect(titles.some((title) => title.startsWith('Stashes'))).toBe(false)
+    expect(document.querySelector('.stash-row')).toBeNull()
   })
 })
