@@ -11,8 +11,10 @@ export interface BranchView {
   remote: boolean
 }
 
-/** How the branch list is asked for, tab-separated so a name may hold spaces. */
-const FORMAT = '%(refname:short)%09%(upstream:short)%09%(HEAD)'
+/** How the branch list is asked for. The full refname is what says whether a
+    branch is remote — `refname:short` cannot, because a local `feature/thing`
+    and a remote `origin/main` are both a name with a slash in it. */
+const FORMAT = '%(refname)%09%(refname:short)%09%(upstream:short)%09%(HEAD)'
 
 /**
  * Read `git branch --list --all --format=…`.
@@ -29,8 +31,8 @@ export function parseBranches(stdout: Buffer): BranchView[] {
     .split('\n')
     .filter((line) => line !== '')
     .map((line) => {
-      const [name, upstream, head] = line.split('\t')
-      return { name, upstream: upstream ?? '', current: head === '*', remote: name.includes('/') }
+      const [refname, name, upstream, head] = line.split('\t')
+      return { name, upstream: upstream ?? '', current: head === '*', remote: refname.startsWith('refs/remotes/') }
     })
     // `--all` lists the remote's HEAD pointer, which is not a branch anyone
     // checks out and reads as a nonsense entry at the top of the menu.
@@ -77,17 +79,25 @@ function blockedFiles(stderr: string): string[] | undefined {
  * the branch list useless exactly when it is reached for. When git does
  * refuse, the files it names come back so the caller can offer to stash
  * them.
+ *
+ * For remote-tracking branches, uses `--track` to create the local branch
+ * that follows it — what anyone picking `origin/feature` off a list means by
+ * it. Plain checkout of a remote ref detaches HEAD, which is the whole reason
+ * the flag exists.
  * @param repo - the repository.
  * @param name - the branch to switch to.
+ * @param remote - whether this is a remote-tracking branch.
  * @param run - how to run git.
  * @returns success, or the failure and what blocked it.
  */
 export async function checkout(
   repo: string,
   name: string,
+  remote = false,
   run: typeof runGit = runGit,
 ): Promise<ActionOutcome & { blocked?: string[] }> {
-  const out = await run(repo, ['checkout', name])
+  const args = remote ? ['checkout', '--track', name] : ['checkout', name]
+  const out = await run(repo, args)
   if (out.code === 0) return { ok: true }
   const blocked = blockedFiles(out.stderr)
   const reason = out.stderr.split('\n')[0].trim() || 'git failed without saying why.'
@@ -107,5 +117,7 @@ export async function checkout(
 export async function createBranch(repo: string, name: string, run: typeof runGit = runGit): Promise<ActionOutcome> {
   if (name.trim() === '') return { ok: false, reason: 'Name the branch first.' }
   const out = await run(repo, ['checkout', '-b', name])
-  return out.code === 0 ? { ok: true } : { ok: false, reason: out.stderr.split('\n')[0].trim() }
+  return out.code === 0
+    ? { ok: true }
+    : { ok: false, reason: out.stderr.split('\n')[0].trim() || 'git failed without saying why.' }
 }

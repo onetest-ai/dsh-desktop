@@ -8,7 +8,14 @@ const fail = (why: string): GitResult => ({ code: 1, stdout: Buffer.alloc(0), st
 
 describe('parseBranches', () => {
   it('reads the name, its upstream, and which one is current', () => {
-    expect(parseBranches(bytes('feature\t\t ', 'main\torigin/main\t*'))).toEqual([
+    expect(
+      parseBranches(
+        bytes(
+          'refs/heads/feature\tfeature\t\t ',
+          'refs/heads/main\tmain\torigin/main\t*',
+        ),
+      ),
+    ).toEqual([
       { name: 'feature', upstream: '', current: false, remote: false },
       { name: 'main', upstream: 'origin/main', current: true, remote: false },
     ])
@@ -19,15 +26,28 @@ describe('parseBranches', () => {
   // branch you are ever on, and listing it beside local ones unmarked reads
   // as a duplicate.
   it('marks a remote-tracking branch as remote', () => {
-    expect(parseBranches(bytes('origin/main\t\t '))).toEqual([
+    expect(parseBranches(bytes('refs/remotes/origin/main\torigin/main\t\t '))).toEqual([
       { name: 'origin/main', upstream: '', current: false, remote: true },
+    ])
+  })
+
+  // reason: a local branch with a slash in its name (e.g. feature/thing, bugfix/123)
+  // is just as much a branch as origin/main, and is only distinguished by the full
+  // refname: refs/heads/... is local, refs/remotes/... is remote-tracking.
+  it('classifies a local branch with slashes as local, not remote', () => {
+    expect(parseBranches(bytes('refs/heads/feature/thing\tfeature/thing\t\t '))).toEqual([
+      { name: 'feature/thing', upstream: '', current: false, remote: false },
     ])
   })
 
   // reason: `--all` lists this pointer, and it is not a branch anyone checks
   // out — leaving it in puts a nonsense entry at the top of the menu.
   it('leaves out the remote HEAD pointer', () => {
-    expect(parseBranches(bytes('origin/HEAD\t\t ', 'main\t\t*')).map((each) => each.name)).toEqual(['main'])
+    expect(
+      parseBranches(
+        bytes('refs/remotes/origin/HEAD\torigin/HEAD\t\t ', 'refs/heads/main\tmain\t\t*'),
+      ).map((each) => each.name),
+    ).toEqual(['main'])
   })
 
   it('reads nothing from nothing', () => {
@@ -36,10 +56,16 @@ describe('parseBranches', () => {
 })
 
 describe('checkout', () => {
-  it('switches to the branch it was given', async () => {
+  it('switches to a local branch', async () => {
     const run = vi.fn(async () => ok())
-    expect(await checkout('/r', 'feature', run)).toEqual({ ok: true })
+    expect(await checkout('/r', 'feature', false, run)).toEqual({ ok: true })
     expect(run).toHaveBeenCalledWith('/r', ['checkout', 'feature'])
+  })
+
+  it('tracks a remote branch instead of detaching HEAD', async () => {
+    const run = vi.fn(async () => ok())
+    expect(await checkout('/r', 'origin/main', true, run)).toEqual({ ok: true })
+    expect(run).toHaveBeenCalledWith('/r', ['checkout', '--track', 'origin/main'])
   })
 
   // reason: git refuses only when the changes would be overwritten, and it
@@ -53,14 +79,14 @@ describe('checkout', () => {
           'Please commit your changes or stash them before you switch branches.\n',
       ),
     )
-    const out = await checkout('/r', 'feature', run)
+    const out = await checkout('/r', 'feature', false, run)
     expect(out.ok).toBe(false)
     expect(out.blocked).toEqual(['a.ts', 'src/b.ts'])
   })
 
   it('reports an ordinary failure with no blocked list', async () => {
     const run = vi.fn(async () => fail("error: pathspec 'nope' did not match any file(s) known to git"))
-    const out = await checkout('/r', 'nope', run)
+    const out = await checkout('/r', 'nope', false, run)
     expect(out).toMatchObject({ ok: false })
     expect(out.blocked).toBeUndefined()
   })
