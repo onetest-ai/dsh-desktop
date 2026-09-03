@@ -1,6 +1,6 @@
 # The git panel
 
-A source-control view on the rail: the repos in the project, the files that have changed, and the diff for one of them — with staging, committing, and the remote operations that go with them. Local git only. No GitHub account, no API, no tokens.
+A source-control view on the rail: the repos in the project, the files that have changed, and the diff for one of them — with staging, committing, stashing, branch switching, and the remote operations that go with them. Local git only. No GitHub account, no API, no tokens.
 
 ## The `git` binary, not a library
 
@@ -152,6 +152,24 @@ The hard parts are pure functions, so they test without Electron alongside the r
 
 Not added to the packaged smoke test, which exercises startup and would need fixtures to say anything here.
 
+## Branches
+
+The repo header's branch is a control, not a label. It opens the local branches, the remote-tracking ones under them, and **New branch…**, which branches from where you are and switches to it.
+
+Checking out a remote-tracking branch creates the local branch that tracks it, which is what anyone picking `origin/feature` off a list means by it.
+
+**Switching with uncommitted changes is attempted, not prevented.** Git carries changes across whenever they do not collide, which is most of the time, and a panel that refuses on sight makes the branch list useless exactly when it is wanted — mid-change, wanting to look at something else. When git does refuse, it names the files that are in the way; the panel repeats those names and offers to stash them, switch, and pop. That offer is a button, never automatic: an automatic stash-and-pop churns the stash on switches that never needed one, and a pop can conflict on the far side, which turns "switch branch" into "resolve a conflict you did not ask for".
+
+## Stashes
+
+A **Stashes** section, present only when there is something in it, listing every entry with its message and the branch it was made on.
+
+**Stash** pushes the whole working tree, with an optional message; a stash with no message is a stash you will not recognise in a week. Each entry carries **Apply**, **Pop**, and **Drop**.
+
+The checkboxes do not drive stash. They mean *include this in the next commit*, and giving them a second meaning that depends on which button is pressed is how a control stops being predictable. Stash takes the working tree.
+
+**Drop is unrecoverable** in the way Discard is, and is confirmed the same way — a dropped stash is reachable only by an unreferenced hash the panel never showed you.
+
 ## Deliberately not in this
 
-Branch switching and creation, merge conflict resolution, stash, history and blame, submodules, commit amend, and force push. Each is a design of its own; none is assumed by anything above.
+Merge conflict resolution, history and blame, submodules, commit amend, and force push. Each is a design of its own; none is assumed by anything above.
