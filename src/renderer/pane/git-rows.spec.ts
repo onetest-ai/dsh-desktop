@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { colourOf, label, rowsFor } from './git-rows'
+import { colourOf, parts, rowsFor } from './git-rows'
 
 const EMPTY = { branch: 'main', ahead: 0, behind: 0, staged: [], changed: [], untracked: [] }
 
@@ -28,19 +28,42 @@ describe('rowsFor', () => {
   })
 })
 
-describe('label', () => {
-  it('shows the filename, with its directory after it', () => {
-    expect(label({ path: 'src/main/a.ts', status: 'M' })).toBe('a.ts src/main')
+describe('parts', () => {
+  // reason: the name is what is being looked for and the directory only
+  // disambiguates it, so they are two pieces the row can weight differently
+  // — joined into one string neither can be dimmed, and truncation would
+  // eat the filename before the path it is there to qualify.
+  it('separates the filename from its directory', () => {
+    expect(parts({ path: 'src/main/a.ts', status: 'M' })).toEqual({ name: 'a.ts', dir: 'src/main' })
   })
 
-  it('shows a file at the root with no directory', () => {
-    expect(label({ path: 'a.ts', status: 'M' })).toBe('a.ts')
+  it('gives a file at the root no directory at all', () => {
+    expect(parts({ path: 'a.ts', status: 'M' })).toEqual({ name: 'a.ts', dir: '' })
   })
 
   // reason: a rename that only moved a file says nothing useful unless it
-  // says where from.
-  it('says where a rename came from', () => {
-    expect(label({ path: 'b.ts', status: 'R', from: 'a.ts' })).toBe('b.ts ← a.ts')
+  // says where from, and where from belongs with the path rather than the
+  // name — it is the same kind of fact.
+  it('says where a rename came from, in place of the directory', () => {
+    expect(parts({ path: 'b.ts', status: 'R', from: 'a.ts' })).toEqual({ name: 'b.ts', dir: '← a.ts' })
+  })
+
+  it('keeps a name containing spaces whole', () => {
+    expect(parts({ path: 'a b/c d.ts', status: 'M' })).toEqual({ name: 'c d.ts', dir: 'a b' })
+  })
+})
+
+describe('rowsFor counts', () => {
+  // reason: the size of the job is worth knowing without counting rows.
+  it('reports how many entries each section holds', () => {
+    const groups = rowsFor({
+      ...EMPTY,
+      changed: [
+        { path: 'a.ts', status: 'M' },
+        { path: 'b.ts', status: 'M' },
+      ],
+    })
+    expect(groups[0].entries.length).toBe(2)
   })
 })
 

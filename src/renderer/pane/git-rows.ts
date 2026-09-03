@@ -47,19 +47,34 @@ export function rowsFor(status: RepoStatusView): RowGroup[] {
   })).filter((group) => group.entries.length > 0)
 }
 
+/** A row's two pieces: what it is, and what qualifies it. */
+export interface RowParts {
+  /** The filename, which is what the eye is looking for. */
+  name: string
+  /**
+   * The directory it sits in, or where a rename came from. Empty at the root.
+   *
+   * Separate from the name so the row can weight them differently and so the
+   * truncation falls here: joined into one string the filename would be the
+   * first thing an ellipsis ate, which is the one part that must survive.
+   */
+  dir: string
+}
+
 /**
- * How one row reads: the filename first, its directory after it.
+ * The two pieces one row is drawn from.
  *
- * The name is what is being looked for and the directory is what
- * disambiguates it, which is the order VS Code uses and the reason it scans.
+ * A rename's origin takes the directory's place rather than sitting beside
+ * it: both answer "which file is this, exactly", and a row carrying name,
+ * folder and origin at once is three facts competing for one line.
  * @param entry - the changed path.
- * @returns the row's text.
+ * @returns the filename and what qualifies it.
  */
-export function label(entry: EntryView): string {
+export function parts(entry: EntryView): RowParts {
   const at = entry.path.lastIndexOf('/')
   const name = at === -1 ? entry.path : entry.path.slice(at + 1)
-  if (entry.from !== undefined) return `${name} ← ${entry.from}`
-  return at === -1 ? name : `${name} ${entry.path.slice(0, at)}`
+  if (entry.from !== undefined) return { name, dir: `← ${entry.from}` }
+  return { name, dir: at === -1 ? '' : entry.path.slice(0, at) }
 }
 
 /** The token each status is drawn in, defaulting to the modified colour. */

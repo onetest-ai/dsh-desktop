@@ -639,7 +639,22 @@ body {
 
 /* The branch, and how far it is from its remote. Dimmed: it is context for
    the name beside it, not a second heading. */
+.repo-name {
+  overflow: hidden;
+  flex: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-twisty {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .repo-branch {
+  display: flex;
+  gap: 3px;
+  align-items: center;
   overflow: hidden;
   color: var(--dsw-alias-label-secondary);
   font-size: 11px;
@@ -653,11 +668,21 @@ body {
 .section-title {
   margin: 8px 0 2px;
   padding: 0 4px;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
   color: var(--dsw-alias-label-tertiary);
   font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* How many rows are under this heading, so the size of the job is readable
+   without counting them. */
+.section-count {
+  color: var(--dsw-alias-label-tertiary);
+  font-weight: 400;
+  opacity: 0.75;
 }
 
 .git-rows {
@@ -666,13 +691,55 @@ body {
   padding: 0;
 }
 
-/* Fixed width so the names line up under each other whatever letter a row
-   carries; coloured by the row, which is the only thing status decides here. */
+/* Icon, name, path, status — in that order, so the eye runs down a single
+   column of filenames and reads status as a column of its own rather than
+   as a prefix to each name. */
+.git-rows .row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px 3px 4px;
+}
+
+/* The filename never truncates: it is the thing being looked for, and an
+   ellipsis here would eat it before the path that only qualifies it. */
+.git-name {
+  flex: none;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+}
+
+/* A deletion is said by the strike rather than by colour, so the one signal
+   the list carries is not spent on every row at once. */
+.git-gone {
+  color: var(--dsw-alias-label-tertiary);
+  text-decoration: line-through;
+}
+
+/* The folder, or where a rename came from. Dimmed and smaller: it is there
+   only when two rows would otherwise read the same, and it gives up its
+   width first. */
+.git-dir {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Last in the row and the only thing in it that carries colour. Fixed width
+   so the letters line up under each other whatever the names beside them do. */
 .git-status {
   display: flex;
   flex: none;
   justify-content: center;
   width: 12px;
+  margin-left: auto;
   font-family: var(--ds-font-family-code);
   font-weight: 600;
 }
+

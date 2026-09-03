@@ -1,4 +1,6 @@
-import { colourOf, label, rowsFor, type RepoStatusView, type RowGroup } from './git-rows.ts'
+import { colourOf, parts, rowsFor, type RepoStatusView, type RowGroup } from './git-rows.ts'
+import { fileIcon } from './file-icon.ts'
+import { icon } from './icons.ts'
 import './bridge.ts'
 import { followHarnessTheme } from './theme.ts'
 
@@ -46,6 +48,24 @@ function branchLine(status: RepoStatusView): string {
 }
 
 /**
+ * The branch, with its glyph and how far it has diverged.
+ *
+ * The glyph does the saying: a bare word beside a repository's name reads as
+ * a second name, and every list of branches anyone has seen carries one.
+ * @param status - the repository's state.
+ * @returns the element, ready to append.
+ */
+function branchTag(status: RepoStatusView): HTMLElement {
+  const tag = document.createElement('span')
+  tag.className = 'repo-branch'
+  tag.append(icon('branch', 12))
+  const text = document.createElement('span')
+  text.textContent = branchLine(status)
+  tag.append(text)
+  return tag
+}
+
+/**
  * Draw one section of one repository.
  * @param repo - the repository the rows belong to.
  * @param group - the section and its entries.
@@ -56,6 +76,11 @@ function drawSection(repo: RepoView, group: RowGroup): DocumentFragment {
   const heading = document.createElement('p')
   heading.className = 'section-title'
   heading.textContent = group.title
+  // How big the job is, without counting the rows.
+  const count = document.createElement('span')
+  count.className = 'section-count'
+  count.textContent = String(group.entries.length)
+  heading.append(count)
   fragment.append(heading)
 
   const list = document.createElement('ul')
@@ -66,19 +91,35 @@ function drawSection(repo: RepoView, group: RowGroup): DocumentFragment {
     row.type = 'button'
     row.className = 'row'
 
+    // The same icons the file tree draws. The two views take turns in one
+    // column, and a file that has an icon in one and not the other reads as
+    // a different kind of thing.
+    row.append(fileIcon(entry.path, false))
+
+    const { name: filename, dir } = parts(entry)
+    const name = document.createElement('span')
+    name.className = 'git-name'
+    name.textContent = filename
+    // A deletion is said by the strike, not by the colour: colouring every
+    // filename spends the one signal the list has on every row at once, and
+    // a wall of amber says no more than a wall of grey.
+    if (entry.status === 'D') name.classList.add('git-gone')
+    row.append(name)
+
+    if (dir !== '') {
+      const where = document.createElement('span')
+      where.className = 'git-dir'
+      where.textContent = dir
+      row.append(where)
+    }
+
+    // Last, and in the only colour the row carries — so the letters form a
+    // column that can be read down without reading the names.
     const status = document.createElement('span')
     status.className = 'git-status'
     status.textContent = entry.status
-    // The letter and the name share one colour: two tones in a row that is
-    // already three columns wide reads as two separate facts.
     status.style.color = colourOf(entry.status)
     row.append(status)
-
-    const name = document.createElement('span')
-    name.className = 'name'
-    name.textContent = label(entry)
-    name.style.color = colourOf(entry.status)
-    row.append(name)
 
     // The diff goes in the editor column, which is main's to fill — this page
     // only says which row was clicked and which list it was in.
@@ -112,24 +153,22 @@ function drawRepo(repo: RepoView, alone: boolean): HTMLElement {
   if (alone) {
     const head = document.createElement('div')
     head.className = 'repo-head'
-    const branch = document.createElement('span')
-    branch.className = 'repo-branch'
-    branch.textContent = branchLine(repo.status)
-    head.append(branch)
+    head.append(branchTag(repo.status))
     block.append(head)
   } else {
     const head = document.createElement('button')
     head.type = 'button'
     head.className = 'repo-head'
     head.setAttribute('aria-expanded', String(!shut))
+    // The tree's own twisty, so the two views in this column open the same way.
+    const twisty = icon(shut ? 'triangleRight' : 'chevronDown', 12)
+    twisty.classList.add('repo-twisty')
+    head.append(twisty)
     const name = document.createElement('span')
-    name.className = 'name'
-    name.textContent = `${shut ? '▸' : '▾'} ${repo.name}`
+    name.className = 'repo-name'
+    name.textContent = repo.name
     head.append(name)
-    const branch = document.createElement('span')
-    branch.className = 'repo-branch'
-    branch.textContent = branchLine(repo.status)
-    head.append(branch)
+    head.append(branchTag(repo.status))
     head.addEventListener('click', () => {
       if (collapsed.has(repo.path)) collapsed.delete(repo.path)
       else collapsed.add(repo.path)
