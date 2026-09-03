@@ -54,7 +54,7 @@ describe('commit', () => {
   // staged is unstaged, and stays that way.
   it('stages what is ticked, unstages what is staged but is not, then commits', async () => {
     const run = vi.fn(async () => ok())
-    expect(await commit('/r', 'a message', ['new.ts', 'both.ts'], ['both.ts', 'unwanted.ts'], run)).toEqual({
+    expect(await commit('/r', 'a message', ['new.ts', 'both.ts'], [], ['both.ts', 'unwanted.ts'], run)).toEqual({
       ok: true,
     })
     expect(run.mock.calls.map((call) => call[1])).toEqual([
@@ -66,7 +66,7 @@ describe('commit', () => {
 
   it('skips the reconciliation commands it has nothing for', async () => {
     const run = vi.fn(async () => ok())
-    await commit('/r', 'm', ['a.ts'], ['a.ts'], run)
+    await commit('/r', 'm', ['a.ts'], [], ['a.ts'], run)
     expect(run.mock.calls.map((call) => call[1])).toEqual([
       ['add', '--', 'a.ts'],
       ['commit', '-m', 'm'],
@@ -79,11 +79,11 @@ describe('commit', () => {
   // second door.
   it('refuses an empty message and an empty selection, without running git', async () => {
     const run = vi.fn(async () => ok())
-    expect(await commit('/r', '   ', ['a.ts'], [], run)).toEqual({
+    expect(await commit('/r', '   ', ['a.ts'], [], [], run)).toEqual({
       ok: false,
       reason: 'Write a commit message first.',
     })
-    expect(await commit('/r', 'm', [], [], run)).toEqual({
+    expect(await commit('/r', 'm', [], [], [], run)).toEqual({
       ok: false,
       reason: 'Tick at least one file to commit.',
     })
@@ -97,8 +97,46 @@ describe('commit', () => {
       .fn()
       .mockResolvedValueOnce(ok())
       .mockResolvedValueOnce(fail('hook declined the commit'))
-    const out = await commit('/r', 'm', ['a.ts'], [], run)
+    const out = await commit('/r', 'm', ['a.ts'], [], [], run)
     expect(out).toEqual({ ok: false, reason: 'hook declined the commit' })
+  })
+
+  // reason: stage can fail, e.g. due to permission issues. The failure must
+  // be returned without proceeding to unstage or commit.
+  it('stops when stage fails, returning the reason and having run git once', async () => {
+    const run = vi.fn(async () => fail('permission denied'))
+    const out = await commit('/r', 'm', ['a.ts'], [], ['b.ts'], run)
+    expect(out).toEqual({ ok: false, reason: 'permission denied' })
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(run.mock.calls[0][1]).toEqual(['add', '--', 'a.ts'])
+  })
+
+  // reason: unstage can fail, e.g. if a path is no longer valid. The failure
+  // must be returned without proceeding to commit.
+  it('stops when unstage fails, having run stage and unstage but not commit', async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(ok())
+      .mockResolvedValueOnce(fail('pathspec did not match'))
+    const out = await commit('/r', 'm', ['a.ts'], [], ['b.ts'], run)
+    expect(out).toEqual({ ok: false, reason: 'pathspec did not match' })
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(run.mock.calls.map((call) => call[1])).toEqual([
+      ['add', '--', 'a.ts'],
+      ['restore', '--staged', '--', 'b.ts'],
+    ])
+  })
+
+  // reason: a path appearing in both Staged Changes and Changes with a tick
+  // only in Staged means keep what is indexed, not the newer edits. The path
+  // must not be passed to `git add`, must not be unstaged, and commit must run.
+  it('keeps staged-only ticked files, never re-adding them', async () => {
+    const run = vi.fn(async () => ok())
+    const out = await commit('/r', 'm', [], ['kept.ts'], ['kept.ts'], run)
+    expect(out).toEqual({ ok: true })
+    expect(run.mock.calls.map((call) => call[1])).toEqual([
+      ['commit', '-m', 'm'],
+    ])
   })
 })
 

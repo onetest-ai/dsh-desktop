@@ -57,17 +57,27 @@ export async function unstage(repo: string, paths: string[], run: typeof runGit 
 /**
  * Commit exactly what is ticked.
  *
- * Three commands, in order, because `git commit` commits the whole index:
- * ticked paths are staged, paths that are staged but not ticked are
- * unstaged, and only then is the commit made. Without the middle step a file
- * staged earlier and unticked here would be committed anyway.
+ * The panel shows a file in both Staged Changes and Changes when it was staged
+ * and then edited again, with a tick in each row meaning different content:
+ * staged means the version already recorded, changed means the edits since.
+ * A single `selected` list cannot express this—if the user ticks only the
+ * Staged row (keep what's already indexed, not the newer edits), a flat list
+ * still has the path, so `stage()` would run `git add` and stage the newer
+ * working-tree content, silently destroying the version the tick meant to
+ * preserve. So the list is split.
  *
+ * Three commands, in order, because `git commit` commits the whole index:
+ * paths ticked in Changes or Untracked are staged, paths ticked only in
+ * Staged Changes are left alone, paths that are staged but not ticked anywhere
+ * are unstaged, and only then is the commit made. Without the middle step a
+ * file staged earlier and unticked everywhere would be committed anyway.
  * That step has a consequence worth knowing: the index is reconciled to the
  * selection rather than left alone, and it stays that way afterwards.
  * Unticking a staged file unstages it for good, not only for this commit.
  * @param repo - the repository.
  * @param message - the commit message, as typed.
- * @param selected - the paths ticked in the panel.
+ * @param add - paths ticked in Changes or Untracked; these are staged.
+ * @param keep - paths ticked only in Staged Changes; these are already indexed and must not be re-added.
  * @param staged - the paths currently in the index.
  * @param run - how to run git.
  * @returns success, or why nothing was committed.
@@ -75,17 +85,18 @@ export async function unstage(repo: string, paths: string[], run: typeof runGit 
 export async function commit(
   repo: string,
   message: string,
-  selected: string[],
+  add: string[],
+  keep: string[],
   staged: string[],
   run: typeof runGit = runGit,
 ): Promise<ActionOutcome> {
   if (message.trim() === '') return { ok: false, reason: 'Write a commit message first.' }
-  if (selected.length === 0) return { ok: false, reason: 'Tick at least one file to commit.' }
-  const adding = await stage(repo, selected, run)
+  if (add.length === 0 && keep.length === 0) return { ok: false, reason: 'Tick at least one file to commit.' }
+  const adding = await stage(repo, add, run)
   if (!adding.ok) return adding
   const dropping = await unstage(
     repo,
-    staged.filter((path) => !selected.includes(path)),
+    staged.filter((path) => !add.includes(path) && !keep.includes(path)),
     run,
   )
   if (!dropping.ok) return dropping
