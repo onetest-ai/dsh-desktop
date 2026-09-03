@@ -91,13 +91,26 @@ export class Selection {
    * version the staged tick exists to preserve, so a path in `add` never
    * also appears in `keep`.
    *
-   * A ticked staged rename contributes BOTH of its names to `keep`. The index
-   * holds a rename as the deletion of the old name beside the addition of the
-   * new one, and `commit` unstages every staged path that is in neither list
-   * — so a `keep` naming only the new path would leave the deletion of the
-   * old one to be unstaged, and the commit would record half a rename. The
-   * old name is deliberately not added to `add`: it no longer exists on disk,
-   * and `git add` on it fails with a pathspec error that stops the commit.
+   * A ticked staged rename contributes its OLD name to `keep` as well. The
+   * index holds a rename as the deletion of the old name beside the addition
+   * of the new one, and `commit` unstages every staged path that is in
+   * neither list — so a `keep` naming only the new path would leave the
+   * deletion of the old one to be unstaged, and the commit would record half
+   * a rename.
+   *
+   * The two names are filtered separately, and this is the whole subtlety.
+   * A file renamed and then edited has a staged `R new (from old)` and a
+   * changed `M new`, both ticked by default, so `new` is in `add` — and
+   * dropping the entry for that reason would take `old` out with it, leaving
+   * `git restore --staged -- old` to put the old file back in the index and
+   * the commit to record a COPY rather than a rename. So `path` is dropped
+   * when it is in `add` (staging it again would overwrite the recorded
+   * version) while `from` is carried whenever the staged row is ticked.
+   *
+   * The old name is never in `add`, which is what keeps the two lists
+   * disjoint: it no longer exists on disk — `git add` on it fails with a
+   * pathspec error that stops the commit — and `add` is built from
+   * `pathsOf`, which yields only `path`.
    * @param repo - the repository's path.
    * @param status - its current state.
    * @returns the paths to `git add`, and the already-staged paths to leave untouched.
@@ -108,9 +121,12 @@ export class Selection {
     const add = [...new Set([...changed, ...untracked])]
     const addSet = new Set(add)
     const keep = status.staged
-      .filter((entry) => this.ticked(repo, 'staged', entry.path) && !addSet.has(entry.path))
-      .flatMap((entry) => (entry.from === undefined ? [entry.path] : [entry.path, entry.from]))
-    return { add, keep }
+      .filter((entry) => this.ticked(repo, 'staged', entry.path))
+      .flatMap((entry) => [
+        ...(addSet.has(entry.path) ? [] : [entry.path]),
+        ...(entry.from === undefined ? [] : [entry.from]),
+      ])
+    return { add, keep: [...new Set(keep)] }
   }
 
   /**

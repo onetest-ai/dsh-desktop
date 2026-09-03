@@ -92,21 +92,26 @@ function blockedFiles(stderr: string): { kind: BlockedKind; files: string[] } | 
 }
 
 /**
- * Whether git would read this name as something other than a branch.
+ * Whether git would read this name as an option rather than as a name.
  *
- * The name comes from the renderer and lands in `checkout`'s ref position,
- * which has no `--` to hide behind. `git checkout -f` force-restores the
+ * The name comes from the renderer, and `git checkout -f` force-restores the
  * working tree from HEAD: every uncommitted change in the repository is gone,
- * with no dialog and nothing in the reflog to get it back from. `git checkout
- * .` does the same through the pathspec. Neither is a name git will let
- * anyone create a branch with, so refusing the shape costs nothing real —
- * and it is refused here rather than in the IPC handler so it holds for every
- * caller, not only the one that was thought of.
+ * with no dialog and nothing in the reflog to get it back from. The `--` that
+ * every command here ends with separates a ref from a pathspec, but nothing
+ * separates a ref from an option — the shape has to be refused instead.
+ *
+ * Only the leading dash. Pathspecs are handled by the terminator and not by a
+ * list of names: `git checkout a.ts --` and `git checkout . --` are both
+ * `fatal: invalid reference`, so every path-shaped name is refused by git
+ * itself, including the ones no list here would have thought of.
+ *
+ * Refused in this module rather than in the IPC handler, so it holds for
+ * every caller and not only the one that was thought of.
  * @param name - the name as it arrived.
  * @returns true when it must not be handed to git as a branch.
  */
 function unsafeName(name: string): boolean {
-  return name.startsWith('-') || name === '.' || name === '..'
+  return name.startsWith('-')
 }
 
 /** What is said when a name would be read as an option or a pathspec. */
@@ -127,8 +132,13 @@ const NOT_A_NAME = 'That is not a branch name.'
  * it. Plain checkout of a remote ref detaches HEAD, which is the whole reason
  * the flag exists.
  *
- * A name git would read as an option is refused before anything is spawned;
- * see `unsafeName` for what `git checkout -f` does to a working tree.
+ * Every form ends with `--`, which is what makes the argument a ref and only
+ * a ref. Without it a name that does not resolve as a branch but does match a
+ * path is taken as a pathspec and restored from the index — `checkout('/r',
+ * 'src')` would silently discard the unstaged edits under `src`, with no
+ * dialog and nothing in the reflog. git only reports the ambiguous case that
+ * matches both; the unambiguous path goes straight through. A name git would
+ * read as an option is refused before anything is spawned; see `unsafeName`.
  * @param repo - the repository.
  * @param name - the branch to switch to.
  * @param remote - whether this is a remote-tracking branch.
@@ -142,7 +152,7 @@ export async function checkout(
   run: typeof runGit = runGit,
 ): Promise<ActionOutcome & { blocked?: string[]; blockedKind?: BlockedKind }> {
   if (unsafeName(name)) return { ok: false, reason: NOT_A_NAME }
-  const args = remote ? ['checkout', '--track', name] : ['checkout', name]
+  const args = remote ? ['checkout', '--track', name, '--'] : ['checkout', name, '--']
   const out = await run(repo, args)
   if (out.code === 0) return { ok: true }
   const blocked = blockedFiles(out.stderr)
@@ -154,11 +164,12 @@ export async function checkout(
 /**
  * Create a branch from where you are, and switch to it.
  *
- * Only a blank name, and one git would read as an option or a pathspec, are
- * refused here. Git's own rules for a ref name are long and it enforces them
- * itself; reimplementing them would drift. The two shapes caught here are not
- * a rule about names at all — they are about what `checkout` does with an
- * argument it does not read as one; see `unsafeName`.
+ * Only a blank name, and one git would read as an option, are refused here.
+ * Git's own rules for a ref name are long and it enforces them itself;
+ * reimplementing them would drift. The shape caught here is not a rule about
+ * names at all — it is about what `checkout` does with an argument it does
+ * not read as one; see `unsafeName`. The trailing `--` is there for the same
+ * reason it is on `checkout`.
  * @param repo - the repository.
  * @param name - the branch to create.
  * @param run - how to run git.
@@ -167,6 +178,6 @@ export async function checkout(
 export async function createBranch(repo: string, name: string, run: typeof runGit = runGit): Promise<ActionOutcome> {
   if (name.trim() === '') return { ok: false, reason: 'Name the branch first.' }
   if (unsafeName(name)) return { ok: false, reason: NOT_A_NAME }
-  const out = await run(repo, ['checkout', '-b', name])
+  const out = await run(repo, ['checkout', '-b', name, '--'])
   return out.code === 0 ? { ok: true } : { ok: false, reason: firstLine(out.stderr, out.stdout.toString('utf8')) }
 }

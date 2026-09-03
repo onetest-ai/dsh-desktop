@@ -159,10 +159,15 @@ describe('Selection', () => {
     expect(selection.selected('/r', state).keep).toEqual(['new.ts', 'old.ts'])
   })
 
-  // reason: the old name is gone from disk. `git add old.ts` fails with a
-  // pathspec error, and `commit` stops at the first failure — so a rename
-  // that reached `add` would abort the commit rather than record it.
-  it('never puts the old name of a rename in add', () => {
+  // reason: git puts `from` on BOTH halves of a rename record, so a file
+  // renamed and then edited is a staged `R new (from old)` and a changed
+  // `M new`, both ticked. `new.ts` is therefore in `add` — but dropping the
+  // whole staged entry for that reason takes `old.ts` out of `keep` with it,
+  // and `commit` then runs `git restore --staged -- old.ts`, which puts the
+  // old file back in the index. The commit records a COPY, not a rename, and
+  // leaves the deletion unstaged. The two names are filtered separately for
+  // exactly this case.
+  it('keeps the old name of a rename whose new name is being staged again', () => {
     const selection = new Selection()
     const state = status({
       staged: [{ path: 'new.ts', status: 'R', from: 'old.ts' }],
@@ -170,8 +175,11 @@ describe('Selection', () => {
     })
     selection.reconcile('/r', state)
     const { add, keep } = selection.selected('/r', state)
+    // The old name is gone from disk: `git add old.ts` fails with a pathspec
+    // error and `commit` stops at the first failure, so it is never in `add`.
     expect(add).toEqual(['new.ts'])
-    // In `add`, so not in `keep` either — a path is never in both.
-    expect(keep).toEqual([])
+    // And the new name is not in `keep`, since staging it again is the point
+    // — the lists stay disjoint without dropping the old name.
+    expect(keep).toEqual(['old.ts'])
   })
 })

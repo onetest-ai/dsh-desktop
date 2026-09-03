@@ -59,13 +59,36 @@ describe('checkout', () => {
   it('switches to a local branch', async () => {
     const run = vi.fn(async () => ok())
     expect(await checkout('/r', 'feature', false, run)).toEqual({ ok: true })
-    expect(run).toHaveBeenCalledWith('/r', ['checkout', 'feature'])
+    expect(run).toHaveBeenCalledWith('/r', ['checkout', 'feature', '--'])
   })
 
   it('tracks a remote branch instead of detaching HEAD', async () => {
     const run = vi.fn(async () => ok())
     expect(await checkout('/r', 'origin/main', true, run)).toEqual({ ok: true })
-    expect(run).toHaveBeenCalledWith('/r', ['checkout', '--track', 'origin/main'])
+    expect(run).toHaveBeenCalledWith('/r', ['checkout', '--track', 'origin/main', '--'])
+  })
+
+  // reason: without the terminator a name that does not resolve as a ref but
+  // does match a path is taken as a pathspec and restored from the index —
+  // `checkout('/r', 'src')` would silently discard every unstaged edit under
+  // `src`, with no dialog and nothing in the reflog. git reports only the
+  // ambiguous case that matches both; the unambiguous path goes straight
+  // through. Both shapes end with it, so the argument is a ref and only a ref.
+  it('ends every form with the terminator, so a name is read as a ref', async () => {
+    const run = vi.fn(async () => ok())
+    await checkout('/r', 'feature', false, run)
+    await checkout('/r', 'origin/main', true, run)
+    for (const call of run.mock.calls) expect(call[1][call[1].length - 1]).toBe('--')
+  })
+
+  // reason: the terminator is what refuses a path-shaped name, and it is git
+  // that refuses it — `git checkout a.ts --` is `fatal: invalid reference`.
+  // That is why `unsafeName` lists no paths: git rejects every one of them,
+  // including the shapes no list here would have thought of.
+  it('hands a path-shaped name to git as a ref, which git refuses', async () => {
+    const run = vi.fn(async () => fail('fatal: invalid reference: a.ts'))
+    expect(await checkout('/r', 'a.ts', false, run)).toEqual({ ok: false, reason: 'fatal: invalid reference: a.ts' })
+    expect(run).toHaveBeenCalledWith('/r', ['checkout', 'a.ts', '--'])
   })
 
   // reason: git refuses only when the changes would be overwritten, and it
@@ -133,13 +156,18 @@ describe('checkout', () => {
     // Non-vacuous: the same stub does run for an ordinary name, so the
     // refusal above is the guard and not a test that never reaches git.
     expect(await checkout('/r', 'f', false, run)).toEqual({ ok: true })
-    expect(run).toHaveBeenCalledWith('/r', ['checkout', 'f'])
+    expect(run).toHaveBeenCalledWith('/r', ['checkout', 'f', '--'])
   })
 
-  it('refuses the pathspec that would discard the working tree', async () => {
-    const run = vi.fn(async () => ok())
-    expect(await checkout('/r', '.', false, run)).toEqual({ ok: false, reason: 'That is not a branch name.' })
-    expect(run).not.toHaveBeenCalled()
+  // reason: `.` used to be refused by name here. It no longer needs to be:
+  // with the terminator `git checkout . --` is `fatal: invalid reference`, so
+  // the pathspec that would have discarded the working tree is refused by git
+  // itself — which is the check that also covers every path this file never
+  // thought to list.
+  it('sends the pathspec that would discard the working tree as a ref, which git refuses', async () => {
+    const run = vi.fn(async () => fail('fatal: invalid reference: .'))
+    expect((await checkout('/r', '.', false, run)).ok).toBe(false)
+    expect(run).toHaveBeenCalledWith('/r', ['checkout', '.', '--'])
   })
 
   it('reports an ordinary failure with no blocked list', async () => {
@@ -154,7 +182,7 @@ describe('createBranch', () => {
   it('creates the branch and switches to it', async () => {
     const run = vi.fn(async () => ok())
     expect(await createBranch('/r', 'feature', run)).toEqual({ ok: true })
-    expect(run).toHaveBeenCalledWith('/r', ['checkout', '-b', 'feature'])
+    expect(run).toHaveBeenCalledWith('/r', ['checkout', '-b', 'feature', '--'])
   })
 
   // reason: git's own rules are long and this is not the place to
@@ -174,7 +202,7 @@ describe('createBranch', () => {
     expect(run).not.toHaveBeenCalled()
     // Non-vacuous: an ordinary name does reach git through this same stub.
     expect(await createBranch('/r', 'f', run)).toEqual({ ok: true })
-    expect(run).toHaveBeenCalledWith('/r', ['checkout', '-b', 'f'])
+    expect(run).toHaveBeenCalledWith('/r', ['checkout', '-b', 'f', '--'])
   })
 
   // reason: git writes a hook's rejection to stdout, so a `pre-checkout` or

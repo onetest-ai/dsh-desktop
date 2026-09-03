@@ -1045,6 +1045,28 @@ describe('the git panel', () => {
     expect(staged).toEqual(['new.ts', 'old.ts'])
   })
 
+  // reason: git puts `from` on both halves of a rename record, so `git mv old
+  // new` followed by editing `new` is a staged `R new (from old)` and a
+  // changed `M new`, both ticked. The commit has to restage the new content
+  // and leave the staged deletion of the old name alone — anything that
+  // unstages `old.ts` records an addition beside a file that is still there,
+  // which is a copy and not a rename.
+  it('commits a renamed-then-edited file as a rename, not as a copy', async () => {
+    const bridge = stubBridge({
+      repos: [
+        repo({
+          staged: [{ path: 'new.ts', status: 'R', from: 'old.ts' }],
+          changed: [{ path: 'new.ts', status: 'M', from: 'old.ts' }],
+        }),
+      ],
+    })
+    await load(bridge)
+    await commit('a message')
+    // `staged` names both halves, so `keep` must name the old one or main
+    // unstages it; the new one is in `add`, which restages the fresh content.
+    expect(bridge.commitCalls).toEqual([['/r', 'a message', ['new.ts'], ['old.ts'], ['new.ts', 'old.ts']]])
+  })
+
   // reason: the per-row Unstage half-unstages a rename in the same way — it
   // takes the new name out of the index and leaves the deletion of the old.
   it('unstages both names from the row button', async () => {
