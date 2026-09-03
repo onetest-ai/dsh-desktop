@@ -48,23 +48,29 @@ describe('unstage', () => {
 
 describe('discard', () => {
   // reason: a tracked file is restored from the index; an untracked one has
-  // nothing to restore to and must be deleted. One command cannot do both,
-  // and `restore` silently ignores a path it does not track — so an
-  // untracked file passed to it would be reported as discarded and still
-  // be sitting there.
+  // nothing to restore to and must be deleted. Passing an untracked path to
+  // `restore` fails with a pathspec error rather than doing nothing, which
+  // — combined with stop-at-first-failure — means a misclassified path
+  // aborts the discard before the untracked half runs.
   it('restores tracked paths and removes untracked ones, separately', async () => {
     const run = vi.fn(async () => ok())
     expect(await discard('/r', ['tracked.ts'], ['new.ts'], run)).toEqual({ ok: true })
     expect(run.mock.calls.map((call) => call[1])).toEqual([
       ['restore', '--worktree', '--', 'tracked.ts'],
-      ['clean', '-f', '--', 'new.ts'],
+      ['clean', '-f', '-d', '--', 'new.ts'],
     ])
   })
 
   it('skips the command it has no paths for', async () => {
     const run = vi.fn(async () => ok())
     await discard('/r', [], ['new.ts'], run)
-    expect(run.mock.calls.map((call) => call[1])).toEqual([['clean', '-f', '--', 'new.ts']])
+    expect(run.mock.calls.map((call) => call[1])).toEqual([['clean', '-f', '-d', '--', 'new.ts']])
+  })
+
+  it('removes a directory-shaped untracked path', async () => {
+    const run = vi.fn(async () => ok())
+    expect(await discard('/r', [], ['newdir/'], run)).toEqual({ ok: true })
+    expect(run).toHaveBeenCalledWith('/r', ['clean', '-f', '-d', '--', 'newdir/'])
   })
 
   it('stops at the first failure rather than carrying on', async () => {

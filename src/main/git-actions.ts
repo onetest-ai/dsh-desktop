@@ -59,10 +59,10 @@ export async function unstage(repo: string, paths: string[], run: typeof runGit 
  *
  * Two commands, because they are two different things: a tracked file is
  * restored from the index, and an untracked one has nothing to restore to
- * and is deleted. `restore` ignores a path it does not track, so an
- * untracked file sent to it would be reported as discarded and still be
- * there — which is the worst possible answer for an action that cannot be
- * undone.
+ * and must be deleted. Passing an untracked path to `restore` fails with a
+ * pathspec error rather than doing nothing, which — combined with
+ * stop-at-first-failure — means a misclassified path aborts the discard
+ * before the untracked half runs.
  * @param repo - the repository.
  * @param tracked - paths git knows about.
  * @param untracked - paths it does not.
@@ -79,6 +79,6 @@ export async function discard(
     const out = await act(repo, ['restore', '--worktree', '--', ...tracked], run)
     if (!out.ok) return out
   }
-  if (untracked.length > 0) return await act(repo, ['clean', '-f', '--', ...untracked], run)
+  if (untracked.length > 0) return await act(repo, ['clean', '-f', '-d', '--', ...untracked], run)
   return { ok: true }
 }
