@@ -510,6 +510,16 @@ function commitTarget(): RepoView | undefined {
  * Absent with one candidate: a control with one option is a control that only
  * takes up room. The chosen path survives a redraw, and falls back to the
  * first candidate when the repository it named no longer has anything ticked.
+ *
+ * The options are rebuilt only when they do not already match, so a native
+ * dropdown the user has open is not torn out from under them by a refresh a
+ * watcher asked for. What they are compared against is the `<select>`'s own
+ * options rather than a note kept beside it: a note has to be invalidated
+ * everywhere the options are cleared, and the one place that was missed —
+ * emptying the list when the second repository stopped being a candidate —
+ * left the marker claiming a list that was no longer there, so re-ticking
+ * that file showed the selector with nothing in it. A comparison derived
+ * from the element cannot go stale, because there is nothing to keep in step.
  * @param candidates - the repositories that have something ticked.
  */
 function syncRepoChoice(candidates: RepoView[]): void {
@@ -521,10 +531,9 @@ function syncRepoChoice(candidates: RepoView[]): void {
     return
   }
   if (!candidates.some((repo) => repo.path === chosenRepo)) chosenRepo = candidates[0].path
-  const wanted = candidates.map((repo) => repo.path).join('\u0000')
-  // Rebuilt only when the list itself changed, so an open dropdown is not
-  // torn out from under the pointer by a watcher-driven refresh.
-  if (picker.dataset.repos !== wanted) {
+  const wanted = candidates.map((repo) => repo.path)
+  const shown = [...picker.options].map((option) => option.value)
+  if (shown.length !== wanted.length || shown.some((path, at) => path !== wanted[at])) {
     picker.textContent = ''
     for (const repo of candidates) {
       const option = document.createElement('option')
@@ -532,7 +541,6 @@ function syncRepoChoice(candidates: RepoView[]): void {
       option.textContent = repo.name
       picker.append(option)
     }
-    picker.dataset.repos = wanted
   }
   picker.value = chosenRepo ?? ''
 }

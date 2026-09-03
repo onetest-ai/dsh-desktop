@@ -410,6 +410,33 @@ describe('the git panel', () => {
     expect(bridge.commitCalls).toEqual([['/two', 'a message', ['b.ts'], [], []]])
   })
 
+  // reason: the options were once rebuilt only when a note kept beside the
+  // `<select>` disagreed with the candidate list, and clearing the options as
+  // the second repository stopped being a candidate did not clear that note.
+  // Re-ticking the file — an ordinary undo — then matched the stale note, the
+  // rebuild was skipped, and the selector came back visible and empty.
+  it('refills the selector when a repository stops being a candidate and becomes one again', async () => {
+    const bridge = stubBridge({
+      repos: [
+        repo({ path: '/one', changed: [{ path: 'a.ts', status: 'M' }] }),
+        repo({ path: '/two', changed: [{ path: 'b.ts', status: 'M' }] }),
+      ],
+    })
+    await load(bridge)
+    const row = document.getElementById('commit-repo-row') as HTMLElement
+    const picker = document.getElementById('commit-repo') as HTMLSelectElement
+    expect([...picker.options].map((option) => option.value)).toEqual(['/one', '/two'])
+    // Down to one candidate: the row goes away.
+    tickFor('b.ts').click()
+    expect(row.hidden).toBe(true)
+    // And back up to two, which is where the selector was left empty.
+    tickFor('b.ts').click()
+    expect(row.hidden).toBe(false)
+    expect([...picker.options].map((option) => option.value)).toEqual(['/one', '/two'])
+    expect([...picker.options].map((option) => option.textContent)).toEqual(['one', 'two'])
+    expect(picker.value).toBe('/one')
+  })
+
   // reason: a control with one option is a control that only takes up room.
   it('shows no selector when only one repository has ticks', async () => {
     const bridge = stubBridge({
