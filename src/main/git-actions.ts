@@ -3,18 +3,48 @@ import { runGit } from './git-run'
 /** What one action reports back. */
 export type ActionOutcome = { ok: true } | { ok: false; reason: string }
 
+/** What is said when git failed and neither stream carried a reason. */
+const NOTHING_SAID = 'git failed without saying why.'
+
 /**
- * The first line of what git said, which is what the panel shows.
+ * The lines of one stream, trimmed, with the blank ones dropped.
+ * @param text - a whole stream.
+ * @returns the lines worth showing, in order.
+ */
+function spoken(text: string): string[] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+}
+
+/**
+ * What git said, cut to the one line the panel shows.
  *
  * git writes a usable sentence first and hints, stacks, and advice after it.
  * A panel row is one line wide, and the rest belongs in the terminal.
  *
+ * stdout is read when stderr is blank, because git's three commonest refusals
+ * are not on stderr at all: a commit a hook rejected (husky and its like
+ * print there), `nothing to commit, working tree clean` — which exits 1 — and
+ * the `CONFLICT (content): …` of a `git stash pop` that could not merge.
+ * Without this the panel's most delicate message, the one saying work is
+ * still in a stash, ends "git failed without saying why."
+ *
+ * The LAST line of stdout rather than the first: git narrates there — `On
+ * branch main`, `Auto-merging a.ts` — and the conclusion is what it finishes
+ * with. stderr keeps the opposite rule for the opposite reason.
+ *
  * Shared by git modules to ensure the fallback message never drifts between them.
- * @param stderr - what git wrote.
- * @returns the first line, or a fallback when it wrote nothing.
+ * @param stderr - what git wrote to stderr.
+ * @param stdout - what it wrote to stdout, read only when stderr is silent.
+ * @returns the line to show, or a fallback when git said nothing anywhere.
  */
-export function firstLine(stderr: string): string {
-  return stderr.split('\n')[0].trim() || 'git failed without saying why.'
+export function firstLine(stderr: string, stdout: string): string {
+  const said = spoken(stderr)
+  if (said.length > 0) return said[0]
+  const out = spoken(stdout)
+  return out.length === 0 ? NOTHING_SAID : out[out.length - 1]
 }
 
 /**
@@ -26,7 +56,7 @@ export function firstLine(stderr: string): string {
  */
 async function act(repo: string, args: string[], run: typeof runGit): Promise<ActionOutcome> {
   const out = await run(repo, args)
-  return out.code === 0 ? { ok: true } : { ok: false, reason: firstLine(out.stderr) }
+  return out.code === 0 ? { ok: true } : { ok: false, reason: firstLine(out.stderr, out.stdout.toString('utf8')) }
 }
 
 /**

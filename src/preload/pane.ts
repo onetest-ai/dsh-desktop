@@ -106,7 +106,11 @@ contextBridge.exposeInMainWorld('pane', {
   // takes either that or a `stash@{n}`: a position is whatever is on top of
   // the stack at the moment it is read, which is not the same entry a moment
   // later if anything else in the repository stashed in between.
-  pushStash: (repo: string, message: string) => ipcRenderer.invoke('git:stash-push', repo, message),
+  // `untracked` adds `-u`. It is the caller's to decide because only the
+  // caller knows which of git's two checkout refusals it is clearing, and a
+  // `-u` that nobody asked for sweeps build output into a stash.
+  pushStash: (repo: string, message: string, untracked = false) =>
+    ipcRenderer.invoke('git:stash-push', repo, message, untracked),
   applyStash: (repo: string, ref: string, pop: boolean) => ipcRenderer.invoke('git:stash-apply', repo, ref, pop),
   dropStash: (repo: string, ref: string) => ipcRenderer.invoke('git:stash-drop', repo, ref),
   onShowDiff: (listener: (root: string, relative: string, proposed: string) => void) => {

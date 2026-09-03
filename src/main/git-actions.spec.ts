@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { commit, discard, stage, unstage } from './git-actions'
+import { commit, discard, firstLine, stage, unstage } from './git-actions'
 import type { GitResult } from './git-run'
 
 const ok = (): GitResult => ({ code: 0, stdout: Buffer.alloc(0), stderr: '' })
@@ -172,5 +172,60 @@ describe('discard', () => {
     const out = await discard('/r', ['a.ts'], ['b.ts'], run)
     expect(out).toEqual({ ok: false, reason: 'error: unable to unlink' })
     expect(run).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('firstLine', () => {
+  it('shows the first line of stderr and drops the hints after it', () => {
+    expect(firstLine('fatal: not a git repository\nhint: try init\n', '')).toBe('fatal: not a git repository')
+  })
+
+  // reason: git writes a rejected commit's reason to stdout — husky and its
+  // like print there — so without this fallback the panel says "git failed
+  // without saying why." for a hook that said exactly why.
+  it('falls back to stdout when a hook rejected the commit on it', () => {
+    expect(
+      firstLine('', 'husky > pre-commit\nlint failed\nhusky - pre-commit hook exited with code 1\n'),
+    ).toBe('husky - pre-commit hook exited with code 1')
+  })
+
+  // reason: `git commit` on a clean tree exits 1 and says so on stdout, under
+  // a line naming the branch. The last line is the conclusion; the first is
+  // narration.
+  it('falls back to stdout for a commit with nothing to commit', () => {
+    expect(firstLine('', 'On branch main\nnothing to commit, working tree clean\n')).toBe(
+      'nothing to commit, working tree clean',
+    )
+  })
+
+  // reason: this is the message the stash-and-switch chain quotes when the
+  // work is still stashed. `git stash pop` reports its conflict on stdout, so
+  // the panel's safety message would otherwise end "without saying why."
+  it('falls back to stdout for a conflicting stash pop', () => {
+    expect(firstLine('', 'Auto-merging a.ts\nCONFLICT (content): Merge conflict in a.ts\n')).toBe(
+      'CONFLICT (content): Merge conflict in a.ts',
+    )
+  })
+
+  // reason: an empty message is worse than a wrong one — the user cannot
+  // tell whether anything happened at all.
+  it('says something when git said nothing on either stream', () => {
+    expect(firstLine('', '')).toBe('git failed without saying why.')
+  })
+})
+
+describe('a failure git only wrote to stdout', () => {
+  // reason: the whole chain — `act`, and every module that shares it — has to
+  // carry stdout through, not just `firstLine` itself.
+  it('reaches the caller through an action, not only through firstLine', async () => {
+    const run = vi.fn(async () => ({
+      code: 1,
+      stdout: Buffer.from('On branch main\nnothing to commit, working tree clean\n', 'utf8'),
+      stderr: '',
+    }))
+    expect(await commit('/r', 'a message', ['a.ts'], [], [], run)).toEqual({
+      ok: false,
+      reason: 'nothing to commit, working tree clean',
+    })
   })
 })

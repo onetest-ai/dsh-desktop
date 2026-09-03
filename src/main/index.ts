@@ -52,8 +52,8 @@ import { DIVIDER_WIDTH, RAIL_WIDTH, nextSideView, type Columns, type SideView } 
 import { gitDiffFor, readProject, refuseUnlessInProject, type ProjectGit } from './git-model'
 import { findRepos, hasGit } from './git-find'
 import { commit, discard, stage, unstage, type ActionOutcome } from './git-actions'
-import { checkout, createBranch } from './git-branch'
-import { applyStash, dropStash, pushStash } from './git-stash'
+import { checkout, createBranch, type BlockedKind } from './git-branch'
+import { applyStash, dropStash, pushStash, stashLabel } from './git-stash'
 import type { Section } from './git-status'
 import { setGitPath } from './git-run'
 import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
@@ -911,15 +911,15 @@ export async function gitCommitFor(
  * @param name - the branch to switch to.
  * @param remote - whether the row was a remote-tracking branch.
  * @param known - the repositories currently discovered.
- * @returns what the action reported — with the files that blocked it, when
- *   git named any — or the refusal.
+ * @returns what the action reported — with the files that blocked it and
+ *   which of git's two refusals it was, when git named any — or the refusal.
  */
 export async function gitCheckoutFor(
   repo: string,
   name: string,
   remote: boolean,
   known: () => string[],
-): Promise<ActionOutcome & { blocked?: string[] }> {
+): Promise<ActionOutcome & { blocked?: string[]; blockedKind?: BlockedKind }> {
   return refuseUnlessInProject(repo, [], known) ?? (await checkout(repo, name, remote))
 }
 
@@ -936,13 +936,25 @@ export async function gitCreateBranchFor(repo: string, name: string, known: () =
 
 /**
  * Stash the working tree, if the caller may act on the repository.
+ *
+ * The sha of the entry created is part of the answer, not an extra the
+ * runtime happens to carry: the stash-and-switch chain pops by it, and a
+ * signature that omitted it would invite a refactor to pop `stash@{0}`
+ * instead — the position an agent stashing in the same repository slides out
+ * from under it, with TypeScript's approval.
  * @param repo - the repository.
  * @param message - what to call it; blank pushes without one.
+ * @param untracked - true to take untracked files too; see `pushStash`.
  * @param known - the repositories currently discovered.
- * @returns what the action reported, or the refusal.
+ * @returns what the action reported and the sha it named, or the refusal.
  */
-export async function gitStashPushFor(repo: string, message: string, known: () => string[]): Promise<ActionOutcome> {
-  return refuseUnlessInProject(repo, [], known) ?? (await pushStash(repo, message))
+export async function gitStashPushFor(
+  repo: string,
+  message: string,
+  untracked: boolean,
+  known: () => string[],
+): Promise<ActionOutcome & { ref?: string }> {
+  return refuseUnlessInProject(repo, [], known) ?? (await pushStash(repo, message, untracked))
 }
 
 /**
@@ -2509,8 +2521,8 @@ if (!app.requestSingleInstanceLock()) {
       notifyGitChanged()
       return out
     })
-    ipcMain.handle('git:stash-push', async (_event, repo: string, message: string) => {
-      const out = await gitStashPushFor(repo, message, gitRepoPaths)
+    ipcMain.handle('git:stash-push', async (_event, repo: string, message: string, untracked: boolean) => {
+      const out = await gitStashPushFor(repo, message, untracked === true, gitRepoPaths)
       notifyGitChanged()
       return out
     })
@@ -2531,7 +2543,10 @@ if (!app.requestSingleInstanceLock()) {
         buttons: ['Drop', 'Cancel'],
         defaultId: 1,
         cancelId: 1,
-        message: `Drop ${ref}?`,
+        // What the row named, not the raw handle it acts on: the panel passes
+        // a sha, and a forty-character hash is not something anyone can check
+        // a confirmation against.
+        message: `Drop ${stashLabel(ref)}?`,
         detail: 'The stash is thrown away. It is reachable only by a hash this panel never showed you.',
       })
       if (response !== 0) return { ok: false, reason: '' }

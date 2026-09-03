@@ -443,6 +443,9 @@ vi.mock('./git-stash', () => ({
   applyStash: (...args: unknown[]) => applyStashMock(...(args as [])),
   dropStash: (...args: unknown[]) => dropStashMock(...(args as [])),
   listStashes: vi.fn(async () => []),
+  // Not mocked away: it is the pure label the drop confirmation is worded
+  // with, and a stub would let the dialog say something the user never saw.
+  stashLabel: (ref: string) => ref,
 }))
 
 const preflightMock = vi.fn(() => ({ ok: true }))
@@ -2456,7 +2459,7 @@ describe('the git write channels', () => {
     const refused = { ok: false, reason: 'That repository is not in the open project.' }
     expect(await index.gitCheckoutFor('/etc', 'main', false, () => [repo])).toEqual(refused)
     expect(await index.gitCreateBranchFor('/etc', 'topic', () => [repo])).toEqual(refused)
-    expect(await index.gitStashPushFor('/etc', 'wip', () => [repo])).toEqual(refused)
+    expect(await index.gitStashPushFor('/etc', 'wip', false, () => [repo])).toEqual(refused)
     expect(await index.gitStashApplyFor('/etc', 'stash@{0}', false, () => [repo])).toEqual(refused)
     expect(await index.gitStashDropFor('/etc', 'stash@{0}', () => [repo])).toEqual(refused)
     for (const mock of [checkoutMock, createBranchMock, pushStashMock, applyStashMock, dropStashMock]) {
@@ -2471,6 +2474,16 @@ describe('the git write channels', () => {
     const { gitCheckoutFor } = await exports()
     await gitCheckoutFor(repo, 'origin/feature', true, () => [repo])
     expect(checkoutMock).toHaveBeenCalledWith(repo, 'origin/feature', true)
+  })
+
+  // reason: `-u` is what clears an untracked block, and it is decided by the
+  // panel — which knows which of git's two refusals it is answering. A flag
+  // dropped on the way through would leave the offer stashing the wrong
+  // thing, which is how the user ends up with a stash they never asked for.
+  it('carries the untracked flag through to the stash push', async () => {
+    const { gitStashPushFor } = await exports()
+    await gitStashPushFor(repo, 'wip', true, () => [repo])
+    expect(pushStashMock).toHaveBeenCalledWith(repo, 'wip', true)
   })
 
   /** Boot with one project open and one repository discovered in it. */

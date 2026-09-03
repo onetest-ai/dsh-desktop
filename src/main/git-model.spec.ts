@@ -101,14 +101,14 @@ describe('readProject', () => {
     const run = vi.fn(async (_cwd: string, args: string[]) => {
       if (args[0] === 'status') return ok('# branch.head main\0')
       if (args[0] === 'branch') return ok('refs/heads/main\tmain\t\t*\n')
-      if (args[0] === 'stash') return ok('stash@{0}\tOn main: wip\n')
+      if (args[0] === 'stash') return ok('c0ffee11\tstash@{0}\tOn main: wip\n')
       return ok('')
     })
     const out = await readProject(process.cwd(), run)
     expect(out).toMatchObject({ ok: true })
     if (!out.ok) return
     expect(out.repos[0].branches).toEqual([{ name: 'main', upstream: '', current: true, remote: false }])
-    expect(out.repos[0].stashes).toEqual([{ ref: 'stash@{0}', branch: 'main', message: 'wip' }])
+    expect(out.repos[0].stashes).toEqual([{ ref: 'stash@{0}', sha: 'c0ffee11', branch: 'main', message: 'wip' }])
   })
 
   // reason: three commands per repository, and a project may hold several —
