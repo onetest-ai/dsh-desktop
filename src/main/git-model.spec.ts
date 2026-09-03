@@ -96,6 +96,35 @@ describe('readProject', () => {
     const out = await readProject(process.cwd(), run)
     expect(out.ok).toBe(false)
   })
+
+  it('reads each repository with its branches and its stashes', async () => {
+    const run = vi.fn(async (_cwd: string, args: string[]) => {
+      if (args[0] === 'status') return ok('# branch.head main\0')
+      if (args[0] === 'branch') return ok('refs/heads/main\tmain\t\t*\n')
+      if (args[0] === 'stash') return ok('stash@{0}\tOn main: wip\n')
+      return ok('')
+    })
+    const out = await readProject(process.cwd(), run)
+    expect(out).toMatchObject({ ok: true })
+    if (!out.ok) return
+    expect(out.repos[0].branches).toEqual([{ name: 'main', upstream: '', current: true, remote: false }])
+    expect(out.repos[0].stashes).toEqual([{ ref: 'stash@{0}', branch: 'main', message: 'wip' }])
+  })
+
+  // reason: three commands per repository, and a project may hold several —
+  // asking for them one after another triples the time the panel takes to
+  // appear for no reason, since none depends on another.
+  it('asks for status, branches and stashes together rather than in turn', async () => {
+    const order: string[] = []
+    const run = vi.fn(async (_cwd: string, args: string[]) => {
+      order.push(`start:${args[0]}`)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      order.push(`end:${args[0]}`)
+      return args[0] === 'status' ? ok('# branch.head main\0') : ok('')
+    })
+    await readProject(process.cwd(), run)
+    expect(order.slice(0, 3).every((entry) => entry.startsWith('start:'))).toBe(true)
+  })
 })
 
 // reason: `git:open-diff` is reachable from a renderer and names a repository

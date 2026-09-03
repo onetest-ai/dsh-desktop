@@ -1,4 +1,12 @@
-import { colourOf, parts, rowsFor, type RepoStatusView, type RowGroup } from './git-rows.ts'
+import {
+  colourOf,
+  parts,
+  rowsFor,
+  type BranchRowView,
+  type RepoStatusView,
+  type RowGroup,
+  type StashRowView,
+} from './git-rows.ts'
 import { fileIcon } from './file-icon.ts'
 import { icon } from './icons.ts'
 import './bridge.ts'
@@ -13,6 +21,8 @@ interface RepoView {
   path: string
   name: string
   status: RepoStatusView
+  branches: BranchRowView[]
+  stashes: StashRowView[]
 }
 
 /**

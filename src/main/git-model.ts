@@ -1,8 +1,10 @@
 import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { listBranches, type BranchView } from './git-branch'
 import { findRepos } from './git-find'
 import { runGit } from './git-run'
+import { listStashes, type StashView } from './git-stash'
 import { parseStatus, type RepoStatus, type Section } from './git-status'
 
 /** One repository, as the panel draws it. */
@@ -11,6 +13,10 @@ export interface Repo {
   /** Its directory's own name, which is what the header shows. */
   name: string
   status: RepoStatus
+  /** The branches this repository has, local and remote-tracking. */
+  branches: BranchView[]
+  /** What is stashed in it, newest first. */
+  stashes: StashView[]
 }
 
 /** What the panel is showing, or why it is showing nothing. */
@@ -28,11 +34,18 @@ export type ProjectGit = { ok: true; repos: Repo[] } | { ok: false; reason: stri
 export async function readProject(root: string, run: typeof runGit = runGit): Promise<ProjectGit> {
   const repos: Repo[] = []
   for (const path of findRepos(root)) {
-    const out = await run(path, ['status', '--porcelain=2', '-z', '--branch'])
-    if (out.code !== 0) {
-      return { ok: false, reason: `${basename(path)}: ${out.stderr.split('\n')[0]}` }
+    // Together rather than in turn: none of the three depends on another,
+    // and a project holding several repositories would otherwise pay for
+    // every round trip three times over.
+    const [status, branches, stashes] = await Promise.all([
+      run(path, ['status', '--porcelain=2', '-z', '--branch']),
+      listBranches(path, run),
+      listStashes(path, run),
+    ])
+    if (status.code !== 0) {
+      return { ok: false, reason: `${basename(path)}: ${status.stderr.split('\n')[0]}` }
     }
-    repos.push({ path, name: basename(path), status: parseStatus(out.stdout) })
+    repos.push({ path, name: basename(path), status: parseStatus(status.stdout), branches, stashes })
   }
   return { ok: true, repos }
 }

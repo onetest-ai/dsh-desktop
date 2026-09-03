@@ -15,6 +15,21 @@ export interface RepoStatusView {
   untracked: EntryView[]
 }
 
+/** One branch, as the panel receives it. Mirrors main's `BranchView`. */
+export interface BranchRowView {
+  name: string
+  upstream: string
+  current: boolean
+  remote: boolean
+}
+
+/** One stash, as the panel receives it. Mirrors main's `StashView`. */
+export interface StashRowView {
+  ref: string
+  branch: string
+  message: string
+}
+
 /** One section of a repository's rows. */
 export interface RowGroup {
   section: 'staged' | 'changed' | 'untracked'

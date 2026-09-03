@@ -1,5 +1,5 @@
 import type { Project, TreeEntry } from './tree.ts'
-import type { RepoStatusView, RowGroup } from './git-rows.ts'
+import type { BranchRowView, RepoStatusView, RowGroup, StashRowView } from './git-rows.ts'
 
 /**
  * What the git panel is showing, or why it is showing nothing.
@@ -9,7 +9,10 @@ import type { RepoStatusView, RowGroup } from './git-rows.ts'
  * bridge, not main's own model.
  */
 export type ProjectGitView =
-  | { ok: true; repos: { path: string; name: string; status: RepoStatusView }[] }
+  | {
+      ok: true
+      repos: { path: string; name: string; status: RepoStatusView; branches: BranchRowView[]; stashes: StashRowView[] }[]
+    }
   | { ok: false; reason: string }
 
 /** What an operation on one entry reports back. */
