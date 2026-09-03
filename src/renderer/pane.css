@@ -801,6 +801,29 @@ body {
   margin: 0 0 8px;
 }
 
+/* Which repository the commit goes to, present only when more than one has
+   something ticked. A row rather than a bare control: the word is what makes
+   a list of checkout names mean "repository" and not "branch". */
+.commit-repo {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.commit-repo select {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 4px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 4px;
+  background: var(--dsw-alias-surface-primary, transparent);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
 .commit-message {
   min-height: 40px;
   max-height: 76px;

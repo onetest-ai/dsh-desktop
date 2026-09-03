@@ -11,7 +11,8 @@ import type { EntryView, RepoStatusView } from './git-rows.ts'
 function page(): void {
   document.body.innerHTML =
     '<p class="empty" id="git-empty" hidden></p>' +
-    '<form id="commit-form" hidden><textarea id="commit-message"></textarea>' +
+    '<form id="commit-form" hidden><label id="commit-repo-row" hidden>' +
+    '<select id="commit-repo"></select></label><textarea id="commit-message"></textarea>' +
     '<button type="submit" id="commit"></button></form>' +
     '<p class="git-note" id="git-note" hidden></p><div id="repos"></div>'
 }
@@ -28,7 +29,7 @@ interface StubRepo {
 /** What the stub bridge recorded, alongside the calls the panel makes on it. */
 interface StubBridge {
   readGit: () => Promise<unknown>
-  onGitChanged: () => void
+  onGitChanged: (listener: () => void) => void
   openGitDiff: (repo: string, path: string, section: string) => void
   gitRowMenu: (section: string) => Promise<string | undefined>
   stageFiles: (repo: string, paths: string[]) => Promise<{ ok: true }>
@@ -43,6 +44,8 @@ interface StubBridge {
   ) => Promise<{ ok: true } | { ok: false; reason: string }>
   askTheme: () => void
   onTheme: () => void
+  /** Fire the `git:changed` listener the panel registered, as main would. */
+  fire: () => void
   /** Every `commitFiles`, argument for argument. */
   commitCalls: unknown[][]
   /** Every `stageFiles`, `unstageFiles` and `discardFiles`, named. */
@@ -67,9 +70,13 @@ function stubBridge(options: {
   const commitCalls: unknown[][] = []
   const actionCalls: unknown[][] = []
   const diffCalls: unknown[][] = []
+  let changed: (() => void) | undefined
   return {
     readGit: options.read ?? (async () => ({ ok: true, repos: options.repos ?? [] })),
-    onGitChanged: () => {},
+    onGitChanged: (listener: () => void) => {
+      changed = listener
+    },
+    fire: () => changed?.(),
     openGitDiff: (repo, path, section) => {
       diffCalls.push(['open-diff', repo, path, section])
     },
@@ -366,9 +373,11 @@ describe('the git panel', () => {
     expect(button.title).toBe('Tick the files to include in the commit.')
   })
 
-  // reason: a message means nothing across two repositories, and committing
-  // the wrong one is not undone by unticking.
-  it('will not guess which repository a commit is for', async () => {
+  // reason: a message means nothing across two repositories, and inferring
+  // which one is meant from the ticks leaves a project of two dirty checkouts
+  // unable to commit at all — tracked changes arrive ticked, so both are
+  // always candidates until the user empties one.
+  it('offers a selector when more than one repository is ticked, and commits the chosen one', async () => {
     const bridge = stubBridge({
       repos: [
         repo({ path: '/one', changed: [{ path: 'a.ts', status: 'M' }] }),
@@ -376,16 +385,94 @@ describe('the git panel', () => {
       ],
     })
     await load(bridge)
+    const row = document.getElementById('commit-repo-row') as HTMLElement
+    const picker = document.getElementById('commit-repo') as HTMLSelectElement
+    expect(row.hidden).toBe(false)
+    expect([...picker.options].map((option) => option.value)).toEqual(['/one', '/two'])
+    // The first by default, and Commit is available rather than disabled.
+    expect(picker.value).toBe('/one')
     await commit('a message')
-    expect(bridge.commitCalls).toEqual([])
-    // Disabled rather than refused on press, and the tooltip is where a
-    // disabled control in this panel says what would make it work again.
-    expect((document.getElementById('commit') as HTMLButtonElement).title).toContain('2 repositories')
-    // Untick one repository entirely and the other is the only candidate.
-    ;(
-      document.querySelectorAll('input[aria-label="Include a.ts in the next commit"]')[0] as HTMLInputElement
-    ).click()
+    expect(bridge.commitCalls).toEqual([['/one', 'a message', ['a.ts'], [], []]])
+  })
+
+  it('commits the repository the selector was changed to', async () => {
+    const bridge = stubBridge({
+      repos: [
+        repo({ path: '/one', changed: [{ path: 'a.ts', status: 'M' }] }),
+        repo({ path: '/two', changed: [{ path: 'b.ts', status: 'M' }] }),
+      ],
+    })
+    await load(bridge)
+    const picker = document.getElementById('commit-repo') as HTMLSelectElement
+    picker.value = '/two'
+    picker.dispatchEvent(new Event('change'))
     await commit('a message')
     expect(bridge.commitCalls).toEqual([['/two', 'a message', ['b.ts'], [], []]])
+  })
+
+  // reason: a control with one option is a control that only takes up room.
+  it('shows no selector when only one repository has ticks', async () => {
+    const bridge = stubBridge({
+      repos: [
+        repo({ path: '/one', changed: [{ path: 'a.ts', status: 'M' }] }),
+        repo({ path: '/two' }),
+      ],
+    })
+    await load(bridge)
+    expect((document.getElementById('commit-repo-row') as HTMLElement).hidden).toBe(true)
+    await commit('a message')
+    expect(bridge.commitCalls).toEqual([['/one', 'a message', ['a.ts'], [], []]])
+  })
+
+  // reason: `draw` clears #repos, so a tick that redrew the panel took the
+  // focused checkbox out of the document and put a keyboard user back at the
+  // top of the panel on every space bar — undoing the reach the row was
+  // restructured to give them.
+  it('keeps focus on the tick that was just pressed', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ changed: [{ path: 'a.ts', status: 'M' }, { path: 'b.ts', status: 'M' }] })],
+    })
+    await load(bridge)
+    const tick = tickFor('a.ts')
+    tick.focus()
+    tick.click()
+    expect(tick.checked).toBe(false)
+    expect(document.activeElement).toBe(tick)
+    // And the section heading followed it into the half-ticked state without
+    // anything being redrawn.
+    const heading = document.querySelector(
+      'input[aria-label="Include every file under Changes in the next commit"]',
+    ) as HTMLInputElement
+    expect(heading.checked).toBe(false)
+    expect(heading.indeterminate).toBe(true)
+  })
+
+  // reason: a redraw the user did not ask for must not move the keyboard
+  // either — a watcher fires while the pointer is nowhere near the panel.
+  it('puts focus back on the same row after a refresh redraws the panel', async () => {
+    const bridge = stubBridge({ repos: [repo({ changed: [{ path: 'a.ts', status: 'M' }] })] })
+    await load(bridge)
+    const before = actionFor('a.ts', 'Stage')
+    before.focus()
+    bridge.fire()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    const after = actionFor('a.ts', 'Stage')
+    expect(after).not.toBe(before)
+    expect(document.activeElement).toBe(after)
+  })
+
+  // reason: Discard All on a clean repository raises the panel's one
+  // unrecoverable warning to ask about nothing, which teaches the user to
+  // dismiss the dialog that must never be dismissed out of habit.
+  it('offers a clean repository none of the header actions', async () => {
+    const bridge = stubBridge({ repos: [repo({ path: '/one' }), repo({ path: '/two', changed: [{ path: 'a.ts', status: 'M' }] })] })
+    await load(bridge)
+    const heads = [...document.querySelectorAll('.repo-head')]
+    expect(heads).toHaveLength(2)
+    expect(heads[0].querySelectorAll('.row-action')).toHaveLength(0)
+    expect([...heads[1].querySelectorAll('.row-action')].map((node) => node.getAttribute('aria-label'))).toEqual([
+      'Stage all',
+      'Discard all',
+    ])
   })
 })

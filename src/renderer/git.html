@@ -20,6 +20,13 @@
     <!-- Outside #repos, which is rebuilt on every tick and every refresh: a
          message box redrawn under the cursor loses what was typed into it. -->
     <form id="commit-form" class="commit" hidden>
+      <!-- Shown only when more than one repository has something ticked. A
+           commit belongs to one repository, and which one is a choice the
+           user makes rather than one the panel infers from the ticks. -->
+      <label class="commit-repo" id="commit-repo-row" hidden>
+        <span class="commit-repo-label">Repository</span>
+        <select id="commit-repo" aria-label="Repository to commit to"></select>
+      </label>
       <textarea id="commit-message" class="commit-message" rows="2" placeholder="Message" aria-label="Commit message"></textarea>
       <button type="submit" id="commit" class="commit-button">Commit</button>
     </form>

@@ -57,6 +57,46 @@ const collapsed = new Set<string>()
 const selection = new Selection()
 
 /**
+ * Which repository the commit box is aimed at, when more than one has ticks.
+ *
+ * Held outside the drawing so it survives a redraw the way the typed message
+ * does, and cleared to whatever is still on offer by `syncCommit`.
+ */
+let chosenRepo: string | undefined
+
+/**
+ * How to bring each drawn checkbox back in line with the selection.
+ *
+ * Rebuilt by every `draw`, and run instead of one: a tick changes no layout,
+ * only which boxes are filled and whether Commit is available. Redrawing
+ * `#repos` for that would take the focused control out of the document, which
+ * puts a keyboard user back at the top of the panel on every space bar — the
+ * exact reach the row was restructured to give them.
+ */
+const tickUpdates: (() => void)[] = []
+
+/**
+ * A name for one control that outlives the element drawing it.
+ *
+ * Used to put focus back where it was after a redraw that a watcher, not the
+ * user, asked for. Joined on NUL because a path may hold anything else.
+ * @param repo - the repository's path.
+ * @param section - the section, or the empty string for a repository header.
+ * @param path - the file's path, or the empty string for a header.
+ * @param what - which control on that row.
+ * @returns the key.
+ */
+function keyOf(repo: string, section: string, path: string, what: string): string {
+  return [repo, section, path, what].join('\u0000')
+}
+
+/** Run every tick updater and the commit box, without touching the layout. */
+function afterTick(): void {
+  for (const update of tickUpdates) update()
+  syncCommit()
+}
+
+/**
  * Show why an action did not run, or clear the last such note.
  *
  * A git failure is the repo's name and the first line of stderr, decided in
@@ -92,15 +132,17 @@ function run(act: () => Promise<GitResult>): void {
  * these, so an action does not also open the diff behind it and no button is
  * nested inside another — which is invalid, and which a browser is free to
  * take apart.
+ * @param key - a name for the control that outlives this element, so a redraw can put focus back on it.
  * @param label - what it does, for the tooltip and the screen reader.
  * @param glyph - the character to show.
  * @param act - the bridge call to make.
  * @returns the button.
  */
-function rowAction(label: string, glyph: string, act: () => Promise<GitResult>): HTMLButtonElement {
+function rowAction(key: string, label: string, glyph: string, act: () => Promise<GitResult>): HTMLButtonElement {
   const button = document.createElement('button')
   button.type = 'button'
   button.className = 'row-action'
+  button.dataset.key = key
   button.title = label
   button.setAttribute('aria-label', label)
   button.textContent = glyph
@@ -193,18 +235,24 @@ function branchTag(status: RepoStatusView): HTMLElement {
  */
 function sectionTick(repo: RepoView, group: RowGroup): HTMLInputElement {
   const paths = group.entries.map((entry) => entry.path)
-  const on = paths.filter((path) => selection.ticked(repo.path, group.section, path))
+  const on = (): string[] => paths.filter((path) => selection.ticked(repo.path, group.section, path))
   const tick = document.createElement('input')
   tick.type = 'checkbox'
   tick.className = 'git-tick'
-  tick.checked = on.length === paths.length
-  tick.indeterminate = on.length > 0 && on.length < paths.length
+  tick.dataset.key = keyOf(repo.path, group.section, '', 'section-tick')
   tick.setAttribute('aria-label', `Include every file under ${group.title} in the next commit`)
+  const update = (): void => {
+    const count = on().length
+    tick.checked = count === paths.length
+    tick.indeterminate = count > 0 && count < paths.length
+  }
+  update()
+  tickUpdates.push(update)
   // Partly ticked counts as not ticked: pressing it fills the section, which
   // is what a header tick in that state is reached for.
   tick.addEventListener('change', () => {
-    selection.setSection(repo.path, group.section, paths, on.length !== paths.length)
-    draw()
+    selection.setSection(repo.path, group.section, paths, on().length !== paths.length)
+    afterTick()
   })
   return tick
 }
@@ -246,16 +294,21 @@ function drawSection(repo: RepoView, group: RowGroup): DocumentFragment {
     // again has a row in two sections that mean different content, and one
     // tick answering for both would commit the wrong one.
     tick.checked = selection.ticked(repo.path, group.section, entry.path)
+    tick.dataset.key = keyOf(repo.path, group.section, entry.path, 'tick')
     tick.setAttribute('aria-label', `Include ${entry.path} in the next commit`)
+    tickUpdates.push(() => {
+      tick.checked = selection.ticked(repo.path, group.section, entry.path)
+    })
     tick.addEventListener('change', () => {
       selection.toggle(repo.path, group.section, entry.path)
-      draw()
+      afterTick()
     })
     row.append(tick)
 
     const open = document.createElement('button')
     open.type = 'button'
     open.className = 'row-open'
+    open.dataset.key = keyOf(repo.path, group.section, entry.path, 'open')
 
     // The same icons the file tree draws. The two views take turns in one
     // column, and a file that has an icon in one and not the other reads as
@@ -291,15 +344,18 @@ function drawSection(repo: RepoView, group: RowGroup): DocumentFragment {
     const actions = document.createElement('span')
     actions.className = 'row-actions'
     const one = [entry.path]
+    const at = (what: string): string => keyOf(repo.path, group.section, entry.path, what)
     if (group.section === 'staged') {
-      actions.append(rowAction('Unstage', '−', () => window.pane.unstageFiles(repo.path, one)))
+      actions.append(rowAction(at('unstage'), 'Unstage', '−', () => window.pane.unstageFiles(repo.path, one)))
     } else {
-      actions.append(rowAction('Stage', '+', () => window.pane.stageFiles(repo.path, one)))
+      actions.append(rowAction(at('stage'), 'Stage', '+', () => window.pane.stageFiles(repo.path, one)))
       // Untracked goes in the second list and tracked in the first: they are
       // different git commands, and the wrong one is a no-op at best.
       const tracked = group.section === 'untracked' ? [] : one
       const untracked = group.section === 'untracked' ? one : []
-      actions.append(rowAction('Discard', '↺', () => window.pane.discardFiles(repo.path, tracked, untracked)))
+      actions.append(
+        rowAction(at('discard'), 'Discard', '↺', () => window.pane.discardFiles(repo.path, tracked, untracked)),
+      )
     }
     row.append(actions)
 
@@ -323,11 +379,16 @@ function drawSection(repo: RepoView, group: RowGroup): DocumentFragment {
 }
 
 /**
- * The three actions a repository header carries.
+ * The actions a repository header carries, for the lists it actually has.
  *
  * Each acts on every path in the sections it applies to. Discard All names
  * the count rather than a filename in its confirmation, which main already
  * does when it is handed more than one path.
+ *
+ * An action whose lists are empty is left out rather than drawn dead: on a
+ * clean repository Discard All would otherwise raise a native warning asking
+ * to discard nothing, which teaches the user to dismiss the one dialog in the
+ * panel that must never be dismissed out of habit.
  * @param repo - the repository to act on.
  * @returns the buttons, ready to append.
  */
@@ -337,11 +398,24 @@ function repoActions(repo: RepoView): HTMLElement {
   const changed = repo.status.changed.map((entry) => entry.path)
   const untracked = repo.status.untracked.map((entry) => entry.path)
   const staged = repo.status.staged.map((entry) => entry.path)
-  actions.append(
-    rowAction('Stage all', '+', () => window.pane.stageFiles(repo.path, [...changed, ...untracked])),
-    rowAction('Unstage all', '−', () => window.pane.unstageFiles(repo.path, staged)),
-    rowAction('Discard all', '↺', () => window.pane.discardFiles(repo.path, changed, untracked)),
-  )
+  const at = (what: string): string => keyOf(repo.path, '', '', what)
+  if (changed.length + untracked.length > 0) {
+    actions.append(
+      rowAction(at('stage-all'), 'Stage all', '+', () =>
+        window.pane.stageFiles(repo.path, [...changed, ...untracked]),
+      ),
+    )
+  }
+  if (staged.length > 0) {
+    actions.append(rowAction(at('unstage-all'), 'Unstage all', '−', () => window.pane.unstageFiles(repo.path, staged)))
+  }
+  if (changed.length + untracked.length > 0) {
+    actions.append(
+      rowAction(at('discard-all'), 'Discard all', '↺', () =>
+        window.pane.discardFiles(repo.path, changed, untracked),
+      ),
+    )
+  }
   return actions
 }
 
@@ -372,6 +446,7 @@ function drawRepo(repo: RepoView, alone: boolean): HTMLElement {
     const toggle = document.createElement('button')
     toggle.type = 'button'
     toggle.className = 'repo-toggle'
+    toggle.dataset.key = keyOf(repo.path, '', '', 'toggle')
     toggle.setAttribute('aria-expanded', String(!shut))
     // The tree's own twisty, so the two views in this column open the same way.
     const twisty = icon(shut ? 'triangleRight' : 'chevronDown', 12)
@@ -400,49 +475,89 @@ function drawRepo(repo: RepoView, alone: boolean): HTMLElement {
 let latest: { ok: true; repos: RepoView[] } | { ok: false; reason: string } | undefined
 
 /**
- * The repository a Commit would go to, and why there is none.
+ * The repositories that have anything ticked, in the order they are drawn.
  *
- * A commit belongs to one repository. With several open, the one that has
- * ticks is the one being composed — asking which is meant when only one of
- * them has anything ticked would be a question with one possible answer.
- * Ticked in two at once is genuinely ambiguous, and is said rather than
- * guessed: committing the wrong repository is not undone by unticking.
- * @returns the repository to commit to, or the reason there is not one.
+ * Committing acts on one of these. A repository with nothing ticked is not a
+ * candidate at all: there would be nothing for the commit to contain.
+ * @returns the repositories a Commit could go to.
  */
-function commitTarget(): { repo: RepoView } | { why: string } {
-  if (latest === undefined || !latest.ok || latest.repos.length === 0) {
-    return { why: 'There is no repository to commit to.' }
-  }
-  const ticked = latest.repos.filter((repo) => {
+function commitCandidates(): RepoView[] {
+  if (latest === undefined || !latest.ok) return []
+  return latest.repos.filter((repo) => {
     const { add, keep } = selection.selected(repo.path, repo.status)
     return add.length > 0 || keep.length > 0
   })
-  if (ticked.length === 0) return { why: 'Tick the files to include in the commit.' }
-  if (ticked.length > 1) {
-    return { why: `Files are ticked in ${ticked.length} repositories; a commit belongs to one of them.` }
+}
+
+/**
+ * The repository a Commit would go to.
+ *
+ * A commit belongs to one repository, and with several ticked the user picks
+ * it from the selector rather than the panel inferring it. Inferring it was
+ * worse than it looks: tracked changes arrive ticked, so a project holding
+ * two dirty checkouts — the case the repo scan exists for — would open unable
+ * to commit at all, saying so only in the tooltip of a disabled button.
+ * @returns the repository to commit to, or undefined when nothing is ticked.
+ */
+function commitTarget(): RepoView | undefined {
+  const candidates = commitCandidates()
+  return candidates.find((repo) => repo.path === chosenRepo) ?? candidates[0]
+}
+
+/**
+ * Show the repository selector when the choice is real, and keep its value.
+ *
+ * Absent with one candidate: a control with one option is a control that only
+ * takes up room. The chosen path survives a redraw, and falls back to the
+ * first candidate when the repository it named no longer has anything ticked.
+ * @param candidates - the repositories that have something ticked.
+ */
+function syncRepoChoice(candidates: RepoView[]): void {
+  const row = el('commit-repo-row')
+  const picker = el('commit-repo') as HTMLSelectElement
+  row.hidden = candidates.length < 2
+  if (candidates.length < 2) {
+    picker.textContent = ''
+    return
   }
-  return { repo: ticked[0] }
+  if (!candidates.some((repo) => repo.path === chosenRepo)) chosenRepo = candidates[0].path
+  const wanted = candidates.map((repo) => repo.path).join('\u0000')
+  // Rebuilt only when the list itself changed, so an open dropdown is not
+  // torn out from under the pointer by a watcher-driven refresh.
+  if (picker.dataset.repos !== wanted) {
+    picker.textContent = ''
+    for (const repo of candidates) {
+      const option = document.createElement('option')
+      option.value = repo.path
+      option.textContent = repo.name
+      picker.append(option)
+    }
+    picker.dataset.repos = wanted
+  }
+  picker.value = chosenRepo ?? ''
 }
 
 /**
  * Enable or disable Commit, and say in its tooltip why it is off.
  *
- * Disabled only for the two things that are simply nothing to do — no message
- * and nothing ticked — plus the ambiguous repository above. It is never
- * refused for having nothing staged: staging is what Commit does.
+ * Disabled only for the two things that are simply nothing to do: no message,
+ * and nothing ticked in the repository it would go to. It is never refused
+ * for having nothing staged — staging is what Commit does.
  */
 function syncCommit(): void {
   const box = el('commit-message') as HTMLTextAreaElement
   const button = el('commit') as HTMLButtonElement
+  const candidates = commitCandidates()
+  syncRepoChoice(candidates)
   const target = commitTarget()
-  if ('why' in target) {
+  if (target === undefined) {
     button.disabled = true
-    button.title = target.why
+    button.title = 'Tick the files to include in the commit.'
     return
   }
   const blank = box.value.trim() === ''
   button.disabled = blank
-  button.title = blank ? 'Write a commit message.' : `Commit the ticked files in ${target.repo.name}`
+  button.title = blank ? 'Write a commit message.' : `Commit the ticked files in ${target.name}`
 }
 
 /**
@@ -456,6 +571,11 @@ function draw(): void {
   const empty = el('git-empty')
   const into = el('repos')
   const form = el('commit-form')
+  // Which control had focus, if any: a refresh a watcher asked for must not
+  // move the keyboard back to the top of the panel while the user is on a row.
+  const active = document.activeElement
+  const focused = active instanceof HTMLElement && into.contains(active) ? active.dataset.key : undefined
+  tickUpdates.length = 0
   into.textContent = ''
   if (latest === undefined) {
     empty.hidden = true
@@ -489,6 +609,12 @@ function draw(): void {
   }
   const alone = repos.length === 1
   for (const repo of repos) into.append(drawRepo(repo, alone))
+  // By key rather than by selector: a path can hold any character a CSS
+  // attribute selector would have to be escaped for.
+  if (focused !== undefined) {
+    const again = [...into.querySelectorAll<HTMLElement>('[data-key]')].find((node) => node.dataset.key === focused)
+    again?.focus()
+  }
   syncCommit()
 }
 
@@ -524,12 +650,8 @@ async function refresh(): Promise<void> {
 el('commit-form').addEventListener('submit', (event) => {
   event.preventDefault()
   const box = el('commit-message') as HTMLTextAreaElement
-  const target = commitTarget()
-  if ('why' in target) {
-    say(target.why)
-    return
-  }
-  const { repo } = target
+  const repo = commitTarget()
+  if (repo === undefined) return
   const { add, keep } = selection.selected(repo.path, repo.status)
   say('')
   void window.pane
@@ -545,6 +667,13 @@ el('commit-form').addEventListener('submit', (event) => {
 
 // The button turns on and off with what is typed, not only with what is drawn.
 el('commit-message').addEventListener('input', syncCommit)
+
+// Which repository the commit goes to. Kept in a variable rather than read
+// off the element, so it survives the redraw that follows the next refresh.
+el('commit-repo').addEventListener('change', (event) => {
+  chosenRepo = (event.target as HTMLSelectElement).value
+  syncCommit()
+})
 
 // Main says when: the project moved, the window came back, or something under
 // a repo's `.git` changed. There is no polling.
