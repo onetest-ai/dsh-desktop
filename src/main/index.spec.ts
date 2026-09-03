@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -145,6 +145,13 @@ const fake = vi.hoisted(() => {
     openPath: vi.fn(async () => ''),
   }
 
+  /**
+   * The confirmation the two destructive git writes raise, and the tree's
+   * Delete. Answers with the default button — Cancel — so a test that forgets
+   * to say otherwise never silently discards anything.
+   */
+  const showMessageBox = vi.fn(async () => ({ response: 1 }))
+
   function quitEvent(): { preventDefault: () => void; prevented: boolean } {
     const event = {
       prevented: false,
@@ -200,6 +207,7 @@ const fake = vi.hoisted(() => {
     sendIpc: (channel: string, ...args: unknown[]) => ipcHandlers.get(channel)?.({}, ...args),
     globalShortcut,
     shell,
+    showMessageBox,
     handlers,
     windowHandlers,
     quitEvents,
@@ -216,7 +224,7 @@ vi.mock('electron', () => ({
   BrowserWindow: class {},
   globalShortcut: fake.globalShortcut,
   shell: fake.shell,
-  dialog: { showOpenDialog: vi.fn() },
+  dialog: { showOpenDialog: vi.fn(), showMessageBox: fake.showMessageBox },
   ipcMain: fake.ipcMain,
   nativeTheme: fake.nativeTheme,
   Notification: class {
@@ -389,12 +397,52 @@ vi.mock('./file-tree', () => ({ readDirectory: (...args: unknown[]) => readDirec
 
 /** The panel's read, so a test can hold one open and watch what a second does. */
 const readProjectMock = vi.fn(async (root: string) => ({ ok: true as const, repos: [{ path: root }] }))
-vi.mock('./git-model', () => ({ readProject: (...args: unknown[]) => readProjectMock(...(args as [string])) }))
+// Partial: `refuseUnlessInProject` is the gate every write channel is checked
+// by, and a suite that stubbed it would prove nothing about the channels it
+// exists to protect. Only the read — which would spawn git — is replaced.
+vi.mock('./git-model', async () => ({
+  ...(await vi.importActual<typeof import('./git-model')>('./git-model')),
+  readProject: (...args: unknown[]) => readProjectMock(...(args as [string])),
+}))
 const hasGitMock = vi.fn(async () => true)
+// No repositories by default: this suite's project roots do not exist on disk,
+// so nothing is watched. A test that needs a repository the gate will accept
+// sets this to a real temporary directory.
+const findReposMock = vi.fn((): string[] => [])
 vi.mock('./git-find', () => ({
   hasGit: () => hasGitMock(),
-  // No repositories to watch: this suite's project roots do not exist on disk.
-  findRepos: () => [],
+  findRepos: (...args: unknown[]) => findReposMock(...(args as [string])),
+}))
+
+// The write half. Mocked so no git child is spawned and so a test can read
+// back exactly which arguments a channel passed on — the `add`/`keep` split
+// and the `--track` flag are the two places where a wrong argument is a bug
+// nothing else would catch.
+const stageMock = vi.fn(async (): Promise<unknown> => ({ ok: true }))
+const unstageMock = vi.fn(async (): Promise<unknown> => ({ ok: true }))
+const discardMock = vi.fn(async (): Promise<unknown> => ({ ok: true }))
+const commitMock = vi.fn(async (): Promise<unknown> => ({ ok: true }))
+vi.mock('./git-actions', () => ({
+  stage: (...args: unknown[]) => stageMock(...(args as [])),
+  unstage: (...args: unknown[]) => unstageMock(...(args as [])),
+  discard: (...args: unknown[]) => discardMock(...(args as [])),
+  commit: (...args: unknown[]) => commitMock(...(args as [])),
+}))
+const checkoutMock = vi.fn(async (): Promise<unknown> => ({ ok: true }))
+const createBranchMock = vi.fn(async (): Promise<unknown> => ({ ok: true }))
+vi.mock('./git-branch', () => ({
+  checkout: (...args: unknown[]) => checkoutMock(...(args as [])),
+  createBranch: (...args: unknown[]) => createBranchMock(...(args as [])),
+  listBranches: vi.fn(async () => []),
+}))
+const pushStashMock = vi.fn(async (): Promise<unknown> => ({ ok: true }))
+const applyStashMock = vi.fn(async (): Promise<unknown> => ({ ok: true }))
+const dropStashMock = vi.fn(async (): Promise<unknown> => ({ ok: true }))
+vi.mock('./git-stash', () => ({
+  pushStash: (...args: unknown[]) => pushStashMock(...(args as [])),
+  applyStash: (...args: unknown[]) => applyStashMock(...(args as [])),
+  dropStash: (...args: unknown[]) => dropStashMock(...(args as [])),
+  listStashes: vi.fn(async () => []),
 }))
 
 const preflightMock = vi.fn(() => ({ ok: true }))
@@ -626,6 +674,14 @@ beforeEach(() => {
   presetsDeclarationMock.mockImplementation(() => undefined)
   ensurePluginLinkMock.mockImplementation(() => ({ linked: true }))
   vi.clearAllMocks()
+  // The git write half, back to its defaults: no repositories discovered, a
+  // confirmation answered with Cancel, and every action reporting success. A
+  // test that changes any of these must not change it for the next one.
+  findReposMock.mockReturnValue([])
+  fake.showMessageBox.mockResolvedValue({ response: 1 })
+  for (const mock of [stageMock, unstageMock, discardMock, commitMock, checkoutMock, createBranchMock, pushStashMock, applyStashMock, dropStashMock]) {
+    mock.mockResolvedValue({ ok: true })
+  }
   fake.resetReady()
   fake.app.requestSingleInstanceLock.mockReturnValue(true)
   fake.app.getPath.mockReturnValue('/tmp/dsh-desktop-test-userdata')
@@ -2294,5 +2350,205 @@ describe('the side columns', () => {
       'readme.md',
       expect.stringContaining('project'),
     )
+  })
+})
+
+/**
+ * The nine write channels, and the gate they all pass through.
+ *
+ * reason: every one of these names a repository and most name paths. A
+ * renderer supplies both, and a name is not evidence — the read side was
+ * already found reading `/etc/passwd` this way before `pathInRepo` existed.
+ * Nine handlers each checking for themselves is nine chances to repeat that,
+ * so there is one gate and these tests are of the gate through its callers.
+ */
+describe('the git write channels', () => {
+  /**
+   * A real directory to stand in for a repository.
+   *
+   * Real, not `/p/demo`: the gate resolves both sides through `realpath`, so a
+   * repository that does not exist on disk is refused for its path before any
+   * question about the file is reached — and a test using one would pass while
+   * proving nothing about the path check it names.
+   */
+  let repo = ''
+
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'dsh-git-repo-'))
+    mkdirSync(join(repo, 'src'))
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export {}\n')
+  })
+
+  /** The module's exports, once it has been imported fresh. */
+  async function exports(): Promise<typeof import('./index')> {
+    await loadIndex()
+    if (indexModule === undefined) throw new Error('loadIndex() left no module')
+    return indexModule
+  }
+
+  it('refuses a repository that is not in the open project', async () => {
+    const { gitStageFor } = await exports()
+    expect(await gitStageFor('/etc', ['passwd'], () => [repo])).toEqual({
+      ok: false,
+      reason: 'That repository is not in the open project.',
+    })
+    expect(stageMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses a path that escapes the repository', async () => {
+    const { gitStageFor } = await exports()
+    expect(await gitStageFor(repo, ['../../etc/passwd'], () => [repo])).toEqual({
+      ok: false,
+      reason: 'That file is not in the repository.',
+    })
+    expect(stageMock).not.toHaveBeenCalled()
+  })
+
+  it('allows a path inside it', async () => {
+    const { gitStageFor } = await exports()
+    expect(await gitStageFor(repo, ['src/a.ts'], () => [repo])).toMatchObject({ ok: true })
+    expect(stageMock).toHaveBeenCalledWith(repo, ['src/a.ts'])
+  })
+
+  it('refuses an absolute path even inside the repository', async () => {
+    const { gitUnstageFor } = await exports()
+    expect(await gitUnstageFor(repo, [join(repo, 'src/a.ts')], () => [repo])).toEqual({
+      ok: false,
+      reason: 'That file is not in the repository.',
+    })
+  })
+
+  // reason: an untracked discard deletes the file from disk, so the list that
+  // is not the tracked one is the half where an escape costs the most.
+  it('checks the untracked half of a discard too', async () => {
+    const { gitDiscardFor } = await exports()
+    expect(await gitDiscardFor(repo, [], ['../../etc/passwd'], () => [repo])).toEqual({
+      ok: false,
+      reason: 'That file is not in the repository.',
+    })
+    expect(discardMock).not.toHaveBeenCalled()
+  })
+
+  // reason: `staged` is named by the renderer like the other two, and `commit`
+  // turns it into `git restore --staged` for anything not ticked.
+  it('checks every one of the commit lists', async () => {
+    const { gitCommitFor } = await exports()
+    expect(await gitCommitFor(repo, 'msg', [], [], ['../../etc/passwd'], () => [repo])).toEqual({
+      ok: false,
+      reason: 'That file is not in the repository.',
+    })
+    expect(commitMock).not.toHaveBeenCalled()
+  })
+
+  // reason: a file staged and then edited again has a tick in two sections
+  // meaning two different contents. Collapsed into one list, `git add` would
+  // stage the newer working-tree version over the one the tick preserved.
+  it('keeps the staged selection separate from the added one', async () => {
+    const { gitCommitFor } = await exports()
+    await gitCommitFor(repo, 'msg', ['src/a.ts'], ['src/b.ts'], ['src/b.ts', 'src/c.ts'], () => [repo])
+    expect(commitMock).toHaveBeenCalledWith(repo, 'msg', ['src/a.ts'], ['src/b.ts'], ['src/b.ts', 'src/c.ts'])
+  })
+
+  // reason: these name no paths, but a repository the project does not hold is
+  // not one this app checks out, stashes in, or drops a stash from either.
+  it('refuses a repository outside the project for the channels that name no paths', async () => {
+    const index = await exports()
+    const refused = { ok: false, reason: 'That repository is not in the open project.' }
+    expect(await index.gitCheckoutFor('/etc', 'main', false, () => [repo])).toEqual(refused)
+    expect(await index.gitCreateBranchFor('/etc', 'topic', () => [repo])).toEqual(refused)
+    expect(await index.gitStashPushFor('/etc', 'wip', () => [repo])).toEqual(refused)
+    expect(await index.gitStashApplyFor('/etc', 'stash@{0}', false, () => [repo])).toEqual(refused)
+    expect(await index.gitStashDropFor('/etc', 'stash@{0}', () => [repo])).toEqual(refused)
+    for (const mock of [checkoutMock, createBranchMock, pushStashMock, applyStashMock, dropStashMock]) {
+      expect(mock).not.toHaveBeenCalled()
+    }
+  })
+
+  // reason: a remote-tracking branch needs `--track`, and plain checkout of a
+  // remote ref detaches HEAD instead of creating the local branch. The flag
+  // has to survive the whole way from the row to `checkout`.
+  it('carries the remote flag through to the checkout', async () => {
+    const { gitCheckoutFor } = await exports()
+    await gitCheckoutFor(repo, 'origin/feature', true, () => [repo])
+    expect(checkoutMock).toHaveBeenCalledWith(repo, 'origin/feature', true)
+  })
+
+  /** Boot with one project open and one repository discovered in it. */
+  async function bootWithRepo(): Promise<void> {
+    readWorkspacesMock.mockReturnValue([
+      { path: '/p/known', title: 'known', file: '/p/known/.dsh/mcp.json', declared: false, servers: [] },
+    ])
+    findReposMock.mockReturnValue([repo])
+    await bootReady()
+    fake.sendIpc('harness:workspace', '/p/known')
+    await settle()
+  }
+
+  it('refuses over the channel, not only in the helper', async () => {
+    await bootWithRepo()
+    await expect(fake.sendIpc('git:stage', '/etc', ['passwd'])).resolves.toEqual({
+      ok: false,
+      reason: 'That repository is not in the open project.',
+    })
+    expect(stageMock).not.toHaveBeenCalled()
+  })
+
+  it('stages over the channel when the repository is one the project holds', async () => {
+    await bootWithRepo()
+    await expect(fake.sendIpc('git:stage', repo, ['src/a.ts'])).resolves.toEqual({ ok: true })
+    expect(stageMock).toHaveBeenCalledWith(repo, ['src/a.ts'])
+  })
+
+  // reason: a confirmation a renderer could answer for itself is not a
+  // confirmation. Discard throws work away with nothing in the reflog, so the
+  // dialog is raised in main and Cancel means nothing ran.
+  it('discards nothing when the confirmation is cancelled', async () => {
+    await bootWithRepo()
+    await expect(fake.sendIpc('git:discard', repo, ['src/a.ts'], [])).resolves.toEqual({ ok: false, reason: '' })
+    expect(fake.showMessageBox).toHaveBeenCalled()
+    expect(discardMock).not.toHaveBeenCalled()
+  })
+
+  it('discards once the confirmation is accepted', async () => {
+    await bootWithRepo()
+    fake.showMessageBox.mockResolvedValue({ response: 0 })
+    await expect(fake.sendIpc('git:discard', repo, ['src/a.ts'], ['scratch.txt'])).resolves.toEqual({ ok: true })
+    expect(discardMock).toHaveBeenCalledWith(repo, ['src/a.ts'], ['scratch.txt'])
+  })
+
+  // reason: the prompt is itself a thing a hostile page could use — a dialog
+  // naming a plausible file, with Discard under the pointer. A repository the
+  // project does not hold must not raise one at all.
+  it('raises no dialog for a repository outside the project', async () => {
+    await bootWithRepo()
+    await expect(fake.sendIpc('git:discard', '/etc', ['passwd'], [])).resolves.toEqual({
+      ok: false,
+      reason: 'That repository is not in the open project.',
+    })
+    expect(fake.showMessageBox).not.toHaveBeenCalled()
+  })
+
+  it('drops no stash when the confirmation is cancelled', async () => {
+    await bootWithRepo()
+    await expect(fake.sendIpc('git:stash-drop', repo, 'stash@{0}')).resolves.toEqual({ ok: false, reason: '' })
+    expect(fake.showMessageBox).toHaveBeenCalled()
+    expect(dropStashMock).not.toHaveBeenCalled()
+  })
+
+  it('drops the stash once the confirmation is accepted', async () => {
+    await bootWithRepo()
+    fake.showMessageBox.mockResolvedValue({ response: 0 })
+    await expect(fake.sendIpc('git:stash-drop', repo, 'stash@{0}')).resolves.toEqual({ ok: true })
+    expect(dropStashMock).toHaveBeenCalledWith(repo, 'stash@{0}')
+  })
+
+  // reason: the action is exactly what makes what the panel is showing stale.
+  it('tells the panel to read itself again after a write', async () => {
+    await bootWithRepo()
+    fake.sendIpc('shell:toggle-git')
+    fake.views.git.webContents.send.mockClear()
+    await fake.sendIpc('git:unstage', repo, ['src/a.ts'])
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(fake.views.git.webContents.send).toHaveBeenCalledWith('git:changed')
   })
 })

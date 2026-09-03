@@ -15,6 +15,17 @@ export type ProjectGitView =
     }
   | { ok: false; reason: string }
 
+/**
+ * What one git write reports back.
+ *
+ * Declared here rather than imported from main's `ActionOutcome`: the renderer
+ * never imports from `src/main`, and this is the shape that crosses the
+ * bridge. A refusal carries a reason to show — except when the user answered a
+ * confirmation with Cancel, where the reason is empty because they already
+ * know why nothing happened.
+ */
+export type GitResult = { ok: true } | { ok: false; reason: string }
+
 /** What an operation on one entry reports back. */
 export type OpResult = { ok: true; relative: string } | { ok: false; reason: string }
 
@@ -61,6 +72,15 @@ declare global {
       readGit(): Promise<ProjectGitView>
       onGitChanged(listener: () => void): void
       openGitDiff(repo: string, path: string, section: RowGroup['section']): void
+      stageFiles(repo: string, paths: string[]): Promise<GitResult>
+      unstageFiles(repo: string, paths: string[]): Promise<GitResult>
+      discardFiles(repo: string, tracked: string[], untracked: string[]): Promise<GitResult>
+      commitFiles(repo: string, message: string, add: string[], keep: string[], staged: string[]): Promise<GitResult>
+      checkoutBranch(repo: string, name: string, remote: boolean): Promise<GitResult & { blocked?: string[] }>
+      createBranch(repo: string, name: string): Promise<GitResult>
+      pushStash(repo: string, message: string): Promise<GitResult>
+      applyStash(repo: string, ref: string, pop: boolean): Promise<GitResult>
+      dropStash(repo: string, ref: string): Promise<GitResult>
       onDiffTexts(
         listener: (root: string, relative: string, original: string, modified: string, inline: boolean) => void,
       ): void

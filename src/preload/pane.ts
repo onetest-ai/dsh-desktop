@@ -79,6 +79,28 @@ contextBridge.exposeInMainWorld('pane', {
   },
   openGitDiff: (repo: string, path: string, section: string) =>
     ipcRenderer.send('git:open-diff', repo, path, section),
+  // The panel's writes. Invokes, every one: main answers each with whether it
+  // worked and why not, and two of them raise a confirmation there first — a
+  // send would have nothing to wait on and no answer to show. Main validates
+  // the repository and the paths on every one; nothing here is a check.
+  stageFiles: (repo: string, paths: string[]) => ipcRenderer.invoke('git:stage', repo, paths),
+  unstageFiles: (repo: string, paths: string[]) => ipcRenderer.invoke('git:unstage', repo, paths),
+  discardFiles: (repo: string, tracked: string[], untracked: string[]) =>
+    ipcRenderer.invoke('git:discard', repo, tracked, untracked),
+  // Three lists, not one selection: `add` is staged, `keep` is already in the
+  // index and must not be re-added, `staged` is what the index holds. A file
+  // edited after being staged appears in two sections with a tick in each, and
+  // one flat list cannot say which of the two the user meant.
+  commitFiles: (repo: string, message: string, add: string[], keep: string[], staged: string[]) =>
+    ipcRenderer.invoke('git:commit', repo, message, add, keep, staged),
+  // `remote` says which list the row came from. A remote-tracking branch needs
+  // `--track`, and the name alone cannot be classified.
+  checkoutBranch: (repo: string, name: string, remote: boolean) =>
+    ipcRenderer.invoke('git:checkout', repo, name, remote),
+  createBranch: (repo: string, name: string) => ipcRenderer.invoke('git:create-branch', repo, name),
+  pushStash: (repo: string, message: string) => ipcRenderer.invoke('git:stash-push', repo, message),
+  applyStash: (repo: string, ref: string, pop: boolean) => ipcRenderer.invoke('git:stash-apply', repo, ref, pop),
+  dropStash: (repo: string, ref: string) => ipcRenderer.invoke('git:stash-drop', repo, ref),
   onShowDiff: (listener: (root: string, relative: string, proposed: string) => void) => {
     ipcRenderer.on('pane:diff', (_event, root: string, relative: string, proposed: string) =>
       listener(root, relative, proposed),

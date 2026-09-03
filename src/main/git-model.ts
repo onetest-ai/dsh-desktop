@@ -164,3 +164,32 @@ function pathInRepo(repo: string, path: string): string | undefined {
   }
   return real === realRoot || real.startsWith(realRoot + sep) ? real : undefined
 }
+
+/**
+ * The repository and paths an action may act on, or why it may not.
+ *
+ * One gate for every write channel rather than a check per handler: these are
+ * reachable from a renderer, which supplies both the repository and the paths,
+ * and the read side was already found reading `/etc/passwd` through a handler
+ * that validated only the repository. A gate written once is a gate that
+ * cannot be forgotten at the ninth call site.
+ *
+ * The branch and stash channels name no paths and pass an empty list; the
+ * repository check still applies to them, since a repository the project does
+ * not hold is not one this app may check out or stash in either.
+ * @param repo - the repository named by the caller.
+ * @param paths - the paths named by the caller; may be empty.
+ * @param known - the repositories currently discovered in the open project.
+ * @returns nothing when allowed, or the refusal to return to the caller.
+ */
+export function refuseUnlessInProject(
+  repo: string,
+  paths: string[],
+  known: () => string[],
+): { ok: false; reason: string } | undefined {
+  if (!known().includes(repo)) return { ok: false, reason: 'That repository is not in the open project.' }
+  for (const path of paths) {
+    if (pathInRepo(repo, path) === undefined) return { ok: false, reason: 'That file is not in the repository.' }
+  }
+  return undefined
+}

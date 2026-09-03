@@ -49,8 +49,11 @@ import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, cr
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
 import { DIVIDER_WIDTH, RAIL_WIDTH, nextSideView, type Columns, type SideView } from './layout'
-import { gitDiffFor, readProject, type ProjectGit } from './git-model'
+import { gitDiffFor, readProject, refuseUnlessInProject, type ProjectGit } from './git-model'
 import { findRepos, hasGit } from './git-find'
+import { commit, discard, stage, unstage, type ActionOutcome } from './git-actions'
+import { checkout, createBranch } from './git-branch'
+import { applyStash, dropStash, pushStash } from './git-stash'
 import type { Section } from './git-status'
 import { setGitPath } from './git-run'
 import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
@@ -774,6 +777,22 @@ async function readCurrentGit(): Promise<ProjectGit> {
 }
 
 /**
+ * The repositories the open project currently holds.
+ *
+ * The one source of truth every git channel is checked against, read fresh on
+ * each call rather than cached: the project moves, repositories are cloned and
+ * deleted while the app runs, and a stale list is either a refusal of
+ * something legitimate or — the half that matters — a permission granted for a
+ * repository the project no longer holds. `findRepos` is the same discovery
+ * the panel's own read and the `.git` watchers use, so nothing can be acted on
+ * that the panel could not have drawn.
+ * @returns the repository directories, or none when no project is open.
+ */
+function gitRepoPaths(): string[] {
+  return currentProject === undefined ? [] : findRepos(currentProject.path)
+}
+
+/**
  * Show a row's diff in the editor column.
  *
  * The repository and path are checked before anything is read, since
@@ -788,8 +807,7 @@ async function readCurrentGit(): Promise<ProjectGit> {
  * @param section - which list the row was in.
  */
 async function openGitDiffInPane(repo: string, path: string, section: Section): Promise<void> {
-  const project = currentProject
-  const sides = await gitDiffFor(repo, path, section, () => (project === undefined ? [] : findRepos(project.path)))
+  const sides = await gitDiffFor(repo, path, section, gitRepoPaths)
   if (sides === undefined) return
   if (views === undefined || views.window.isDestroyed()) return
   if (!columns.editor.open) {
@@ -797,6 +815,162 @@ async function openGitDiffInPane(repo: string, path: string, section: Section): 
     storeColumns()
   }
   views.pane.webContents.send('pane:diff-texts', repo, path, sides.original, sides.modified, true)
+}
+
+/**
+ * Stage paths, if the caller may act on them.
+ * @param repo - the repository.
+ * @param paths - the paths to stage.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitStageFor(repo: string, paths: string[], known: () => string[]): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, paths, known) ?? (await stage(repo, paths))
+}
+
+/**
+ * Take paths back out of the index, if the caller may act on them.
+ * @param repo - the repository.
+ * @param paths - the paths to unstage.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitUnstageFor(repo: string, paths: string[], known: () => string[]): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, paths, known) ?? (await unstage(repo, paths))
+}
+
+/**
+ * Throw away changes to paths, if the caller may act on them.
+ *
+ * Both lists go through the gate together. They are two lists because git
+ * needs two commands for them, not because one is trusted more than the
+ * other — an untracked path names a file that is about to be deleted from
+ * disk, which is the half where an escape would cost the most.
+ * @param repo - the repository.
+ * @param tracked - paths git knows about.
+ * @param untracked - paths it does not.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitDiscardFor(
+  repo: string,
+  tracked: string[],
+  untracked: string[],
+  known: () => string[],
+): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, [...tracked, ...untracked], known) ?? (await discard(repo, tracked, untracked))
+}
+
+/**
+ * Commit what is ticked, if the caller may act on it.
+ *
+ * The three lists stay three lists across the gate and across the bridge.
+ * `add` is ticked in Changes or Untracked and is staged; `keep` is ticked
+ * only in Staged Changes and must never be re-added, since `git add` would
+ * replace the recorded version with the newer working-tree one the tick meant
+ * to leave alone; `staged` is what the index holds, and anything in it that is
+ * in neither list is unstaged. Collapsing them into one selection cannot
+ * express the file that appears in both sections.
+ *
+ * All three are checked: `staged` is named by the renderer like the others,
+ * and it is the list `commit` turns into `git restore --staged`.
+ * @param repo - the repository.
+ * @param message - the commit message, as typed.
+ * @param add - paths ticked in Changes or Untracked.
+ * @param keep - paths ticked only in Staged Changes.
+ * @param staged - the paths currently in the index.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitCommitFor(
+  repo: string,
+  message: string,
+  add: string[],
+  keep: string[],
+  staged: string[],
+  known: () => string[],
+): Promise<ActionOutcome> {
+  return (
+    refuseUnlessInProject(repo, [...add, ...keep, ...staged], known) ??
+    (await commit(repo, message, add, keep, staged))
+  )
+}
+
+/**
+ * Switch branch, if the caller may act on the repository.
+ *
+ * No paths, so an empty list — the repository check still applies, since a
+ * directory the project does not hold is not one this app checks out in.
+ *
+ * `remote` crosses the bridge rather than being guessed from the name: a
+ * remote-tracking branch needs `--track` to create the local branch that
+ * follows it, and without the flag git detaches HEAD instead. The panel knows
+ * which list the row came from; a name cannot be classified, since a local
+ * `feature/thing` and a remote `origin/main` are both a name with a slash.
+ * @param repo - the repository.
+ * @param name - the branch to switch to.
+ * @param remote - whether the row was a remote-tracking branch.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported — with the files that blocked it, when
+ *   git named any — or the refusal.
+ */
+export async function gitCheckoutFor(
+  repo: string,
+  name: string,
+  remote: boolean,
+  known: () => string[],
+): Promise<ActionOutcome & { blocked?: string[] }> {
+  return refuseUnlessInProject(repo, [], known) ?? (await checkout(repo, name, remote))
+}
+
+/**
+ * Create a branch and switch to it, if the caller may act on the repository.
+ * @param repo - the repository.
+ * @param name - the branch to create.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitCreateBranchFor(repo: string, name: string, known: () => string[]): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, [], known) ?? (await createBranch(repo, name))
+}
+
+/**
+ * Stash the working tree, if the caller may act on the repository.
+ * @param repo - the repository.
+ * @param message - what to call it; blank pushes without one.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitStashPushFor(repo: string, message: string, known: () => string[]): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, [], known) ?? (await pushStash(repo, message))
+}
+
+/**
+ * Put a stash back, if the caller may act on the repository.
+ * @param repo - the repository.
+ * @param ref - the stash, as `stash@{n}`.
+ * @param pop - true to remove it once applied.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitStashApplyFor(
+  repo: string,
+  ref: string,
+  pop: boolean,
+  known: () => string[],
+): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, [], known) ?? (await applyStash(repo, ref, pop))
+}
+
+/**
+ * Throw a stash away, if the caller may act on the repository.
+ * @param repo - the repository.
+ * @param ref - the stash to drop.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitStashDropFor(repo: string, ref: string, known: () => string[]): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, [], known) ?? (await dropStash(repo, ref))
 }
 
 /**
@@ -2250,6 +2424,96 @@ if (!app.requestSingleInstanceLock()) {
     // main's to fill, and there is no answer for the panel to wait on.
     ipcMain.on('git:open-diff', (_event, repo: string, path: string, section: Section) => {
       void openGitDiffInPane(repo, path, section)
+    })
+    // The panel's writes. Every one of them goes through `refuseUnlessInProject`
+    // inside its helper before git is spawned: the renderer names the
+    // repository and, for most of them, the paths, and neither is evidence of
+    // anything just because this app's own page sent it. Each then tells the
+    // panel to read itself again, since the action is exactly what made the
+    // state it is showing stale.
+    ipcMain.handle('git:stage', async (_event, repo: string, paths: string[]) => {
+      const out = await gitStageFor(repo, paths, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.handle('git:unstage', async (_event, repo: string, paths: string[]) => {
+      const out = await gitUnstageFor(repo, paths, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    // Discard is the one write with no undo — `git restore --worktree` and
+    // `git clean` leave nothing in the reflog — so it asks first, and it asks
+    // here, in main, where a renderer cannot answer for itself. The check runs
+    // before the dialog as well as inside the helper: a refused repository
+    // should not raise a prompt at all, since a prompt is itself something a
+    // hostile page could use to trick a user into pressing Discard.
+    ipcMain.handle('git:discard', async (_event, repo: string, tracked: string[], untracked: string[]) => {
+      const refusal = refuseUnlessInProject(repo, [...tracked, ...untracked], gitRepoPaths)
+      if (refusal !== undefined) return refusal
+      if (views === undefined || views.window.isDestroyed()) return { ok: false, reason: '' }
+      const all = [...tracked, ...untracked]
+      const { response } = await dialog.showMessageBox(views.window, {
+        type: 'warning',
+        buttons: ['Discard', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        message: all.length === 1 ? `Discard changes to ${all[0]}?` : `Discard changes to ${all.length} files?`,
+        detail: 'The changes are thrown away. This cannot be undone, and there is nothing in the reflog to recover.',
+      })
+      // An empty reason: the user answered, so there is nothing to report back
+      // to them about it.
+      if (response !== 0) return { ok: false, reason: '' }
+      const out = await gitDiscardFor(repo, tracked, untracked, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.handle(
+      'git:commit',
+      async (_event, repo: string, message: string, add: string[], keep: string[], staged: string[]) => {
+        const out = await gitCommitFor(repo, message, add, keep, staged, gitRepoPaths)
+        notifyGitChanged()
+        return out
+      },
+    )
+    ipcMain.handle('git:checkout', async (_event, repo: string, name: string, remote: boolean) => {
+      const out = await gitCheckoutFor(repo, name, remote, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.handle('git:create-branch', async (_event, repo: string, name: string) => {
+      const out = await gitCreateBranchFor(repo, name, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.handle('git:stash-push', async (_event, repo: string, message: string) => {
+      const out = await gitStashPushFor(repo, message, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.handle('git:stash-apply', async (_event, repo: string, ref: string, pop: boolean) => {
+      const out = await gitStashApplyFor(repo, ref, pop, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    // Unrecoverable in the way Discard is: a dropped stash is reachable only
+    // by an unreferenced hash this panel never showed anyone. Confirmed in
+    // main for the same reason.
+    ipcMain.handle('git:stash-drop', async (_event, repo: string, ref: string) => {
+      const refusal = refuseUnlessInProject(repo, [], gitRepoPaths)
+      if (refusal !== undefined) return refusal
+      if (views === undefined || views.window.isDestroyed()) return { ok: false, reason: '' }
+      const { response } = await dialog.showMessageBox(views.window, {
+        type: 'warning',
+        buttons: ['Drop', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        message: `Drop ${ref}?`,
+        detail: 'The stash is thrown away. It is reachable only by a hash this panel never showed you.',
+      })
+      if (response !== 0) return { ok: false, reason: '' }
+      const out = await gitStashDropFor(repo, ref, gitRepoPaths)
+      notifyGitChanged()
+      return out
     })
     ipcMain.on('shell:toggle-terminal', toggleTerminalPanel)
     // The harness telling us which project it is working in — pushed by the
