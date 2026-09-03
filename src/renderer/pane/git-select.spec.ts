@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { Selection } from './git-select'
+import type { EntryView } from './git-rows'
 
-const status = (over: Partial<Record<'staged' | 'changed' | 'untracked', { path: string; status: string }[]>> = {}) => ({
+const status = (over: Partial<Record<'staged' | 'changed' | 'untracked', EntryView[]>> = {}) => ({
   branch: 'main',
   ahead: 0,
   behind: 0,
@@ -145,5 +146,32 @@ describe('Selection', () => {
     selection.toggle('/r', 'changed', 'both.ts')
     expect(selection.ticked('/r', 'staged', 'both.ts')).toBe(true)
     expect(selection.ticked('/r', 'changed', 'both.ts')).toBe(true)
+  })
+
+  // reason: git holds a rename as the deletion of the old name beside the
+  // addition of the new, and `commit` unstages every staged path that is in
+  // neither list. A `keep` naming only the new path leaves that deletion to
+  // be unstaged, and the commit records half a rename.
+  it('keeps both names of a ticked staged rename', () => {
+    const selection = new Selection()
+    const state = status({ staged: [{ path: 'new.ts', status: 'R', from: 'old.ts' }] })
+    selection.reconcile('/r', state)
+    expect(selection.selected('/r', state).keep).toEqual(['new.ts', 'old.ts'])
+  })
+
+  // reason: the old name is gone from disk. `git add old.ts` fails with a
+  // pathspec error, and `commit` stops at the first failure — so a rename
+  // that reached `add` would abort the commit rather than record it.
+  it('never puts the old name of a rename in add', () => {
+    const selection = new Selection()
+    const state = status({
+      staged: [{ path: 'new.ts', status: 'R', from: 'old.ts' }],
+      changed: [{ path: 'new.ts', status: 'M', from: 'old.ts' }],
+    })
+    selection.reconcile('/r', state)
+    const { add, keep } = selection.selected('/r', state)
+    expect(add).toEqual(['new.ts'])
+    // In `add`, so not in `keep` either — a path is never in both.
+    expect(keep).toEqual([])
   })
 })

@@ -25,7 +25,17 @@ export interface BranchRowView {
 
 /** One stash, as the panel receives it. Mirrors main's `StashView`. */
 export interface StashRowView {
+  /** `stash@{0}` and so on — a position in the stack, shown but never acted on. */
   ref: string
+  /**
+   * The entry's own commit, which is what every row action passes.
+   *
+   * A position slides: anything else stashing in the same repository — the
+   * agent in the terminal panel this app runs beside — pushes every entry
+   * down one, and a Drop confirmed across a native dialog that stood open
+   * meanwhile would throw away a stash the user never read.
+   */
+  sha: string
   branch: string
   message: string
 }

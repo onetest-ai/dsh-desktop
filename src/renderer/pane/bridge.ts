@@ -77,12 +77,19 @@ declare global {
       unstageFiles(repo: string, paths: string[]): Promise<GitResult>
       discardFiles(repo: string, tracked: string[], untracked: string[]): Promise<GitResult>
       commitFiles(repo: string, message: string, add: string[], keep: string[], staged: string[]): Promise<GitResult>
-      checkoutBranch(repo: string, name: string, remote: boolean): Promise<GitResult & { blocked?: string[] }>
+      // `blockedKind` says which of git's two refusals it was: an untracked
+      // one is not cleared by a plain `git stash push`, so the offer the panel
+      // draws for it has to stash differently and say so.
+      checkoutBranch(
+        repo: string,
+        name: string,
+        remote: boolean,
+      ): Promise<GitResult & { blocked?: string[]; blockedKind?: 'tracked' | 'untracked' }>
       createBranch(repo: string, name: string): Promise<GitResult>
       // The sha of what was created comes back with it: `stash@{0}` is a
       // position, and anything else stashing in the same repository — the
       // agent in the terminal panel — moves every entry down one.
-      pushStash(repo: string, message: string): Promise<GitResult & { ref?: string }>
+      pushStash(repo: string, message: string, untracked?: boolean): Promise<GitResult & { ref?: string }>
       applyStash(repo: string, ref: string, pop: boolean): Promise<GitResult>
       dropStash(repo: string, ref: string): Promise<GitResult>
       onDiffTexts(

@@ -27,7 +27,9 @@ interface StubRepo {
 }
 
 /** What one git write answered with, and a blocked checkout's file list. */
-type StubResult = { ok: true } | { ok: false; reason: string; blocked?: string[] }
+type StubResult =
+  | { ok: true }
+  | { ok: false; reason: string; blocked?: string[]; blockedKind?: 'tracked' | 'untracked' }
 
 /** The sha a stubbed `pushStash` names the entry it created with. */
 const PUSHED = 'e3b0c44298fc1c149afbf4c8996fb924'
@@ -50,7 +52,7 @@ interface StubBridge {
   ) => Promise<{ ok: true } | { ok: false; reason: string }>
   checkoutBranch: (repo: string, name: string, remote: boolean) => Promise<StubResult>
   createBranch: (repo: string, name: string) => Promise<StubResult>
-  pushStash: (repo: string, message: string) => Promise<StubResult & { ref?: string }>
+  pushStash: (repo: string, message: string, untracked?: boolean) => Promise<StubResult & { ref?: string }>
   applyStash: (repo: string, ref: string, pop: boolean) => Promise<StubResult>
   dropStash: (repo: string, ref: string) => Promise<StubResult>
   askTheme: () => void
@@ -123,8 +125,11 @@ function stubBridge(options: {
       gitCalls.push(['create-branch', repo, name])
       return options.branch ?? { ok: true }
     },
-    pushStash: async (repo, message) => {
-      gitCalls.push(['stash-push', repo, message])
+    pushStash: async (repo, message, untracked = false) => {
+      // The flag is recorded with the call: which kind of block was being
+      // cleared is the difference between a stash that clears it and one
+      // that leaves the user with a stash they never asked for.
+      gitCalls.push(['stash-push', repo, message, untracked])
       if (options.stashPush !== undefined) return options.stashPush
       return options.stashRef === null ? { ok: true } : { ok: true, ref: options.stashRef ?? PUSHED }
     },
@@ -686,7 +691,7 @@ describe('the git panel', () => {
     await settle()
     expect(bridge.gitCalls).toEqual([
       ['checkout', '/r', 'feature', false],
-      ['stash-push', '/r', 'Switching to feature'],
+      ['stash-push', '/r', 'Switching to feature', false],
       ['checkout', '/r', 'feature', false],
       ['stash-apply', '/r', PUSHED, true],
     ])
@@ -712,7 +717,7 @@ describe('the git panel', () => {
     await settle()
     expect(bridge.gitCalls).toEqual([
       ['checkout', '/r', 'feature', false],
-      ['stash-push', '/r', 'Switching to feature'],
+      ['stash-push', '/r', 'Switching to feature', false],
     ])
     expect(note()).toContain('stash failed')
     expect(note()).toContain('nothing to stash')
@@ -737,7 +742,7 @@ describe('the git panel', () => {
     await settle()
     expect(bridge.gitCalls).toEqual([
       ['checkout', '/r', 'feature', false],
-      ['stash-push', '/r', 'Switching to feature'],
+      ['stash-push', '/r', 'Switching to feature', false],
       ['checkout', '/r', 'feature', false],
     ])
     expect(note()).toContain('stashed')
@@ -813,7 +818,7 @@ describe('the git panel', () => {
     input.dispatchEvent(new Event('input'))
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
     await settle()
-    expect(bridge.gitCalls).toEqual([['stash-push', '/r', 'the thing I was doing']])
+    expect(bridge.gitCalls).toEqual([['stash-push', '/r', 'the thing I was doing', false]])
   })
 
   // reason: `git stash push` leaves untracked files where they are, so on a
@@ -830,8 +835,8 @@ describe('the git panel', () => {
       repos: [
         repo({
           stashes: [
-            { ref: 'stash@{0}', branch: 'main', message: 'the thing' },
-            { ref: 'stash@{1}', branch: 'feature', message: 'another' },
+            { ref: 'stash@{0}', sha: 'aaaaaaaa1111', branch: 'main', message: 'the thing' },
+            { ref: 'stash@{1}', sha: 'bbbbbbbb2222', branch: 'feature', message: 'another' },
           ],
         }),
       ],
@@ -845,11 +850,67 @@ describe('the git panel', () => {
       ;(rows[1].querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement).click()
     }
     await settle()
+    // Labelled by position, acting by sha: a position is what the row shows,
+    // and the sha is what survives an agent stashing in the same repository
+    // between the click and the command — or, for Drop, the whole time the
+    // native confirmation stands open.
     expect(bridge.gitCalls).toEqual([
-      ['stash-apply', '/r', 'stash@{1}', false],
-      ['stash-apply', '/r', 'stash@{1}', true],
-      ['stash-drop', '/r', 'stash@{1}'],
+      ['stash-apply', '/r', 'bbbbbbbb2222', false],
+      ['stash-apply', '/r', 'bbbbbbbb2222', true],
+      ['stash-drop', '/r', 'bbbbbbbb2222'],
     ])
+  })
+
+  // reason: `git stash push` leaves untracked files in the tree, so when the
+  // block is untracked files a stash without `-u` clears nothing: the tracked
+  // work goes into a stash nobody asked for, the second checkout is refused
+  // again, and the user is told their changes are stashed and the switch
+  // failed. The flag is the difference between the offer working and the
+  // offer making things worse.
+  it('takes untracked files with it when they are what blocked the switch', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
+      checkout: [
+        { ok: false, reason: 'error: untracked', blocked: ['notes.md'], blockedKind: 'untracked' },
+        { ok: true },
+      ],
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('feature').click()
+    await settle()
+    const offer = document.querySelector('.branch-blocked')
+    // And the note says so: stashing a file git has never seen takes it off
+    // disk, which the user has to know before pressing the button.
+    expect(offer?.textContent).toContain('untracked')
+    expect(offer?.textContent).toContain('notes.md')
+    ;(offer?.querySelector('button') as HTMLButtonElement).click()
+    await settle()
+    expect(bridge.gitCalls).toEqual([
+      ['checkout', '/r', 'feature', false],
+      ['stash-push', '/r', 'Switching to feature', true],
+      ['checkout', '/r', 'feature', false],
+      ['stash-apply', '/r', PUSHED, true],
+    ])
+  })
+
+  // reason: `-u` sweeps build output and local scratch off disk into the
+  // stash. It is for the untracked block alone, never for the ordinary one.
+  it('leaves untracked files alone when tracked changes were the block', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ branches: [{ name: 'feature', upstream: '', current: false, remote: false }] })],
+      checkout: [
+        { ok: false, reason: 'error: local changes', blocked: ['a.ts'], blockedKind: 'tracked' },
+        { ok: true },
+      ],
+    })
+    await load(bridge)
+    openBranches()
+    branchItem('feature').click()
+    await settle()
+    ;(document.querySelector('.branch-blocked button') as HTMLButtonElement).click()
+    await settle()
+    expect(bridge.gitCalls).toContainEqual(['stash-push', '/r', 'Switching to feature', false])
   })
 
   // reason: `stash@{0}` is a position. The checkout between the push and the
@@ -891,7 +952,7 @@ describe('the git panel', () => {
     await settle()
     expect(bridge.gitCalls).toEqual([
       ['checkout', '/r', 'feature', false],
-      ['stash-push', '/r', 'Switching to feature'],
+      ['stash-push', '/r', 'Switching to feature', false],
     ])
     expect(note()).toContain('stashed')
     expect(note()).toContain('nothing was switched')
@@ -946,5 +1007,72 @@ describe('the git panel', () => {
     const titles = [...document.querySelectorAll('.section-title')].map((node) => node.textContent ?? '')
     expect(titles.some((title) => title.startsWith('Stashes'))).toBe(false)
     expect(document.querySelector('.stash-row')).toBeNull()
+  })
+  // reason: git records a rename as ONE entry with two names — the deletion
+  // of the old beside the addition of the new. The panel sends only the new
+  // path, so `commit` unstages that and leaves the staged deletion of the old
+  // one in the index — and `git commit` commits the whole index, so the
+  // commit records "delete the old file" and leaves the new one untracked.
+  it('names both halves of a staged rename as staged, so unticking clears both', async () => {
+    const bridge = stubBridge({
+      repos: [
+        repo({
+          staged: [{ path: 'new.ts', status: 'R', from: 'old.ts' }],
+          changed: [{ path: 'other.ts', status: 'M' }],
+        }),
+      ],
+    })
+    await load(bridge)
+    tickFor('new.ts').click()
+    await commit('a message')
+    const [, , , keep, staged] = bridge.commitCalls[0] as [string, string, string[], string[], string[]]
+    expect(staged).toEqual(['new.ts', 'old.ts'])
+    // Unticked, so neither half is kept — main unstages both, and the commit
+    // carries no half of the rename.
+    expect(keep).toEqual([])
+  })
+
+  // reason: the same entry ticked must keep BOTH names, or `commit`'s
+  // reconciliation unstages the deletion of the old one and the rename is
+  // committed as an addition with the old file still there.
+  it('keeps both halves of a staged rename that is left ticked', async () => {
+    const bridge = stubBridge({ repos: [repo({ staged: [{ path: 'new.ts', status: 'R', from: 'old.ts' }] })] })
+    await load(bridge)
+    expect(tickFor('new.ts').checked).toBe(true)
+    await commit('a message')
+    const [, , , keep, staged] = bridge.commitCalls[0] as [string, string, string[], string[], string[]]
+    expect(keep).toEqual(['new.ts', 'old.ts'])
+    expect(staged).toEqual(['new.ts', 'old.ts'])
+  })
+
+  // reason: the per-row Unstage half-unstages a rename in the same way — it
+  // takes the new name out of the index and leaves the deletion of the old.
+  it('unstages both names from the row button', async () => {
+    const bridge = stubBridge({ repos: [repo({ staged: [{ path: 'new.ts', status: 'R', from: 'old.ts' }] })] })
+    await load(bridge)
+    actionFor('new.ts', 'Unstage').click()
+    await settle()
+    expect(bridge.actionCalls).toEqual([['unstage', '/r', ['new.ts', 'old.ts']]])
+  })
+
+  it('unstages both names from the row menu', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ staged: [{ path: 'new.ts', status: 'R', from: 'old.ts' }] })],
+      menu: 'unstage',
+    })
+    await load(bridge)
+    const row = tickFor('new.ts').parentElement as HTMLElement
+    row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    await settle()
+    expect(bridge.actionCalls).toEqual([['unstage', '/r', ['new.ts', 'old.ts']]])
+  })
+
+  it('unstages both names of a rename from Unstage all', async () => {
+    const bridge = stubBridge({ repos: [repo({ staged: [{ path: 'new.ts', status: 'R', from: 'old.ts' }] })] })
+    await load(bridge)
+    const head = document.querySelector('.repo-head') as HTMLElement
+    ;(head.querySelector('button[aria-label="Unstage all"]') as HTMLButtonElement).click()
+    await settle()
+    expect(bridge.actionCalls).toEqual([['unstage', '/r', ['new.ts', 'old.ts']]])
   })
 })

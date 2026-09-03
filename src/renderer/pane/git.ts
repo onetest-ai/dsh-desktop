@@ -3,6 +3,7 @@ import {
   parts,
   rowsFor,
   type BranchRowView,
+  type EntryView,
   type RepoStatusView,
   type RowGroup,
   type StashRowView,
@@ -88,7 +89,27 @@ let asking: { repo: string; kind: 'branch' | 'stash'; text: string } | undefined
  * Kept per panel rather than per repository because only one switch is ever
  * being offered: the note is the answer to the last branch that was picked.
  */
-let blocking: { repo: string; name: string; remote: boolean; files: string[] } | undefined
+let blocking: { repo: string; name: string; remote: boolean; files: string[]; kind: BlockedKind } | undefined
+
+/** Which of git's two checkout refusals a block was; mirrors main's `BlockedKind`. */
+type BlockedKind = 'tracked' | 'untracked'
+
+/**
+ * Every name one row occupies in the index.
+ *
+ * A staged rename is ONE entry with two names: `path` is where the file went
+ * and `from` is where it was, and git's index holds the deletion of the old
+ * name beside the addition of the new one. Unstaging or excluding only `path`
+ * leaves that deletion staged, and `git commit` commits the whole index — so
+ * a rename the user meant to leave out is recorded as "delete the old file",
+ * with the new one left untracked. Both names travel together for that
+ * reason.
+ * @param entry - the row's entry.
+ * @returns the path, and the original path when the entry is a rename.
+ */
+function namesOf(entry: EntryView): string[] {
+  return entry.from === undefined ? [entry.path] : [entry.path, entry.from]
+}
 
 /**
  * How to bring each drawn checkbox back in line with the selection.
@@ -201,10 +222,11 @@ function iconButton(key: string, label: string, glyph: string, press: () => void
  * list the row was in and acts on the answer.
  * @param repo - the repository the row belongs to.
  * @param section - which list the row is in, which decides what the menu offers.
- * @param path - the row's path within the repository.
+ * @param entry - the row's entry, whose `from` an unstage needs as well as its path.
  * @returns resolution once the chosen action has been started.
  */
-async function openRowMenu(repo: RepoView, section: RowGroup['section'], path: string): Promise<void> {
+async function openRowMenu(repo: RepoView, section: RowGroup['section'], entry: EntryView): Promise<void> {
+  const path = entry.path
   const one = [path]
   const action = await window.pane.gitRowMenu(section)
   switch (action) {
@@ -217,7 +239,8 @@ async function openRowMenu(repo: RepoView, section: RowGroup['section'], path: s
       return
     }
     case 'unstage': {
-      run(() => window.pane.unstageFiles(repo.path, one))
+      // Both names of a rename, never only the new one; see `namesOf`.
+      run(() => window.pane.unstageFiles(repo.path, namesOf(entry)))
       return
     }
     case 'discard': {
@@ -252,7 +275,7 @@ function branchLine(status: RepoStatusView): string {
  *
  * The glyph does the saying: a bare word beside a repository's name reads as
  * a second name, and every list of branches anyone has seen carries one.
- * @param status - the repository's state.
+ * @param repo - the repository the header belongs to.
  * @returns the element, ready to append.
  */
 function branchTag(repo: RepoView): HTMLElement {
@@ -321,7 +344,16 @@ function pickBranch(repo: RepoView, branch: BranchRowView): void {
       say(out.reason)
       return
     }
-    blocking = { repo: repo.path, name: branch.name, remote: branch.remote, files: out.blocked }
+    // `tracked` when main named no kind: it is the refusal a plain stash
+    // clears, so an old main answering a new panel offers the weaker stash
+    // rather than sweeping untracked files away on a guess.
+    blocking = {
+      repo: repo.path,
+      name: branch.name,
+      remote: branch.remote,
+      files: out.blocked,
+      kind: out.blockedKind ?? 'tracked',
+    }
     draw()
   })
 }
@@ -346,12 +378,19 @@ function pickBranch(repo: RepoView, branch: BranchRowView): void {
  * stash the push could not name stops the chain before the switch: the work
  * is safe in the list and the user is told where, which is the only honest
  * answer when there is no handle that survives another process stashing.
- * @param at - the refused switch: the repository, the branch, and the files git named.
+ *
+ * `-u` is passed when what git refused over was untracked files. A plain
+ * `git stash push` leaves those where they are, so without the flag the
+ * chain would stash the tracked work for nothing, hit the same refusal on the
+ * second checkout, and leave the user reading "your changes are stashed, but
+ * the switch failed" with a stash they never asked for — or, on a repository
+ * blocked by untracked files alone, "there is nothing to stash".
+ * @param at - the refused switch: the repository, the branch, the files git named, and which refusal it was.
  * @returns resolution once the chain has finished or stopped.
  */
-async function stashAndSwitch(at: { repo: string; name: string; remote: boolean }): Promise<void> {
+async function stashAndSwitch(at: { repo: string; name: string; remote: boolean; kind: BlockedKind }): Promise<void> {
   say('')
-  const pushed = await window.pane.pushStash(at.repo, `Switching to ${at.name}`)
+  const pushed = await window.pane.pushStash(at.repo, `Switching to ${at.name}`, at.kind === 'untracked')
   if (!pushed.ok) {
     say(`Nothing was switched: the stash failed. ${pushed.reason}`)
     return
@@ -504,14 +543,27 @@ function promptFor(repo: RepoView, kind: 'branch' | 'stash'): HTMLInputElement {
  * @param at - the refused switch and the files git named.
  * @returns the note, ready to append.
  */
-function blockedNote(at: { repo: string; name: string; remote: boolean; files: string[] }): HTMLElement {
+function blockedNote(at: {
+  repo: string
+  name: string
+  remote: boolean
+  files: string[]
+  kind: BlockedKind
+}): HTMLElement {
   const note = document.createElement('div')
   note.className = 'branch-blocked'
   const text = document.createElement('p')
   text.className = 'branch-blocked-text'
   // The files are the content of the offer: an offer that cannot say what it
-  // would stash is a shrug with a button on it.
-  text.textContent = `Switching to ${at.name} would overwrite ${at.files.join(', ')}.`
+  // would stash is a shrug with a button on it. The untracked wording is not
+  // decoration either — stashing those takes files git has never seen out of
+  // the working tree, which is a bigger thing than stashing edits and has to
+  // be said before the button is pressed.
+  const what = at.files.join(', ')
+  text.textContent =
+    at.kind === 'untracked'
+      ? `Switching to ${at.name} would overwrite the untracked files ${what}. Stashing takes them with it.`
+      : `Switching to ${at.name} would overwrite ${what}.`
   note.append(text)
   const button = document.createElement('button')
   button.type = 'button'
@@ -569,16 +621,21 @@ function drawStashes(repo: RepoView): DocumentFragment {
 
     const actions = document.createElement('span')
     actions.className = 'row-actions'
-    const at = (what: string): string => keyOf(repo.path, 'stash', stash.ref, what)
+    const at = (what: string): string => keyOf(repo.path, 'stash', stash.sha, what)
+    // Labelled by position, acting by sha. The position is what the user is
+    // looking at; the sha is what survives another process stashing between
+    // the click and the command — and, for Drop, the whole time a native
+    // confirmation stands open. Main re-resolves the sha and refuses one that
+    // has left the list rather than falling back to a position.
     actions.append(
-      rowAction(at('apply'), `Apply ${stash.ref}`, '⇡', () => window.pane.applyStash(repo.path, stash.ref, false)),
+      rowAction(at('apply'), `Apply ${stash.ref}`, '⇡', () => window.pane.applyStash(repo.path, stash.sha, false)),
     )
     actions.append(
-      rowAction(at('pop'), `Pop ${stash.ref}`, '⤒', () => window.pane.applyStash(repo.path, stash.ref, true)),
+      rowAction(at('pop'), `Pop ${stash.ref}`, '⤒', () => window.pane.applyStash(repo.path, stash.sha, true)),
     )
     // Unrecoverable in the way Discard is, and confirmed in main for the same
     // reason: a dropped stash is reachable only by a hash never shown here.
-    actions.append(rowAction(at('drop'), `Drop ${stash.ref}`, '✕', () => window.pane.dropStash(repo.path, stash.ref)))
+    actions.append(rowAction(at('drop'), `Drop ${stash.ref}`, '✕', () => window.pane.dropStash(repo.path, stash.sha)))
     row.append(actions)
 
     item.append(row)
@@ -711,7 +768,8 @@ function drawSection(repo: RepoView, group: RowGroup): DocumentFragment {
     const one = [entry.path]
     const at = (what: string): string => keyOf(repo.path, group.section, entry.path, what)
     if (group.section === 'staged') {
-      actions.append(rowAction(at('unstage'), 'Unstage', '−', () => window.pane.unstageFiles(repo.path, one)))
+      // Both names of a rename, never only the new one; see `namesOf`.
+      actions.append(rowAction(at('unstage'), 'Unstage', '−', () => window.pane.unstageFiles(repo.path, namesOf(entry))))
     } else {
       actions.append(rowAction(at('stage'), 'Stage', '+', () => window.pane.stageFiles(repo.path, one)))
       // Untracked goes in the second list and tracked in the first: they are
@@ -734,7 +792,7 @@ function drawSection(repo: RepoView, group: RowGroup): DocumentFragment {
 
     row.addEventListener('contextmenu', (event) => {
       event.preventDefault()
-      void openRowMenu(repo, group.section, entry.path)
+      void openRowMenu(repo, group.section, entry)
     })
     item.append(row)
     list.append(item)
@@ -762,7 +820,8 @@ function repoActions(repo: RepoView): HTMLElement {
   actions.className = 'row-actions'
   const changed = repo.status.changed.map((entry) => entry.path)
   const untracked = repo.status.untracked.map((entry) => entry.path)
-  const staged = repo.status.staged.map((entry) => entry.path)
+  // Both names of every staged rename; see `namesOf`.
+  const staged = repo.status.staged.flatMap(namesOf)
   const at = (what: string): string => keyOf(repo.path, '', '', what)
   if (changed.length + untracked.length > 0) {
     actions.append(
@@ -1076,7 +1135,7 @@ el('commit-form').addEventListener('submit', (event) => {
   const { add, keep } = selection.selected(repo.path, repo.status)
   say('')
   void window.pane
-    .commitFiles(repo.path, box.value, add, keep, repo.status.staged.map((entry) => entry.path))
+    .commitFiles(repo.path, box.value, add, keep, repo.status.staged.flatMap(namesOf))
     .then((out) => {
       // Cleared only on success: a message the user typed is not thrown away
       // because git refused the commit it was written for.

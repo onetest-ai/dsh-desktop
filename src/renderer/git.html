@@ -30,8 +30,11 @@
       <textarea id="commit-message" class="commit-message" rows="2" placeholder="Message" aria-label="Commit message"></textarea>
       <button type="submit" id="commit" class="commit-button">Commit</button>
     </form>
-    <!-- What a git action said when it would not run. Never a stack trace. -->
-    <p class="git-note" id="git-note" hidden></p>
+    <!-- What a git action said when it would not run. Never a stack trace.
+         A live region: this is the only surface that reports "your changes are
+         stashed, but the switch failed", and a message a screen reader never
+         announces is one that only sighted users get the safety of. -->
+    <p class="git-note" id="git-note" role="status" hidden></p>
     <div id="repos"></div>
   </section>
 </main>

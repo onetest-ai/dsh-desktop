@@ -90,6 +90,14 @@ export class Selection {
    * add` against the newer working-tree content and silently overwrite the
    * version the staged tick exists to preserve, so a path in `add` never
    * also appears in `keep`.
+   *
+   * A ticked staged rename contributes BOTH of its names to `keep`. The index
+   * holds a rename as the deletion of the old name beside the addition of the
+   * new one, and `commit` unstages every staged path that is in neither list
+   * — so a `keep` naming only the new path would leave the deletion of the
+   * old one to be unstaged, and the commit would record half a rename. The
+   * old name is deliberately not added to `add`: it no longer exists on disk,
+   * and `git add` on it fails with a pathspec error that stops the commit.
    * @param repo - the repository's path.
    * @param status - its current state.
    * @returns the paths to `git add`, and the already-staged paths to leave untouched.
@@ -99,7 +107,9 @@ export class Selection {
     const untracked = pathsOf(status, 'untracked').filter((path) => this.ticked(repo, 'untracked', path))
     const add = [...new Set([...changed, ...untracked])]
     const addSet = new Set(add)
-    const keep = pathsOf(status, 'staged').filter((path) => this.ticked(repo, 'staged', path) && !addSet.has(path))
+    const keep = status.staged
+      .filter((entry) => this.ticked(repo, 'staged', entry.path) && !addSet.has(entry.path))
+      .flatMap((entry) => (entry.from === undefined ? [entry.path] : [entry.path, entry.from]))
     return { add, keep }
   }
 
