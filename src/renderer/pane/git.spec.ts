@@ -1151,6 +1151,11 @@ describe('the remote', () => {
     const item = [...document.querySelectorAll<HTMLButtonElement>('.sync-item')].find(
       (button) => button.textContent === label,
     )
+    // A real click focuses the control first; jsdom's programmatic click does
+    // not, so without this the item is never actually holding focus when it
+    // is removed, and a test asserting focus survives that removal would
+    // pass whether or not the code that restores it is there at all.
+    item?.focus()
     item?.click()
   }
 
@@ -1253,10 +1258,33 @@ describe('the remote', () => {
     pressSync('Fetch')
     for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
     const cancel = document.querySelector<HTMLButtonElement>('.sync-cancel')
+    // Same reasoning as `pressSync`: a real click would have focused Cancel
+    // first, and only a control that actually held focus proves anything
+    // about what happens to the keyboard once it is removed.
+    cancel?.focus()
     cancel?.click()
     bridge.finish({ ok: false, reason: 'cancelled' })
     for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
     expect(document.querySelector('.sync-running')).toBeNull()
     expect(document.activeElement).toBe(document.querySelector('.repo-branch'))
+  })
+
+  // reason: a fetch can take seconds, and the resolve-time redraw must not
+  // assume the branch control is still what the user wants the keyboard on —
+  // they may have tabbed or clicked to something else in that time, the same
+  // way `draw`'s own `asking` continuation leaves focus alone once something
+  // else in the panel already has it.
+  it('does not pull focus back once it has moved elsewhere while a fetch is running', async () => {
+    const bridge = stubBridge({ repos: [repo({})], hold: true })
+    await load(bridge)
+    pressSync('Fetch')
+    for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    const elsewhere = document.getElementById('commit-message') as HTMLTextAreaElement
+    elsewhere.focus()
+    expect(document.activeElement).toBe(elsewhere)
+    bridge.finish({ ok: true })
+    for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.sync-running')).toBeNull()
+    expect(document.activeElement).toBe(elsewhere)
   })
 })

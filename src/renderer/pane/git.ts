@@ -463,9 +463,11 @@ async function runRemote(repo: string, op: 'fetch' | 'pull' | 'push' | 'publish'
   trouble = undefined
   running.set(repo, DOING[op])
   draw()
-  // The clicked sync item and the eventual running/idle control never share a
-  // `data-key`, so `draw`'s by-key restore finds nothing for either — without
-  // this the keyboard falls to `<body>`, both while it runs and once it answers.
+  // The clicked sync item and the running control never share a `data-key`,
+  // so `draw`'s by-key restore finds nothing here — without this the keyboard
+  // falls to `<body>`. Unconditional is right for this one: the control that
+  // just had focus is the one this same keypress removed, so there is nowhere
+  // else the keyboard could have gone.
   focusBranch(repo)
   const out = await window.pane.gitRemote(repo, op)
   running.delete(repo)
@@ -476,7 +478,13 @@ async function runRemote(repo: string, op: 'fetch' | 'pull' | 'push' | 'publish'
     else say(out.reason)
   }
   draw()
-  focusBranch(repo)
+  // This draw can land seconds after the one above, and by then the user may
+  // have tabbed or clicked to an unrelated control — another repository's
+  // row, the commit box, a different branch menu. Guarded like `draw`'s own
+  // `asking` continuation: only take the keyboard back when the removed
+  // control left it stranded on nothing, so a fetch finishing does not yank
+  // focus away from wherever the user has since gone.
+  if (document.activeElement === null || document.activeElement === document.body) focusBranch(repo)
 }
 
 /**
