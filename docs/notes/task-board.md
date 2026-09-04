@@ -130,7 +130,9 @@ The rule is the one the rest of this app follows: say what was observed, never a
 
 Taken from `@octoshell/board` into `src/main/board/`, with a README recording the upstream commit and the refresh procedure — the policy `vendor/dsh-theme/README.md` already sets.
 
-**Taken:** `entity-schema.ts` (the YAML round-trip), `board-model.ts` (read and rebuild), `write.ts` (the write paths), `validate.ts`, `slug.ts`, `types.ts`, and their tests.
+**Taken nearly verbatim:** `entity-schema.ts` — the YAML round-trip, including the `extra` passthrough — and `slug.ts`, with their tests. This is the subtle part, the part with the scars on it, and the part that is genuinely self-contained: its only import is `js-yaml`.
+
+**Written fresh:** the reader, the writer and the validator. Upstream's are 744 and 915 lines, and most of that is what this board does not have — reading Markdown as well as YAML, the `isYaml` branch through every path, legacy id markers, workflow parsing, and the migrations off the old format. Taking them would mean vendoring the legacy handling in order to delete it. A YAML-only reader over four kinds is a small fraction of that, and the behaviour worth keeping is in the schema, which we do take.
 
 **Left behind, with reasons:**
 
@@ -140,7 +142,7 @@ Taken from `@octoshell/board` into `src/main/board/`, with a README recording th
 - **`missingIdFiles`** — legacy id markers that only existed for Markdown entities.
 - **The mission rollup** — a parent's status derived from its children. See *Status is set, never inferred*.
 
-**Changed:** the root moves from `.octobots/` to `.dsh/tasks/`, and imports adapt to this repo's CommonJS main-process build rather than the upstream ESM package.
+**Changed:** the root moves from `.octobots/` to `.dsh/tasks/`; imports adapt to this repo's CommonJS main-process build rather than the upstream ESM package; and the source is restyled to this repo's conventions, since no formatter is configured here and upstream's differs.
 
 ### The js-yaml version hazard
 
