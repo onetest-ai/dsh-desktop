@@ -115,6 +115,8 @@ function stubBridge(options: {
   remote?: (StubResult & { trouble?: string })[]
   /** Makes `gitRemote` hang until the test resolves it with `finish`. */
   hold?: boolean
+  /** Makes `gitRemote` reject instead of answering, with this message. */
+  remoteThrows?: string
 }): StubBridge {
   const commitCalls: unknown[][] = []
   const actionCalls: unknown[][] = []
@@ -157,6 +159,7 @@ function stubBridge(options: {
     },
     gitRemote: async (repo, op) => {
       gitCalls.push(['remote', repo, op])
+      if (options.remoteThrows !== undefined) throw new Error(options.remoteThrows)
       if (options.hold === true) {
         return await new Promise<StubResult & { trouble?: string }>((resolve) => {
           release = resolve
@@ -1371,5 +1374,63 @@ describe('the remote', () => {
     await sync('Push')
     const notes = document.querySelectorAll('.sync-trouble')
     expect(notes).toHaveLength(1)
+  })
+
+  /** The sync control's own button, wherever it is drawn — running or idle. */
+  function syncButton(): HTMLButtonElement | undefined {
+    return [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.getAttribute('aria-label') === 'Fetch, pull or push',
+    )
+  }
+
+  // reason: `branchTag` announces its own menu with `aria-expanded`, and the
+  // sync control opens a menu of its own without saying so — a screen-reader
+  // user gets no signal that ⇅ toggled a group open at all.
+  it('announces the sync menu the way the branch control announces its own', async () => {
+    const bridge = stubBridge({ repos: [repo({})] })
+    await load(bridge)
+    expect(syncButton()?.getAttribute('aria-expanded')).toBe('false')
+    syncButton()?.click()
+    expect(syncButton()?.getAttribute('aria-expanded')).toBe('true')
+    syncButton()?.click()
+    expect(syncButton()?.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  // reason: without a `finally`, a rejected bridge call would strand
+  // `running` — the header would keep showing "Fetching…" and this
+  // repository could never fetch, pull or push again for the life of the
+  // page, silently.
+  it('clears the running state and says so when the bridge call itself fails', async () => {
+    const bridge = stubBridge({ repos: [repo({})], remoteThrows: 'EACCES' })
+    await load(bridge)
+    pressSync('Fetch')
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.sync-running')).toBeNull()
+    expect(document.getElementById('git-note')?.textContent).toContain('EACCES')
+    // Strand check: the control that opens the menu again must have come
+    // back, not stayed replaced by a running note that will never clear.
+    expect(syncButton()).not.toBeUndefined()
+  })
+
+  // reason: `branchTag`'s click handler clears both `branchMenu` and
+  // `syncMenu`, showing the invariant the Stash button was missing: opening
+  // any one of the header's own prompts or menus should close every other
+  // one of them, not leave a menu primed to reappear once the prompt closes.
+  it('does not let the sync menu reappear on its own once a stash prompt is dismissed', async () => {
+    const bridge = stubBridge({ repos: [repo({ staged: [{ path: 'a.ts', status: 'M' }] })] })
+    await load(bridge)
+    syncButton()?.click()
+    expect(document.querySelector('.sync-menu')).not.toBeNull()
+    const stash = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.getAttribute('aria-label') === 'Stash',
+    )
+    stash?.click()
+    // The prompt is up, and the sync menu must be suppressed under it.
+    expect(document.querySelector('.sync-menu')).toBeNull()
+    const input = document.querySelector<HTMLInputElement>('.branch-input')
+    expect(input).not.toBeNull()
+    input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    // Dismissing the prompt must not bring the sync menu back unbidden.
+    expect(document.querySelector('.sync-menu')).toBeNull()
   })
 })

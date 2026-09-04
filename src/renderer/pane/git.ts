@@ -215,15 +215,24 @@ function rowAction(key: string, label: string, glyph: string, act: () => Promise
  * @param label - what it does, for the tooltip and the screen reader.
  * @param glyph - the character to show.
  * @param press - what to do when it is pressed.
+ * @param expanded - whether this glyph opens a menu, and whether that menu is open now; omitted for
+ *   one that does not, the way `title`/`aria-label` already cover every caller that is not a menu.
  * @returns the button.
  */
-function iconButton(key: string, label: string, glyph: string, press: () => void): HTMLButtonElement {
+function iconButton(
+  key: string,
+  label: string,
+  glyph: string,
+  press: () => void,
+  expanded?: boolean,
+): HTMLButtonElement {
   const button = document.createElement('button')
   button.type = 'button'
   button.className = 'row-action'
   button.dataset.key = key
   button.title = label
   button.setAttribute('aria-label', label)
+  if (expanded !== undefined) button.setAttribute('aria-expanded', String(expanded))
   button.textContent = glyph
   button.addEventListener('click', press)
   return button
@@ -472,8 +481,19 @@ async function runRemote(repo: string, op: 'fetch' | 'pull' | 'push' | 'publish'
   // just had focus is the one this same keypress removed, so there is nowhere
   // else the keyboard could have gone.
   focusBranch(repo)
-  const out = await window.pane.gitRemote(repo, op)
-  running.delete(repo)
+  let out: GitResult & { trouble?: TroubleKind }
+  try {
+    out = await window.pane.gitRemote(repo, op)
+  } catch (error) {
+    // Nothing on the other side of the bridge rejects today — the same
+    // caveat `refresh` carries for `readGit` — but without this a rejection
+    // here would skip straight past `running.delete` below: the header would
+    // keep showing this operation running, and this repository could never
+    // fetch, pull or push again for the life of the page.
+    out = { ok: false, reason: `This repository could not be asked to ${op}: ${(error as Error).message}` }
+  } finally {
+    running.delete(repo)
+  }
   if (!out.ok) {
     // A trouble the panel knows gets a note with a way out of it; anything
     // else is an ordinary failure and belongs where every other one goes.
@@ -1026,6 +1046,12 @@ function repoActions(repo: RepoView): HTMLElement {
     actions.append(
       iconButton(at('stash'), 'Stash', '⇣', () => {
         branchMenu = undefined
+        // Cleared alongside branchMenu, the way branchTag itself clears both:
+        // the `asking === undefined` guards only suppress the sync menu
+        // while the prompt is up, and left set it reappears unbidden the
+        // moment the prompt is dismissed, naming a repository nobody asked
+        // to see fetch/pull/push again.
+        syncMenu = undefined
         asking = { repo: repo.path, kind: 'stash', text: '' }
         draw()
       }),
@@ -1040,11 +1066,17 @@ function repoActions(repo: RepoView): HTMLElement {
     return actions
   }
   actions.append(
-    iconButton(at('sync'), 'Fetch, pull or push', '⇅', () => {
-      branchMenu = undefined
-      syncMenu = syncMenu === repo.path ? undefined : repo.path
-      draw()
-    }),
+    iconButton(
+      at('sync'),
+      'Fetch, pull or push',
+      '⇅',
+      () => {
+        branchMenu = undefined
+        syncMenu = syncMenu === repo.path ? undefined : repo.path
+        draw()
+      },
+      syncMenu === repo.path,
+    ),
   )
   return actions
 }

@@ -405,6 +405,12 @@ function startTerminal(cols: number, rows: number): { id: number; cwd: string; s
     }
   })
   if (problem !== undefined) {
+    // Cleared here too, on the failing path, not only below: left set, a
+    // repository's directory picked for the shell that would not start
+    // reaches the next shell that does — the one opened, from the rail, once
+    // the user has fixed Settings and forgotten which repo Open in Terminal
+    // last pointed at.
+    nextTerminalCwd = undefined
     return {
       error: shell.source === 'configured'
         ? `${problem} Change it under Settings → Advanced → Terminal shell.`

@@ -66,9 +66,71 @@ const KNOWN: { has: string; kind: TroubleKind; say: string }[] = [
  * @returns which failure it was and what to say, or nothing when it is not one of these.
  */
 export function remoteTrouble(text: string): Trouble | undefined {
-  const said = text.toLowerCase()
+  // A `remote:` line is the server's own words, echoed verbatim rather than
+  // written by the git this app is running — a pre-receive hook's own
+  // "Authentication failed" is about a token this machine never held, and
+  // matching it here would send the user to Open in Terminal for a remedy
+  // that has nothing to do with this machine.
+  const said = text
+    .split('\n')
+    .filter((line) => !/^\s*remote:/i.test(line))
+    .join('\n')
+    .toLowerCase()
   const found = KNOWN.find((one) => said.includes(one.has))
   return found === undefined ? undefined : { kind: found.kind, say: found.say }
+}
+
+/**
+ * The lines of a stream, trimmed, with the blank ones dropped.
+ *
+ * A local copy rather than a shared one: `firstLine`'s own `spoken` is not
+ * exported, and it should not be — its rule is right only for the local git
+ * commands that lead with `fatal:`, and giving `remoteLine` a shared helper
+ * invites someone to reach for `firstLine` here again later.
+ * @param text - a whole stream.
+ * @returns the lines worth reading, in order.
+ */
+function spoken(text: string): string[] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+}
+
+/** A ref-status line `git push`/`git pull` prints under their `To `/`From ` narration. */
+const REF_STATUS = /^(\*\s|[0-9a-f]{4,40}\.\.[0-9a-f]{4,40}\s)/
+
+/**
+ * What `git push` or `git pull` said, cut to the line that names the problem.
+ *
+ * `firstLine` takes stderr's first line, which is right for a local command
+ * that leads with `fatal:` — but a remote one narrates first: a `To <url>` or
+ * `From <url>` line, then the ref-status lines that follow it, and only after
+ * that does it say what went wrong. Taking the first line there reports the
+ * narration — a URL that reads like success — for the two commonest failures
+ * of the two commonest operations: a non-fast-forward push, and a divergent
+ * pull with no `pull.rebase` configured.
+ *
+ * The narration is skipped, then the remainder is searched in the order a
+ * problem is most plainly named: `error:`/`fatal:` first, a rejected ref
+ * line next, a `hint:` only when nothing more direct is there.
+ * @param stderr - what git wrote to stderr.
+ * @param stdout - what it wrote to stdout, read only when stderr is silent.
+ * @returns the line to show.
+ */
+export function remoteLine(stderr: string, stdout: string): string {
+  const said = spoken(stderr)
+  if (said.length === 0) return firstLine(stderr, stdout)
+  let start = /^(To|From)\s/.test(said[0]) ? 1 : 0
+  while (start < said.length && REF_STATUS.test(said[start])) start++
+  const rest = said.slice(start)
+  const pick = (test: (line: string) => boolean): string | undefined => rest.find(test)
+  const found =
+    pick((line) => /^error:/i.test(line)) ??
+    pick((line) => /^fatal:/i.test(line)) ??
+    pick((line) => line.startsWith('! [')) ??
+    pick((line) => /^hint:/i.test(line))
+  return found ?? rest[0] ?? said[0]
 }
 
 /** The four things the panel asks a remote for. */
@@ -177,5 +239,5 @@ export async function remote(
   const said = out.stderr === '' ? out.stdout.toString('utf8') : out.stderr
   const trouble = remoteTrouble(said)
   if (trouble !== undefined) return { ok: false, reason: trouble.say, trouble: trouble.kind }
-  return { ok: false, reason: firstLine(out.stderr, out.stdout.toString('utf8')) }
+  return { ok: false, reason: remoteLine(out.stderr, out.stdout.toString('utf8')) }
 }
