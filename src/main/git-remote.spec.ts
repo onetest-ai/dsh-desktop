@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { remoteTrouble } from './git-remote'
+import { remote, remoteTrouble, REMOTE_TIMEOUT_MS } from './git-remote'
+import type { GitResult } from './git-run'
 
 describe('remoteTrouble', () => {
   // reason: this is what GIT_TERMINAL_PROMPT=0 turns an HTTPS credential
@@ -53,5 +54,119 @@ describe('remoteTrouble', () => {
   // table that only matched one casing would go quiet after an upgrade.
   it('reads what git said whatever case it said it in', () => {
     expect(remoteTrouble('FATAL: COULD NOT READ USERNAME FOR X')?.kind).toBe('https')
+  })
+})
+
+/**
+ * A git that answers from a script, recording what it was asked.
+ * @param answers - one answer per call, in order; the last repeats.
+ * @returns the double and the calls it recorded.
+ */
+function fakeGit(answers: Partial<GitResult>[]): {
+  run: (cwd: string, args: string[], gitPath?: string, opts?: unknown) => Promise<GitResult>
+  calls: { args: string[]; opts: unknown }[]
+} {
+  const calls: { args: string[]; opts: unknown }[] = []
+  let turn = 0
+  return {
+    calls,
+    run: async (_cwd, args, _gitPath, opts) => {
+      calls.push({ args, opts })
+      const answer = answers[Math.min(turn, answers.length - 1)] ?? {}
+      turn += 1
+      return { code: answer.code ?? 0, stdout: answer.stdout ?? Buffer.from(''), stderr: answer.stderr ?? '' }
+    },
+  }
+}
+
+describe('remote', () => {
+  it('fetches with one command and nothing added to it', async () => {
+    const git = fakeGit([{ code: 0 }])
+    expect(await remote('/r', 'fetch', undefined, git.run as never)).toEqual({ ok: true })
+    expect(git.calls[0].args).toEqual(['fetch'])
+  })
+
+  // reason: `--rebase` or `--no-rebase` here would override the user's own
+  // pull.rebase, which is a decision about their repository, not this app's.
+  it('pulls plainly, so the user\'s own pull.rebase decides', async () => {
+    const git = fakeGit([{ code: 0 }])
+    await remote('/r', 'pull', undefined, git.run as never)
+    expect(git.calls[0].args).toEqual(['pull'])
+  })
+
+  // reason: a force push from a panel is a force push nobody meant to do.
+  it('pushes plainly, never with force', async () => {
+    const git = fakeGit([{ code: 0 }])
+    await remote('/r', 'push', undefined, git.run as never)
+    expect(git.calls[0].args).toEqual(['push'])
+    expect(git.calls[0].args.join(' ')).not.toContain('force')
+  })
+
+  it('reports what git said when it failed', async () => {
+    const git = fakeGit([{ code: 1, stderr: '! [rejected] main -> main (fetch first)\nhint: ignore me' }])
+    const out = await remote('/r', 'push', undefined, git.run as never)
+    expect(out).toEqual({ ok: false, reason: '! [rejected] main -> main (fetch first)' })
+  })
+
+  // reason: the kind is what the panel hangs a button on; without it every
+  // credential failure is a sentence the user can only read.
+  it('names which trouble it was when it recognises one', async () => {
+    const git = fakeGit([{ code: 1, stderr: "fatal: could not read Username for 'https://x': terminal prompts disabled" }])
+    const out = await remote('/r', 'push', undefined, git.run as never)
+    expect(out.ok).toBe(false)
+    expect(out.trouble).toBe('https')
+    if (!out.ok) expect(out.reason).toContain('HTTPS credential')
+  })
+
+  // reason: `git remote` names the remote, so nothing the renderer typed ever
+  // reaches the command line — and HEAD names the branch, so nothing does.
+  it('publishes to the only remote, by HEAD', async () => {
+    const git = fakeGit([{ code: 0, stdout: Buffer.from('origin\n') }, { code: 0 }])
+    expect(await remote('/r', 'publish', undefined, git.run as never)).toEqual({ ok: true })
+    expect(git.calls[0].args).toEqual(['remote'])
+    expect(git.calls[1].args).toEqual(['push', '--set-upstream', 'origin', 'HEAD'])
+  })
+
+  // reason: guessing which of several remotes the user meant is how work ends
+  // up on a fork nobody was watching.
+  it('refuses to guess between two remotes', async () => {
+    const git = fakeGit([{ code: 0, stdout: Buffer.from('origin\nupstream\n') }])
+    const out = await remote('/r', 'publish', undefined, git.run as never)
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.reason).toContain('more than one remote')
+    expect(git.calls).toHaveLength(1)
+  })
+
+  it('says so when there is no remote at all', async () => {
+    const git = fakeGit([{ code: 0, stdout: Buffer.from('') }])
+    const out = await remote('/r', 'publish', undefined, git.run as never)
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.reason).toContain('no remote')
+  })
+
+  // reason: a cancel that reported git's silence as "git failed without
+  // saying why" would read as a fault rather than as the thing just done.
+  it('says a cancelled run was cancelled', async () => {
+    const stop = new AbortController()
+    stop.abort()
+    const git = fakeGit([{ code: 1, stderr: '' }])
+    const out = await remote('/r', 'fetch', stop.signal, git.run as never)
+    expect(out).toEqual({ ok: false, reason: 'Cancelled.' })
+  })
+
+  // reason: the default thirty seconds is a normal first fetch on a large
+  // repository, and being cut off there looks like a network fault.
+  it('gives a remote operation longer than a local one', async () => {
+    const git = fakeGit([{ code: 0 }])
+    await remote('/r', 'fetch', undefined, git.run as never)
+    expect((git.calls[0].opts as { timeoutMs: number }).timeoutMs).toBe(REMOTE_TIMEOUT_MS)
+    expect(REMOTE_TIMEOUT_MS).toBeGreaterThan(30_000)
+  })
+
+  it('passes the signal through so the child can be killed', async () => {
+    const stop = new AbortController()
+    const git = fakeGit([{ code: 0 }])
+    await remote('/r', 'fetch', stop.signal, git.run as never)
+    expect((git.calls[0].opts as { signal: AbortSignal }).signal).toBe(stop.signal)
   })
 })
