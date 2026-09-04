@@ -354,6 +354,34 @@ function toggleTerminalPanel(): void {
 }
 
 /**
+ * Where a shell opened from the git panel should start.
+ *
+ * Through the same gate as every git write, because this is the one place a
+ * path from the renderer becomes a working directory somebody then runs
+ * commands in. A repository the project does not hold falls back to the
+ * project rather than being refused: the user asked for a terminal and a
+ * terminal is what they get, in the place every other terminal opens.
+ * @param repo - the repository the panel named.
+ * @param known - the repositories currently discovered.
+ * @param project - the open project's path, or nothing when none is open.
+ * @returns the directory to start in; empty when there is nowhere to name.
+ */
+export function terminalCwdFor(repo: string, known: () => string[], project: string | undefined): string {
+  if (refuseUnlessInProject(repo, [], known) === undefined) return repo
+  return project ?? ''
+}
+
+/**
+ * Where the next shell should start, when it is not the project root.
+ *
+ * Held here rather than passed from the page, so the terminal's preload keeps
+ * its rule: the page names only a size, and main decides what runs and where.
+ * Consumed by the next `terminal:start` and cleared, so a session opened any
+ * other way afterwards lands in the project as it always did.
+ */
+let nextTerminalCwd: string | undefined
+
+/**
  * Start a shell for the terminal panel.
  *
  * The directory is the workspace the tree is showing at the moment the panel
@@ -383,7 +411,8 @@ function startTerminal(cols: number, rows: number): { id: number; cwd: string; s
         : problem,
     }
   }
-  const cwd = currentProject?.path ?? app.getPath('home')
+  const cwd = nextTerminalCwd ?? currentProject?.path ?? app.getPath('home')
+  nextTerminalCwd = undefined
   const id = terminals.start({
     shell: shell.command,
     args: argsFor(shell.command),
@@ -2627,6 +2656,30 @@ if (!app.requestSingleInstanceLock()) {
       // the rule that every git channel is checked is worth more than the
       // exception.
       if (refuseUnlessInProject(repo, [], gitRepoPaths) === undefined) gitCancelRemote(repo)
+    })
+    // The way out of a credential failure: a shell in that repository, where
+    // git's own helper can cache what it needs and the panel works from then
+    // on. A new session rather than the panel's existing one — a `cd` typed
+    // into a shell that is in the middle of something is not a courtesy.
+    ipcMain.on('git:open-terminal', (_event, repo: string) => {
+      const cwd = terminalCwdFor(repo, gitRepoPaths, currentProject?.path)
+      if (cwd === '') return
+      nextTerminalCwd = cwd
+      if (!columns.terminal.open) {
+        setColumn('terminal', { open: true })
+        storeColumns()
+      }
+      if (views === undefined || views.window.isDestroyed()) return
+      const target = views.terminal.webContents
+      // A page still loading drops what is sent to it; this is that page's
+      // first moments after boot, which is exactly when a rail press lands.
+      if (target.isLoading()) {
+        target.once('did-finish-load', () => {
+          target.send('terminal:open-new')
+        })
+        return
+      }
+      target.send('terminal:open-new')
     })
     ipcMain.on('shell:toggle-terminal', toggleTerminalPanel)
     // The harness telling us which project it is working in — pushed by the

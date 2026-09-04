@@ -29,6 +29,11 @@ contextBridge.exposeInMainWorld('terminal', {
       listener()
     })
   },
+  onOpenNew: (listener: () => void) => {
+    ipcRenderer.on('terminal:open-new', () => {
+      listener()
+    })
+  },
   askTheme: () => ipcRenderer.send('theme:ask'),
   onTheme: (listener: (dark: boolean) => void) => {
     ipcRenderer.on('theme', (_event, dark: boolean) => listener(dark))

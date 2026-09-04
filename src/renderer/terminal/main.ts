@@ -15,6 +15,7 @@ declare global {
       onExit(listener: (id: number, code: number) => void): void
       onFailed(listener: (id: number, reason: string) => void): void
       onShown(listener: () => void): void
+      onOpenNew(listener: () => void): void
       askTheme(): void
       onTheme(listener: (dark: boolean) => void): void
     }
@@ -210,6 +211,13 @@ window.terminal.onShown(() => {
     return
   }
   if (active !== undefined) find(active)?.focus()
+})
+
+window.terminal.onOpenNew(() => {
+  // Always a new session, never a focus: main has already decided this one
+  // starts somewhere other than the project, and an existing shell cannot be
+  // moved there without typing into work that may be running.
+  void open()
 })
 
 void open()

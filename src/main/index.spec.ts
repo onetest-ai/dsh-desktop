@@ -2640,4 +2640,24 @@ describe('the git write channels', () => {
       expect(() => gitCancelRemote(repo, new Map())).not.toThrow()
     })
   })
+
+  describe('terminalCwdFor', () => {
+    it('starts the shell in the repository that was named', async () => {
+      const { terminalCwdFor } = await exports()
+      expect(terminalCwdFor(repo, () => [repo], '/p')).toBe(repo)
+    })
+
+    // reason: the directory reaches a shell's cwd, which is the one place in
+    // this app where an unchecked path becomes a working directory somebody
+    // then runs commands in.
+    it('falls back to the project for a repository it does not hold', async () => {
+      const { terminalCwdFor } = await exports()
+      expect(terminalCwdFor('/elsewhere', () => [repo], '/p')).toBe('/p')
+    })
+
+    it('falls back to nothing nameable when no project is open', async () => {
+      const { terminalCwdFor } = await exports()
+      expect(terminalCwdFor('/elsewhere', () => [repo], undefined)).toBe('')
+    })
+  })
 })

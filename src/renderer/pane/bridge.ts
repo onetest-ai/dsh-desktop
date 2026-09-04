@@ -99,6 +99,7 @@ declare global {
         op: 'fetch' | 'pull' | 'push' | 'publish',
       ): Promise<GitResult & { trouble?: 'https' | 'publickey' | 'hostkey' | 'rejected' | 'no-upstream' }>
       cancelGitRemote(repo: string): void
+      openGitTerminal(repo: string): void
       onDiffTexts(
         listener: (root: string, relative: string, original: string, modified: string, inline: boolean) => void,
       ): void
