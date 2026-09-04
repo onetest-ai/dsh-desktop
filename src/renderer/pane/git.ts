@@ -74,6 +74,20 @@ let chosenRepo: string | undefined
  */
 let branchMenu: string | undefined
 
+/** Which repository has its Fetch/Pull/Push menu open, if any. */
+let syncMenu: string | undefined
+
+/** The remote operation running in each repository, by the word for it. */
+const running = new Map<string, 'Fetching' | 'Pulling' | 'Pushing' | 'Publishing'>()
+
+/** What the running state is called for each operation. */
+const DOING = {
+  fetch: 'Fetching',
+  pull: 'Pulling',
+  push: 'Pushing',
+  publish: 'Publishing',
+} as const
+
 /**
  * The inline text prompt in a repository header, and what has been typed.
  *
@@ -296,6 +310,7 @@ function branchTag(repo: RepoView): HTMLElement {
   tag.addEventListener('click', () => {
     branchMenu = branchMenu === repo.path ? undefined : repo.path
     asking = undefined
+    syncMenu = undefined
     draw()
   })
   return tag
@@ -421,6 +436,45 @@ async function stashAndSwitch(at: { repo: string; name: string; remote: boolean;
 }
 
 /**
+ * The remote trouble a fetch, pull or push last ran into, and what to do
+ * about it.
+ *
+ * Declared here for `runRemote` to fill in; Task 7 narrows `kind` to the set
+ * main can name and builds the note itself.
+ */
+let trouble: { repo: string; kind: string; say: string } | undefined
+
+/**
+ * Ask a remote for one thing, and show that it is happening.
+ *
+ * These are the only operations in this panel that wait on something outside
+ * this machine, so they are the only ones that need a state between pressed
+ * and answered. Without it the panel looks idle for the seconds a fetch takes
+ * and is pressed again — which main refuses, since two remote operations in
+ * one working tree race for the same lock, so the second press would read as
+ * the panel being broken rather than as the panel being busy.
+ * @param repo - the repository to act on.
+ * @param op - which operation.
+ * @returns resolution once it has answered and been drawn.
+ */
+async function runRemote(repo: string, op: 'fetch' | 'pull' | 'push' | 'publish'): Promise<void> {
+  say('')
+  syncMenu = undefined
+  trouble = undefined
+  running.set(repo, DOING[op])
+  draw()
+  const out = await window.pane.gitRemote(repo, op)
+  running.delete(repo)
+  if (!out.ok) {
+    // A trouble the panel knows gets a note with a way out of it; anything
+    // else is an ordinary failure and belongs where every other one goes.
+    if (out.trouble !== undefined) trouble = { repo, kind: out.trouble, say: out.reason }
+    else say(out.reason)
+  }
+  draw()
+}
+
+/**
  * The list a branch button opens: local branches, then remote-tracking ones.
  *
  * Drawn in the page rather than popped as a native menu, unlike the row's
@@ -491,6 +545,67 @@ function branchList(repo: RepoView): HTMLElement {
   })
   menu.append(make)
   return menu
+}
+
+/**
+ * The list the sync control opens: one operation each, never a combined Sync.
+ *
+ * Sync is pull-then-push, and a compound operation that half-succeeded is one
+ * the panel then has to explain — usually while the user is looking at a
+ * repository in a state neither half described.
+ * @param repo - the repository the menu belongs to.
+ * @returns the menu, ready to append.
+ */
+function syncList(repo: RepoView): HTMLElement {
+  const menu = document.createElement('div')
+  menu.className = 'branch-menu sync-menu'
+  menu.setAttribute('role', 'group')
+  menu.setAttribute('aria-label', `Remote operations in ${repo.name}`)
+  const item = (op: 'fetch' | 'pull' | 'push', label: string, hint: string): HTMLButtonElement => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'branch-item sync-item'
+    button.dataset.key = keyOf(repo.path, 'sync', op, 'pick')
+    button.textContent = label
+    button.title = hint
+    button.addEventListener('click', () => {
+      void runRemote(repo.path, op)
+    })
+    return button
+  }
+  menu.append(item('fetch', 'Fetch', 'Bring the remote branches up to date, changing nothing here'))
+  menu.append(item('pull', 'Pull', 'Fetch and integrate, however your pull.rebase says to'))
+  menu.append(item('push', 'Push', 'Send this branch to its upstream'))
+  return menu
+}
+
+/**
+ * What the header shows instead of its controls while a remote runs.
+ * @param repo - the repository.
+ * @param doing - the word for what is happening.
+ * @returns the line, ready to append.
+ */
+function runningNote(repo: RepoView, doing: string): HTMLElement {
+  const line = document.createElement('span')
+  line.className = 'sync-running'
+  const text = document.createElement('span')
+  text.className = 'sync-running-text'
+  text.textContent = `${doing}…`
+  line.append(text)
+  const stop = document.createElement('button')
+  stop.type = 'button'
+  stop.className = 'row-action sync-cancel'
+  stop.dataset.key = keyOf(repo.path, '', '', 'cancel-remote')
+  stop.title = `Stop ${doing.toLowerCase()} in ${repo.name}`
+  stop.setAttribute('aria-label', `Stop ${doing.toLowerCase()} in ${repo.name}`)
+  stop.textContent = '×'
+  // Kills the child rather than only hiding the spinner: an operation that
+  // was going nowhere is still going nowhere with the spinner gone.
+  stop.addEventListener('click', () => {
+    window.pane.cancelGitRemote(repo.path)
+  })
+  line.append(stop)
+  return line
 }
 
 /**
@@ -852,6 +967,21 @@ function repoActions(repo: RepoView): HTMLElement {
       }),
     )
   }
+  // While one is running the header shows that instead of the control: main
+  // refuses a second operation in the same repository, so a menu that could
+  // still be opened would only offer a refusal.
+  const doing = running.get(repo.path)
+  if (doing !== undefined) {
+    actions.append(runningNote(repo, doing))
+    return actions
+  }
+  actions.append(
+    iconButton(at('sync'), 'Fetch, pull or push', '⇅', () => {
+      branchMenu = undefined
+      syncMenu = syncMenu === repo.path ? undefined : repo.path
+      draw()
+    }),
+  )
   return actions
 }
 
@@ -912,8 +1042,9 @@ function drawRepo(repo: RepoView, alone: boolean): HTMLElement {
 
   // Both of these hang under the header rather than inside it: the header is
   // one line, and neither the list nor the note fits on it.
-  if (branchMenu === repo.path && asking === undefined) {
-    block.append(branchList(repo))
+  if (branchMenu === repo.path && asking === undefined) block.append(branchList(repo))
+  if (syncMenu === repo.path && asking === undefined) block.append(syncList(repo))
+  if ((branchMenu === repo.path || syncMenu === repo.path) && asking === undefined) {
     // Bound on the whole repository rather than on the list: opening the menu
     // leaves the keyboard on the branch button, which is outside it, so a
     // handler on the list itself would do nothing until the user had tabbed
@@ -922,6 +1053,7 @@ function drawRepo(repo: RepoView, alone: boolean): HTMLElement {
       if (event.key !== 'Escape') return
       event.preventDefault()
       branchMenu = undefined
+      syncMenu = undefined
       draw()
       focusBranch(repo.path)
     })

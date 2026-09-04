@@ -717,6 +717,19 @@ body {
   background: var(--dsw-alias-surface-primary, transparent);
 }
 
+/* The running state stands where the header's actions were, so the eye does
+   not have to find a new place to look for the answer to what it just did. */
+.sync-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sync-running-text {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
 .branch-item {
   display: flex;
   gap: 5px;

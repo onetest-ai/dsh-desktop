@@ -55,6 +55,14 @@ interface StubBridge {
   pushStash: (repo: string, message: string, untracked?: boolean) => Promise<StubResult & { ref?: string }>
   applyStash: (repo: string, ref: string, pop: boolean) => Promise<StubResult>
   dropStash: (repo: string, ref: string) => Promise<StubResult>
+  gitRemote: (
+    repo: string,
+    op: string,
+  ) => Promise<StubResult & { trouble?: string }>
+  cancelGitRemote: (repo: string) => void
+  openGitTerminal: (repo: string) => void
+  /** Answer the held `gitRemote`, as main would when git finished. */
+  finish: (answer?: StubResult & { trouble?: string }) => void
   askTheme: () => void
   onTheme: () => void
   /** Fire the `git:changed` listener the panel registered, as main would. */
@@ -103,12 +111,18 @@ function stubBridge(options: {
   stashApply?: StubResult
   /** What `createBranch` answers. */
   branch?: StubResult
+  /** What each `gitRemote` answers, in order; the last one repeats. */
+  remote?: (StubResult & { trouble?: string })[]
+  /** Makes `gitRemote` hang until the test resolves it with `finish`. */
+  hold?: boolean
 }): StubBridge {
   const commitCalls: unknown[][] = []
   const actionCalls: unknown[][] = []
   const diffCalls: unknown[][] = []
   const gitCalls: unknown[][] = []
   let checkouts = 0
+  let remotes = 0
+  let release: ((answer: StubResult & { trouble?: string }) => void) | undefined
   const nextCheckout = (): StubResult => {
     const answers = options.checkout ?? [{ ok: true }]
     const answer = answers[Math.min(checkouts, answers.length - 1)]
@@ -141,6 +155,25 @@ function stubBridge(options: {
       gitCalls.push(['stash-drop', repo, ref])
       return { ok: true }
     },
+    gitRemote: async (repo, op) => {
+      gitCalls.push(['remote', repo, op])
+      if (options.hold === true) {
+        return await new Promise<StubResult & { trouble?: string }>((resolve) => {
+          release = resolve
+        })
+      }
+      const answers = options.remote ?? [{ ok: true } as StubResult]
+      const answer = answers[Math.min(remotes, answers.length - 1)]
+      remotes += 1
+      return answer
+    },
+    cancelGitRemote: (repo) => {
+      gitCalls.push(['cancel-remote', repo])
+    },
+    openGitTerminal: (repo) => {
+      gitCalls.push(['open-terminal', repo])
+    },
+    finish: (answer: StubResult & { trouble?: string } = { ok: true }) => release?.(answer),
     gitCalls,
     readGit: options.read ?? (async () => ({ ok: true, repos: options.repos ?? [] })),
     onGitChanged: (listener: () => void) => {
@@ -588,16 +621,22 @@ describe('the git panel', () => {
   // reason: Discard All on a clean repository raises the panel's one
   // unrecoverable warning to ask about nothing, which teaches the user to
   // dismiss the dialog that must never be dismissed out of habit.
-  it('offers a clean repository none of the header actions', async () => {
+  it('offers a clean repository none of the working-tree header actions', async () => {
     const bridge = stubBridge({ repos: [repo({ path: '/one' }), repo({ path: '/two', changed: [{ path: 'a.ts', status: 'M' }] })] })
     await load(bridge)
     const heads = [...document.querySelectorAll('.repo-head')]
     expect(heads).toHaveLength(2)
-    expect(heads[0].querySelectorAll('.row-action')).toHaveLength(0)
+    // Fetch, pull and push stay offered: they act on the remote, not on the
+    // working tree, so a clean repository has as much reason to reach for
+    // them as one with changes to stage.
+    expect([...heads[0].querySelectorAll('.row-action')].map((node) => node.getAttribute('aria-label'))).toEqual([
+      'Fetch, pull or push',
+    ])
     expect([...heads[1].querySelectorAll('.row-action')].map((node) => node.getAttribute('aria-label'))).toEqual([
       'Stage all',
       'Discard all',
       'Stash',
+      'Fetch, pull or push',
     ])
   })
 
@@ -1096,5 +1135,93 @@ describe('the git panel', () => {
     ;(head.querySelector('button[aria-label="Unstage all"]') as HTMLButtonElement).click()
     await settle()
     expect(bridge.actionCalls).toEqual([['unstage', '/r', ['new.ts', 'old.ts']]])
+  })
+})
+
+describe('the remote', () => {
+  /**
+   * Press the header's sync control, and then one item in the menu it opens.
+   * @param label - the item's accessible name, as `Fetch`, `Pull` or `Push`.
+   */
+  function pressSync(label: string): void {
+    const open = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.getAttribute('aria-label') === 'Fetch, pull or push',
+    )
+    open?.click()
+    const item = [...document.querySelectorAll<HTMLButtonElement>('.sync-item')].find(
+      (button) => button.textContent === label,
+    )
+    item?.click()
+  }
+
+  it('offers fetch, pull and push behind one control', async () => {
+    const bridge = stubBridge({ repos: [repo({})] })
+    await load(bridge)
+    const open = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.getAttribute('aria-label') === 'Fetch, pull or push',
+    )
+    expect(open).toBeDefined()
+    open?.click()
+    expect([...document.querySelectorAll('.sync-item')].map((node) => node.textContent)).toEqual([
+      'Fetch',
+      'Pull',
+      'Push',
+    ])
+  })
+
+  it('asks main for the operation that was chosen', async () => {
+    const bridge = stubBridge({ repos: [repo({})] })
+    await load(bridge)
+    pressSync('Pull')
+    for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    expect(bridge.gitCalls).toContainEqual(['remote', '/r', 'pull'])
+  })
+
+  // reason: these take seconds, and a panel that looked idle through all of
+  // them would be pressed again — which main refuses, so the second press
+  // would read as the panel being broken.
+  it('shows that it is running, and offers to stop it', async () => {
+    const bridge = stubBridge({ repos: [repo({})], hold: true })
+    await load(bridge)
+    pressSync('Fetch')
+    for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.sync-running')?.textContent).toContain('Fetching')
+    const cancel = document.querySelector<HTMLButtonElement>('.sync-cancel')
+    expect(cancel).not.toBeNull()
+    cancel?.click()
+    expect(bridge.gitCalls).toContainEqual(['cancel-remote', '/r'])
+  })
+
+  it('clears the running state when the operation answers', async () => {
+    const bridge = stubBridge({ repos: [repo({})], hold: true })
+    await load(bridge)
+    pressSync('Fetch')
+    for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    bridge.finish({ ok: true })
+    for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.sync-running')).toBeNull()
+  })
+
+  // reason: a failure with nothing recognisable in it is an ordinary failure,
+  // and the note is where every other ordinary failure in this panel is said.
+  it('says what git said when it was not a trouble it knows', async () => {
+    const bridge = stubBridge({ repos: [repo({})], remote: [{ ok: false, reason: 'fetch first' }] })
+    await load(bridge)
+    pressSync('Push')
+    for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
+    expect(document.getElementById('git-note')?.textContent).toBe('fetch first')
+  })
+
+  // reason: two operations at once in one repository is what main refuses, so
+  // the panel should not be able to ask for it.
+  it('does not offer the menu while something is running', async () => {
+    const bridge = stubBridge({ repos: [repo({})], hold: true })
+    await load(bridge)
+    pressSync('Fetch')
+    for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    const open = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.getAttribute('aria-label') === 'Fetch, pull or push',
+    )
+    expect(open).toBeUndefined()
   })
 })
