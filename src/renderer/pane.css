@@ -842,6 +842,17 @@ body {
   cursor: pointer;
 }
 
+/* The no-upstream note carries two buttons where the blocked-switch note
+   carries one, so they sit in a row under a sentence that keeps the width. */
+.sync-trouble {
+  flex-flow: row wrap;
+  align-items: center;
+}
+
+.sync-trouble .branch-blocked-text {
+  flex: 1 0 100%;
+}
+
 /* A stash row has no tick and no status letter: it is not a file, and the
    selection means "include in the next commit", which a stash cannot be. */
 .stash-row {

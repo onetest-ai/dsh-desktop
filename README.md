@@ -174,7 +174,11 @@ Every row carries a tick, and **a tick is a selection, not the index**: it says 
 
 The branch name in a repository's header opens the branches — local ones, remote-tracking ones under them, and **New branch…**. **Switching is attempted rather than prevented**: git carries uncommitted changes across whenever they do not collide, which is most of the time. When it does refuse, the panel repeats the files git named as being in the way and offers **Stash and switch**, which stashes, switches, and pops on the far side — one button, never automatic, and it stops and says which step failed rather than reporting a half-done switch as a success. **Stash** takes the whole working tree with an optional message; each stash lists with the branch it was made on and carries Apply, Pop, and Drop.
 
-Fetch, pull, and push are not here yet, so do not go looking for them: nothing in the panel touches the network.
+Fetch, pull and push are on the repository header, one command each — never a
+combined sync. The app supplies no askpass of its own, deliberately: a
+credential it never sees is one it cannot leak. So a repository whose
+credential is not already cached says which one is missing and offers a
+terminal in that repository, where git's own helper can cache it once.
 
 Right-click any row in the tree for **New File**, **New Folder**, **Rename**, **Delete**, **Copy**, **Cut**, **Paste**, **Copy Path**, **Reveal in Finder**, and **Add to Chat** — which drops the file's path into the harness's message box, and is the one thing that needs the `@onetest/dsh-desktop-pane` plugin (installed by default).
 

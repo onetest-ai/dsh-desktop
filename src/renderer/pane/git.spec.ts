@@ -1287,4 +1287,89 @@ describe('the remote', () => {
     expect(document.querySelector('.sync-running')).toBeNull()
     expect(document.activeElement).toBe(elsewhere)
   })
+
+  /**
+   * Press a sync item and let the answer land.
+   * @param label - the item to press.
+   * @returns resolution once the panel has redrawn.
+   */
+  async function sync(label: string): Promise<void> {
+    pressSync(label)
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+  }
+
+  // reason: this app has no askpass of its own by design, so the cost is that
+  // an uncached credential cannot push from the panel — and that cost is only
+  // acceptable if the panel says so and offers the way out.
+  it('offers a terminal in the repository when a credential is missing', async () => {
+    const bridge = stubBridge({
+      repos: [repo({})],
+      remote: [{ ok: false, reason: 'This remote needs an HTTPS credential this app does not have.', trouble: 'https' }],
+    })
+    await load(bridge)
+    await sync('Push')
+    const note = document.querySelector('.sync-trouble')
+    expect(note?.textContent).toContain('HTTPS credential')
+    expect(note?.textContent).toContain('r:')
+    const open = document.querySelector<HTMLButtonElement>('.sync-trouble-terminal')
+    expect(open).not.toBeNull()
+    open?.click()
+    expect(bridge.gitCalls).toContainEqual(['open-terminal', '/r'])
+  })
+
+  it('offers the same way out for a key the agent is not holding', async () => {
+    const bridge = stubBridge({
+      repos: [repo({})],
+      remote: [{ ok: false, reason: 'The SSH key for this remote is not loaded in your agent.', trouble: 'publickey' }],
+    })
+    await load(bridge)
+    await sync('Push')
+    expect(document.querySelector('.sync-trouble-terminal')).not.toBeNull()
+  })
+
+  // reason: the first push of every branch anyone creates hits this, and it
+  // is the one trouble with a real answer inside the panel.
+  it('offers to publish a branch that has no upstream', async () => {
+    const bridge = stubBridge({
+      repos: [repo({})],
+      remote: [
+        { ok: false, reason: 'This branch has no upstream yet, so git does not know where to push it.', trouble: 'no-upstream' },
+        { ok: true },
+      ],
+    })
+    await load(bridge)
+    await sync('Push')
+    const publish = document.querySelector<HTMLButtonElement>('.sync-trouble-publish')
+    expect(publish).not.toBeNull()
+    publish?.click()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(bridge.gitCalls).toContainEqual(['remote', '/r', 'publish'])
+  })
+
+  // reason: a note left up after the thing it described was fixed is a note
+  // that says the panel is still broken when it is not.
+  it('clears the note when the next operation is started', async () => {
+    const bridge = stubBridge({
+      repos: [repo({})],
+      remote: [{ ok: false, reason: 'x', trouble: 'hostkey' }, { ok: true }],
+    })
+    await load(bridge)
+    await sync('Push')
+    expect(document.querySelector('.sync-trouble')).not.toBeNull()
+    await sync('Fetch')
+    expect(document.querySelector('.sync-trouble')).toBeNull()
+  })
+
+  // reason: a note about one repository hanging under another is worse than
+  // no note: it names the wrong place to go and fix it.
+  it('shows the note only under the repository it is about', async () => {
+    const bridge = stubBridge({
+      repos: [repo({ path: '/p/one' }), repo({ path: '/p/two' })],
+      remote: [{ ok: false, reason: 'x', trouble: 'https' }],
+    })
+    await load(bridge)
+    await sync('Push')
+    const notes = document.querySelectorAll('.sync-trouble')
+    expect(notes).toHaveLength(1)
+  })
 })

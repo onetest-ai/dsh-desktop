@@ -435,14 +435,17 @@ async function stashAndSwitch(at: { repo: string; name: string; remote: boolean;
   }
 }
 
+/** Which of the failures the panel knows how to talk about main reported. */
+type TroubleKind = 'https' | 'publickey' | 'hostkey' | 'rejected' | 'no-upstream'
+
 /**
- * The remote trouble a fetch, pull or push last ran into, and what to do
- * about it.
+ * The remote failure a note is up for, if any.
  *
- * Declared here for `runRemote` to fill in; Task 7 narrows `kind` to the set
- * main can name and builds the note itself.
+ * One at a time and per repository: these are answered one at a time, and a
+ * note about a repository that is not the one it hangs under names the wrong
+ * place to go and fix it.
  */
-let trouble: { repo: string; kind: string; say: string } | undefined
+let trouble: { repo: string; kind: TroubleKind; say: string } | undefined
 
 /**
  * Ask a remote for one thing, and show that it is happening.
@@ -480,10 +483,12 @@ async function runRemote(repo: string, op: 'fetch' | 'pull' | 'push' | 'publish'
   draw()
   // This draw can land seconds after the one above, and by then the user may
   // have tabbed or clicked to an unrelated control — another repository's
-  // row, the commit box, a different branch menu. Guarded like `draw`'s own
-  // `asking` continuation: only take the keyboard back when the removed
-  // control left it stranded on nothing, so a fetch finishing does not yank
-  // focus away from wherever the user has since gone.
+  // row, the commit box, a different branch menu. Narrower than `draw`'s own
+  // `asking` continuation, which leaves focus alone whenever it is anywhere
+  // inside `#repos`: the commit message box sits outside `#repos`, and a
+  // user typing there while a fetch finishes must not have the keyboard
+  // pulled out from under them. So this only takes it back when the removed
+  // control left it stranded on nothing at all.
   if (document.activeElement === null || document.activeElement === document.body) focusBranch(repo)
 }
 
@@ -704,6 +709,52 @@ function blockedNote(at: {
     void stashAndSwitch(at)
   })
   note.append(button)
+  return note
+}
+
+/**
+ * The note shown when a remote refused for a reason the panel recognises.
+ *
+ * Every one of these names the repository and offers the terminal: run it
+ * once by hand, let git's own credential helper cache what it needs, and the
+ * panel works from then on. That escape hatch is what makes this app's having
+ * no askpass of its own acceptable rather than merely principled — a
+ * credential it never sees is one it cannot leak, and the cost is a shell.
+ * @param at - the repository, which trouble it was, and the sentence for it.
+ * @param name - the repository's display name.
+ * @returns the note, ready to append.
+ */
+function troubleNote(at: { repo: string; kind: TroubleKind; say: string }, name: string): HTMLElement {
+  const note = document.createElement('div')
+  note.className = 'branch-blocked sync-trouble'
+  const text = document.createElement('p')
+  text.className = 'branch-blocked-text'
+  text.textContent = `${name}: ${at.say}`
+  note.append(text)
+  // The one trouble with an answer inside the panel. Publishing is
+  // `--set-upstream` to the only remote there is, which is what anyone
+  // pushing a new branch for the first time means by it; main refuses to
+  // guess when there is more than one.
+  if (at.kind === 'no-upstream') {
+    const publish = document.createElement('button')
+    publish.type = 'button'
+    publish.className = 'branch-blocked-button sync-trouble-publish'
+    publish.dataset.key = keyOf(at.repo, 'sync', '', 'publish')
+    publish.textContent = 'Publish branch'
+    publish.addEventListener('click', () => {
+      void runRemote(at.repo, 'publish')
+    })
+    note.append(publish)
+  }
+  const open = document.createElement('button')
+  open.type = 'button'
+  open.className = 'branch-blocked-button sync-trouble-terminal'
+  open.dataset.key = keyOf(at.repo, 'sync', '', 'terminal')
+  open.textContent = 'Open in Terminal'
+  open.addEventListener('click', () => {
+    window.pane.openGitTerminal(at.repo)
+  })
+  note.append(open)
   return note
 }
 
@@ -1072,6 +1123,7 @@ function drawRepo(repo: RepoView, alone: boolean): HTMLElement {
     })
   }
   if (blocking?.repo === repo.path) block.append(blockedNote(blocking))
+  if (trouble?.repo === repo.path) block.append(troubleNote(trouble, repo.name))
 
   if (!shut) {
     for (const group of groups) block.append(drawSection(repo, group))

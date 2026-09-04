@@ -114,6 +114,14 @@ The repo header carries the branch and its `↓2 ↑1`. Behind a menu: **Fetch**
 
 Not a combined Sync. Sync is pull-then-push, and a compound operation that half-succeeded is one the panel then has to explain. Pull respects the user's own `pull.rebase` rather than imposing merge or rebase on them. Push is plain `git push` — never `--force`, behind no modifier, at no point.
 
+A branch with no upstream is the fifth failure recognised, and the only one
+with an answer inside the panel: **Publish branch** runs `git push
+--set-upstream` to the repository's only remote. The remote is read from `git
+remote` rather than named by the panel, and the branch is `HEAD` rather than a
+name — so nothing typed anywhere reaches the command line — and a repository
+with more than one remote is a refusal rather than a guess, because publishing
+to a fork nobody was watching is not a mistake to make on someone's behalf.
+
 Each is serialised per repo, shows that it is running, times out, and can be cancelled by killing the child.
 
 ## Failing loudly
@@ -138,7 +146,11 @@ The four failures that actually happen are recognised and translated rather than
 | `Host key verification failed` | the host is not in `known_hosts` yet |
 | `Authentication failed` | the stored credential was rejected |
 
-Each names the repo and offers **Open in Terminal**, which opens the terminal panel in that repo's directory. Run it once by hand, let git's own credential helper cache what it needs, and the panel works from then on. That escape hatch is what makes failing loudly acceptable, and it exists because the terminal shipped in 0.3.0.
+Each names the repo and offers **Open in Terminal**, which opens the terminal
+panel and starts a *new* shell in that repository — never a `cd` typed into a
+shell that may be in the middle of something. Main holds the directory and the
+terminal page is only told to open a session, so the terminal's own rule holds:
+the page names a size, and main decides what runs and where. Run it once by hand, let git's own credential helper cache what it needs, and the panel works from then on. That escape hatch is what makes failing loudly acceptable, and it exists because the terminal shipped in 0.3.0.
 
 ## Testing
 
