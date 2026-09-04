@@ -1,7 +1,8 @@
 # The board store
 
 `entity-schema.ts` and `slug.ts` are vendored from
-[`@octoshell/board`](https://github.com/onetest-ai/octoshell), `packages/board/src/`.
+[`@octoshell/board`](https://github.com/onetest-ai/octoshell), `packages/board/src/`,
+commit `10af1ed9c87d05a480afd8fb0c9160d2d6f6ade5`, last touched there 2026-07-31.
 
 Taken because the YAML round-trip is subtle and already has scars on it: the
 `extra` passthrough exists because a rewrite there destroyed a campaign's

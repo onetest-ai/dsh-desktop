@@ -283,6 +283,7 @@ async function startViewTools(config: DesktopConfig): Promise<void> {
   try {
     viewServer = await serveViewTools(config.viewToolsPort ?? DEFAULT_VIEW_TOOLS_PORT, {
       roots: () => readWorkspaces(DSH_HOME).map((workspace) => workspace.path),
+      project: () => currentProject?.path,
       openFile: openInPane,
       openUrl: openUrlInPane,
       showDiff: showDiffInPane,

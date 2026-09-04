@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -7,11 +7,12 @@ import { addCriterion, createEntity, setStatus, tickCriterion, trashEntity, upda
 
 let project = ''
 beforeEach(() => {
-  // tmpdir() sits under a symlink (/var -> /private/var), and resolveInBoard
-  // compares the realpath of an existing target against the project root — a
-  // path about to be created (createEntity's own target) is not yet realpath-
-  // able, so the project root must already be canonical. See board-paths.spec.ts.
-  project = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-board-')))
+  // Not realpath'd. resolveInBoard resolves both the target and the board
+  // root through the nearest existing ancestor now, so a project root that
+  // itself sits under a symlink — tmpdir() on macOS is one, /var -> /private/var
+  // — agrees with itself without the fixture pre-canonicalizing it. Leaving
+  // this un-hoisted is what proves that fix: it hid the bug this fixed.
+  project = mkdtempSync(join(tmpdir(), 'dsh-board-'))
   mkdirSync(join(project, '.dsh', 'tasks'), { recursive: true })
 })
 afterEach(() => {
@@ -197,6 +198,21 @@ describe('trashEntity', () => {
     const trash = join(project, '.dsh', 'tasks', '.trash', 'campaigns')
     expect(existsSync(join(trash, 'q3'))).toBe(true)
     expect(existsSync(join(trash, 'q3-2'))).toBe(true)
+  })
+
+  // reason: resolveInBoard refuses the trash outright, so it never gets a
+  // chance to catch a symlinked one — trashEntity computes its own
+  // destination with no boundary check, and mkdirSync/renameSync would follow
+  // the symlink and move the entity's whole subtree out of the repository.
+  it('refuses a .trash that is a symlink, rather than moving the entity through it', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'dsh-outside-'))
+    symlinkSync(outside, join(project, '.dsh', 'tasks', '.trash'))
+    createEntity(project, 'campaign', '', 'Q3')
+    const out = trashEntity(project, 'campaigns/q3')
+    expect(out.ok).toBe(false)
+    expect(existsSync(join(project, '.dsh', 'tasks', 'campaigns', 'q3'))).toBe(true)
+    expect(existsSync(join(outside, 'campaigns'))).toBe(false)
+    rmSync(outside, { recursive: true, force: true })
   })
 })
 

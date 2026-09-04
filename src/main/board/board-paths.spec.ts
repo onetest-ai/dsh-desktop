@@ -6,11 +6,13 @@ import { boardRoot, folderFor, hasBoard, resolveInBoard } from './board-paths'
 
 let project = ''
 beforeEach(() => {
-  // realpath'd so the fixture's own path is already canonical — on macOS
-  // tmpdir() sits under a symlink (/var -> /private/var), and resolveInBoard
-  // resolves through realpath too, so an un-normalized fixture path would
-  // never equal what it returns even for a folder with no escape involved.
-  project = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-board-')))
+  // Not realpath'd. resolveInBoard resolves the target and the board root the
+  // same way — through the nearest existing ancestor — so a fixture path that
+  // is itself un-normalized (tmpdir() sits under a symlink on macOS, /var ->
+  // /private/var) still agrees with what resolveInBoard returns. Leaving this
+  // un-hoisted is what proves that: it used to be the only thing hiding the
+  // asymmetry between a realpath'd root and a lexical target.
+  project = mkdtempSync(join(tmpdir(), 'dsh-board-'))
 })
 afterEach(() => {
   rmSync(project, { recursive: true, force: true })
@@ -61,8 +63,12 @@ describe('resolveInBoard', () => {
     mkdirSync(join(project, '.dsh', 'tasks', 'campaigns', 'q3'), { recursive: true })
   })
 
+  // reason: the return value is realpath'd, so what it is compared against
+  // has to be too — a project root that is not itself canonical (an ordinary
+  // /tmp checkout on macOS included) must not make an unremarkable folder
+  // fail this the way an escaping symlink correctly does.
   it('resolves a folder inside the board', () => {
-    expect(resolveInBoard(project, 'campaigns/q3')).toBe(join(project, '.dsh', 'tasks', 'campaigns', 'q3'))
+    expect(resolveInBoard(project, 'campaigns/q3')).toBe(realpathSync(join(project, '.dsh', 'tasks', 'campaigns', 'q3')))
   })
 
   // reason: this is the boundary. A folder path arrives from the agent and
@@ -87,5 +93,27 @@ describe('resolveInBoard', () => {
 
   it('refuses the trash, which is not a place to act on entities', () => {
     expect(resolveInBoard(project, '.trash/campaigns/q3')).toBeUndefined()
+  })
+
+  // reason: createEntity only ever calls this on a target that does not exist
+  // yet — the folder it is about to make — so a check that only realpaths an
+  // existing target never runs for the case that matters. A symlinked
+  // container one level up from the target must still be caught.
+  it('refuses a not-yet-existing target under a symlinked container', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'dsh-outside-'))
+    symlinkSync(outside, join(project, '.dsh', 'tasks', 'campaigns', 'escaped'))
+    expect(resolveInBoard(project, 'campaigns/escaped/pwned')).toBeUndefined()
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  // reason: the escaping symlink can sit several directories above the
+  // target, not only immediately above it — a mission and its task, both
+  // still to be created, under a campaign whose `missions/` is a symlink —
+  // so realpathing just the immediate parent would miss it.
+  it('refuses a not-yet-existing target several levels under a symlinked container', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'dsh-outside-'))
+    symlinkSync(outside, join(project, '.dsh', 'tasks', 'campaigns', 'q3', 'missions'))
+    expect(resolveInBoard(project, 'campaigns/q3/missions/m1/tasks/t1')).toBeUndefined()
+    rmSync(outside, { recursive: true, force: true })
   })
 })

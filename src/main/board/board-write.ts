@@ -1,9 +1,9 @@
-import { mkdirSync, readdirSync, renameSync } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { writeFileAtomic } from '../atomic-write'
 import { boardRoot, folderFor, resolveInBoard, TRASH_DIR } from './board-paths'
 import { findEntity, readBoard } from './board-read'
-import { dumpEntity, ENTITY_STATUSES, loadEntity, type EntityFields, type EntityKind } from './entity-schema'
+import { dumpEntity, ENTITY_STATUSES, type EntityFields, type EntityKind } from './entity-schema'
 import { slugify, uniqueSlug } from './slug'
 
 /** What one write reports back. */
@@ -199,7 +199,19 @@ export function trashEntity(project: string, folderPath: string): WriteResult {
   if (!found.ok) return found
   const parent = folderPath.slice(0, folderPath.lastIndexOf('/'))
   const slug = folderPath.slice(folderPath.lastIndexOf('/') + 1)
-  const into = join(boardRoot(project), TRASH_DIR, parent)
+  const trashRoot = join(boardRoot(project), TRASH_DIR)
+  // resolveInBoard refuses the trash outright, so it never gets a chance to
+  // catch this the way it catches every other destination — the boundary has
+  // to be drawn here instead. lstat, never stat: a symlink must not be
+  // followed even to ask what it points at, or the answer is already wrong.
+  try {
+    if (lstatSync(trashRoot).isSymbolicLink()) {
+      return { ok: false, reason: `${TRASH_DIR} is a symlink, so nothing can be trashed through it.` }
+    }
+  } catch {
+    // No .trash yet — mkdirSync below makes an ordinary directory.
+  }
+  const into = join(trashRoot, parent)
   mkdirSync(into, { recursive: true })
   let taken: Set<string>
   try {

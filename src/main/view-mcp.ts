@@ -13,6 +13,8 @@ import { loadableUrl, locate } from './view-tools'
 export interface ViewDeps {
   /** The projects the harness has opened; every path argument is checked against these. */
   roots(): string[]
+  /** The project open in the pane right now, or nothing when none is — what the board tools act on. */
+  project(): string | undefined
   /** Show a file in the editor column, opening it if it is closed. */
   openFile(root: string, relative: string): void
   /** Show a page in the web view. */
@@ -148,17 +150,19 @@ function done(message: string): { content: { type: 'text'; text: string }[] } {
 /**
  * The project a board tool acts on.
  *
- * The board belongs to one project, and these tools take no path — so the open
- * project is the whole of their addressing. Several open projects is refused
- * rather than guessed: writing a plan into whichever one happened to be first
- * is not a mistake to make on the user's behalf.
- * @param roots - the projects the harness has opened.
- * @returns the project, or why there is not exactly one.
+ * The board belongs to one project, and these tools take no path — so which
+ * project is not a thing the caller says, it is whichever one is open in the
+ * pane. `roots` is the wrong dep for this: it is every project the harness has
+ * ever registered, which for a real user is routinely more than one — so a
+ * check against its length refuses every board tool on the machine this was
+ * built for. `project` is the single answer the file pane and the git panel
+ * already agree on, so the board tools agree with them too.
+ * @param project - the project open in the pane, from `deps.project()`.
+ * @returns the project, or why there is none.
  */
-function boardProject(roots: string[]): { ok: true; project: string } | { ok: false; reason: string } {
-  if (roots.length === 0) return { ok: false, reason: 'No project is open, so there is no board.' }
-  if (roots.length > 1) return { ok: false, reason: 'More than one project is open, so which board is ambiguous.' }
-  return { ok: true, project: roots[0] }
+function boardProject(project: string | undefined): { ok: true; project: string } | { ok: false; reason: string } {
+  if (project === undefined) return { ok: false, reason: 'No project is open, so there is no board.' }
+  return { ok: true, project }
 }
 
 /**
@@ -168,6 +172,11 @@ function boardProject(roots: string[]): { ok: true; project: string } | { ok: fa
  * an indented list of names with their statuses and progress is what that
  * decision is made from — a nested object costs more tokens to say the same
  * thing and is harder to scan.
+ *
+ * Criteria are rendered under each entity, with their zero-based index —
+ * `board_criterion` addresses one by that index, and this is the only place
+ * an agent can learn it, so leaving criteria out is not a compactness saving,
+ * it is a tool an agent cannot actually use.
  * @param board - the board to render.
  * @returns the text, including findings when there are any.
  */
@@ -175,9 +184,16 @@ function renderBoard(board: Board): string {
   if (!board.present) return 'This project has no board. Create a campaign to start one.'
   const lines: string[] = []
   const walk = (entity: Entity, depth: number): void => {
-    const progress = entity.progress.total > 0 ? `  (${String(entity.progress.done)}/${String(entity.progress.total)} done)` : ''
-    lines.push(`${'  '.repeat(depth)}[${entity.status}] ${entity.kind} ${entity.name}${progress}`)
-    lines.push(`${'  '.repeat(depth)}  ${entity.folderPath}`)
+    const indent = '  '.repeat(depth)
+    const children = entity.progress.total > 0 ? `  (${String(entity.progress.done)}/${String(entity.progress.total)} done)` : ''
+    const criteria = entity.fields.acceptanceCriteria
+    const ticked = criteria.filter((c) => c.done).length
+    const criteriaCount = criteria.length > 0 ? `  (${String(ticked)}/${String(criteria.length)} criteria)` : ''
+    lines.push(`${indent}[${entity.status}] ${entity.kind} ${entity.name}${children}${criteriaCount}`)
+    lines.push(`${indent}  ${entity.folderPath}`)
+    criteria.forEach((c, index) => {
+      lines.push(`${indent}  [${c.done ? 'x' : ' '}] ${String(index)}. ${c.text}`)
+    })
     for (const child of entity.children) walk(child, depth + 1)
   }
   for (const campaign of board.campaigns) walk(campaign, 0)
@@ -589,7 +605,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
       inputSchema: {},
     },
     () => {
-      const project = boardProject(deps.roots())
+      const project = boardProject(deps.project())
       if (!project.ok) return refuse(project.reason)
       return done(renderBoard(readBoard(project.project)))
     },
@@ -608,7 +624,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
       },
     },
     ({ kind, name, parent }) => {
-      const project = boardProject(deps.roots())
+      const project = boardProject(deps.project())
       if (!project.ok) return refuse(project.reason)
       const out = createEntity(project.project, kind, parent ?? '', name)
       return out.ok ? done(`Created ${out.folderPath}.`) : refuse(out.reason)
@@ -620,18 +636,38 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
     {
       title: 'Edit an entity on the board',
       description:
-        "Change an entity's name, description or notes. Notes are free-form prose for decisions, rationale and sign-offs — appended reasoning that outlives the conversation it was decided in. This does not change status: use board_status for that.",
+        "Change an entity's name, description or notes, and its per-kind fields: `role` (task), `target` (campaign), and for a bug `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment`. Notes are free-form prose for decisions, rationale and sign-offs — appended reasoning that outlives the conversation it was decided in. This does not change status: use board_status for that.",
       inputSchema: {
         folder: z.string().describe('The folder path from board_read.'),
         name: z.string().optional().describe('A new display name. The folder does not move.'),
         description: z.string().optional().describe('What this entity is.'),
         notes: z.string().optional().describe('Decisions and rationale, in prose.'),
+        role: z.string().optional().describe('Who or what carries out this task. Task only.'),
+        target: z.string().optional().describe('What this campaign is aimed at. Campaign only.'),
+        severity: z.string().optional().describe('How bad this bug is. Bug only.'),
+        steps_to_reproduce: z.string().optional().describe('How to make the bug happen. Bug only.'),
+        expected: z.string().optional().describe('What should have happened. Bug only.'),
+        actual: z.string().optional().describe('What happened instead. Bug only.'),
+        rca: z.string().optional().describe('Root cause, once known. Bug only.'),
+        environment: z.string().optional().describe('Where the bug was seen. Bug only.'),
       },
     },
-    ({ folder, name, description, notes }) => {
-      const project = boardProject(deps.roots())
+    ({ folder, name, description, notes, role, target, severity, steps_to_reproduce, expected, actual, rca, environment }) => {
+      const project = boardProject(deps.project())
       if (!project.ok) return refuse(project.reason)
-      const patch = { ...(name !== undefined && { name }), ...(description !== undefined && { description }), ...(notes !== undefined && { notes }) }
+      const patch = {
+        ...(name !== undefined && { name }),
+        ...(description !== undefined && { description }),
+        ...(notes !== undefined && { notes }),
+        ...(role !== undefined && { role }),
+        ...(target !== undefined && { target }),
+        ...(severity !== undefined && { severity }),
+        ...(steps_to_reproduce !== undefined && { stepsToReproduce: steps_to_reproduce }),
+        ...(expected !== undefined && { expected }),
+        ...(actual !== undefined && { actual }),
+        ...(rca !== undefined && { rca }),
+        ...(environment !== undefined && { environment }),
+      }
       if (Object.keys(patch).length === 0) return refuse('Name at least one field to change.')
       const out = updateEntity(project.project, folder, patch)
       return out.ok ? done(`Updated ${folder}.`) : refuse(out.reason)
@@ -650,7 +686,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
       },
     },
     ({ folder, status }) => {
-      const project = boardProject(deps.roots())
+      const project = boardProject(deps.project())
       if (!project.ok) return refuse(project.reason)
       const out = setStatus(project.project, folder, status)
       return out.ok ? done(`${folder} is now ${status}.`) : refuse(out.reason)
@@ -671,8 +707,14 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
       },
     },
     ({ folder, text, index, done: ticked }) => {
-      const project = boardProject(deps.roots())
+      const project = boardProject(deps.project())
       if (!project.ok) return refuse(project.reason)
+      // Both modes given is not "add, and also tick" — nothing here composes
+      // them, so silently taking the add branch would drop the tick on the
+      // floor while reporting success.
+      if (text !== undefined && (index !== undefined || ticked !== undefined)) {
+        return refuse('Give either text to add a criterion, or index and done to tick one — not both.')
+      }
       if (text !== undefined) {
         const out = addCriterion(project.project, folder, text)
         return out.ok ? done(`Added a criterion to ${folder}.`) : refuse(out.reason)
@@ -692,7 +734,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
       inputSchema: { folder: z.string().describe('The folder path from board_read.') },
     },
     ({ folder }) => {
-      const project = boardProject(deps.roots())
+      const project = boardProject(deps.project())
       if (!project.ok) return refuse(project.reason)
       const out = trashEntity(project.project, folder)
       return out.ok ? done(`Moved ${folder} to the board's trash.`) : refuse(out.reason)

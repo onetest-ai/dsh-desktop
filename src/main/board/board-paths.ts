@@ -1,5 +1,5 @@
 import { existsSync, realpathSync, statSync } from 'node:fs'
-import { isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type { EntityKind } from './entity-schema'
 
 /** Where a project keeps its board, beside the `mcp.json` it may already carry. */
@@ -56,6 +56,34 @@ export function folderFor(kind: EntityKind, parts: string[]): string {
 }
 
 /**
+ * Resolve a path through symlinks as far as the filesystem allows, then apply
+ * whatever segments do not exist yet on top of that, lexically.
+ *
+ * `realpathSync` throws on a path that is not there, and `createEntity` only
+ * ever calls this on a target that does not exist yet — so realpathing "where
+ * it exists" and falling back to the lexical string otherwise resolves
+ * nothing, ever, for the path that matters. The symlink that escapes the
+ * board can also sit several directories above the target (a campaign whose
+ * `missions/` is a symlink, with the mission itself still to be created), so
+ * realpathing just the immediate parent is not enough either — this walks up
+ * to whichever ancestor genuinely exists.
+ * @param target - an absolute, already lexically-resolved path.
+ * @returns the path with every existing ancestor realpathed.
+ */
+function realpathAsFarAsExists(target: string): string {
+  const pending: string[] = []
+  let at = target
+  while (!existsSync(at)) {
+    const parent = dirname(at)
+    if (parent === at) break // reached the filesystem root without finding anything real
+    pending.unshift(basename(at))
+    at = parent
+  }
+  const real = realpathSync(at)
+  return pending.length === 0 ? real : join(real, ...pending)
+}
+
+/**
  * Turn a folder path into a real directory, or refuse it.
  *
  * The security boundary of this module. A folder path reaches here from the
@@ -63,6 +91,10 @@ export function folderFor(kind: EntityKind, parts: string[]): string {
  * moves to the trash — so the check is against the resolved real path, not the
  * string. A symlink inside the board pointing outside it defeats any check
  * that only compares text, and `..` is the same attack spelled differently.
+ * Both the target and the board root are resolved the same way, so a project
+ * whose own checkout sits under a symlink (routine on `/tmp`, an external
+ * volume, or a symlinked code directory) does not make every folder inside it
+ * disagree with the root it is compared against.
  *
  * The trash is refused as well. It holds folders that were deleted; acting on
  * one would resurrect an entity through a path the board no longer lists.
@@ -74,11 +106,8 @@ export function resolveInBoard(project: string, folderPath: string): string | un
   if (folderPath === '' || isAbsolute(folderPath)) return undefined
   const root = boardRoot(project)
   const target = resolve(root, folderPath)
-  // Resolved through realpath where it exists, so a symlink cannot point out.
-  // Where it does not exist yet — a folder about to be created — the lexical
-  // check is all there is, and it is enough: nothing has been followed.
-  const real = existsSync(target) ? realpathSync(target) : target
-  const base = existsSync(root) ? realpathSync(root) : root
+  const real = realpathAsFarAsExists(target)
+  const base = realpathAsFarAsExists(root)
   if (real !== base && !real.startsWith(base + sep)) return undefined
   if (real === join(base, TRASH_DIR) || real.startsWith(join(base, TRASH_DIR) + sep)) return undefined
   return real

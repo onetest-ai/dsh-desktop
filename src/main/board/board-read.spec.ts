@@ -130,10 +130,14 @@ describe('readBoard', () => {
     expect(campaign.progress).toEqual({ done: 0, total: 1 })
   })
 
-  it('never reads the trash', () => {
+  // reason: readBoard only ever descends into `campaigns/`, so a `.trash` at
+  // the board root is never a candidate regardless of the filter — this has
+  // to plant one where readBoard actually looks, or deleting the filter would
+  // leave the test passing for the wrong reason.
+  it("never reads a .trash folder found while listing an entity's children", () => {
     put('campaigns/q3', 'campaign', 'name: Q3\n')
-    put('.trash/campaigns/gone', 'campaign', 'name: Gone\n')
-    expect(readBoard(project).campaigns.map((c) => c.name)).toEqual(['Q3'])
+    put('campaigns/q3/missions/.trash', 'mission', 'name: Gone\n')
+    expect(readBoard(project).campaigns[0].children).toEqual([])
   })
 
   it('sorts by slug so two reads of one board agree', () => {

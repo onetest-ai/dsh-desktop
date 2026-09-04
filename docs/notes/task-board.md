@@ -73,7 +73,7 @@ Upstream derives a parent's status from its children unless it is explicitly ove
 
 So the rule is: **a status is a claim, and claims have authors.** Setting one is a write, from the panel or from `board_status`, and it lands in a diff with a name against it.
 
-**Progress is computed and shown, never written.** "3 of 7 tasks done", "5 of 6 criteria ticked" — those are read off disk every rebuild and rendered. They inform the person deciding; they do not decide. That distinction is the whole of this rule: derive what you display, never what you store.
+**Progress is computed and shown, never written.** "3 of 7 children done" (missions and bugs together, under a campaign), "5 of 6 criteria ticked" — those are read off disk every rebuild and rendered. They inform the person deciding; they do not decide. That distinction is the whole of this rule: derive what you display, never what you store.
 
 ### Unknown keys round-trip
 
@@ -109,7 +109,7 @@ The tools go in `src/main/view-mcp.ts`, beside the ones that open a file and dri
 
 | Tool | |
 | --- | --- |
-| `board_read` | The whole board, or one subtree, as structure |
+| `board_read` | The whole board, as structure |
 | `board_create` | A campaign, mission, task or bug under a named parent |
 | `board_update` | Name, description, notes, and the per-kind fields |
 | `board_status` | Move an entity to a status |

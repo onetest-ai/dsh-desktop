@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -43,6 +43,7 @@ function deps(overrides: Partial<ViewDeps> = {}): ViewDeps {
   return {
     browser: automation(),
     roots: () => ['/p/demo'],
+    project: () => undefined,
     openFile: vi.fn(),
     openUrl: vi.fn(),
     showDiff: vi.fn(),
@@ -569,22 +570,25 @@ describe('the board tools', () => {
   // reason: these tools take no path — the open project is the whole of their
   // addressing — so "which project" is the one thing every one must get right.
   it('refuses when no project is open', async () => {
-    const url = await serve(deps({ roots: () => [] }), 'editor')
+    const url = await serve(deps({ project: () => undefined }), 'editor')
     const result = await callTool(url, 'board_read')
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('No project is open')
   })
 
-  // reason: writing a plan into whichever project happened to be first is not
-  // a mistake to make on the user's behalf.
-  it('refuses to guess between two open projects', async () => {
-    const url = await serve(deps({ roots: () => ['/p/one', '/p/two'] }), 'editor')
-    expect((await callTool(url, 'board_read')).isError).toBe(true)
+  // reason: `roots` is every project the harness has ever registered — nine,
+  // for the person this was built for — not the one open in the pane. A check
+  // against its length would refuse every board tool on a machine with more
+  // than one workspace, which is the ordinary case, not the edge one.
+  it('works from whichever project is open, even with several roots registered', async () => {
+    const project = boardFixture({ 'campaigns/q3/campaign.yaml': 'name: Q3\n' })
+    const url = await serve(deps({ roots: () => ['/p/one', '/p/two', project], project: () => project }), 'editor')
+    expect(textOf(await callTool(url, 'board_read'))).toContain('Q3')
   })
 
   it('says a project has no board rather than creating one', async () => {
     const project = mkdtempSync(join(tmpdir(), 'dsh-mcp-noboard-'))
-    const url = await serve(deps({ roots: () => [project] }), 'editor')
+    const url = await serve(deps({ project: () => project }), 'editor')
     expect(textOf(await callTool(url, 'board_read'))).toContain('no board')
   })
 
@@ -593,7 +597,7 @@ describe('the board tools', () => {
       'campaigns/q3/campaign.yaml': 'name: Q3\nstatus: executing\n',
       'campaigns/q3/missions/m1/mission.yaml': 'name: M1\nstatus: draft\n',
     })
-    const url = await serve(deps({ roots: () => [project] }), 'editor')
+    const url = await serve(deps({ project: () => project }), 'editor')
     const text = textOf(await callTool(url, 'board_read'))
     expect(text).toContain('Q3')
     expect(text).toContain('executing')
@@ -602,7 +606,7 @@ describe('the board tools', () => {
 
   it('creates, then reads back what it created', async () => {
     const project = boardFixture({})
-    const url = await serve(deps({ roots: () => [project] }), 'editor')
+    const url = await serve(deps({ project: () => project }), 'editor')
     expect((await callTool(url, 'board_create', { kind: 'campaign', name: 'Q3 Launch' })).isError).toBeFalsy()
     expect(textOf(await callTool(url, 'board_read'))).toContain('Q3 Launch')
   })
@@ -611,7 +615,7 @@ describe('the board tools', () => {
   // as much as from the description — so the refusal has to carry the list.
   it('names the six statuses when it refuses one', async () => {
     const project = boardFixture({ 'campaigns/q3/campaign.yaml': 'name: Q3\n' })
-    const url = await serve(deps({ roots: () => [project] }), 'editor')
+    const url = await serve(deps({ project: () => project }), 'editor')
     const result = await callTool(url, 'board_status', { folder: 'campaigns/q3', status: 'inprogress' })
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('awaitingApproval')
@@ -623,7 +627,7 @@ describe('the board tools', () => {
       'campaigns/q3/campaign.yaml': 'name: Q3\nstatus: draft\n',
       'campaigns/q3/missions/m1/mission.yaml': 'name: M1\nstatus: draft\n',
     })
-    const url = await serve(deps({ roots: () => [project] }), 'editor')
+    const url = await serve(deps({ project: () => project }), 'editor')
     await callTool(url, 'board_status', { folder: 'campaigns/q3/missions/m1', status: 'done' })
     const text = textOf(await callTool(url, 'board_read'))
     expect(text).toContain('[draft] campaign Q3')
@@ -634,7 +638,7 @@ describe('the board tools', () => {
   // directory this app writes into and moves to the trash.
   it('refuses a folder path that climbs out of the board', async () => {
     const project = boardFixture({ 'campaigns/q3/campaign.yaml': 'name: Q3\n' })
-    const url = await serve(deps({ roots: () => [project] }), 'editor')
+    const url = await serve(deps({ project: () => project }), 'editor')
     expect((await callTool(url, 'board_delete', { folder: '../../..' })).isError).toBe(true)
   })
 
@@ -643,9 +647,73 @@ describe('the board tools', () => {
       'campaigns/q3/campaign.yaml': 'name: Q3\n',
       'campaigns/q3/missions/m1/mission.yaml': 'name: [unclosed\n',
     })
-    const url = await serve(deps({ roots: () => [project] }), 'editor')
+    const url = await serve(deps({ project: () => project }), 'editor')
     const text = textOf(await callTool(url, 'board_read'))
     expect(text).toContain('Q3')
     expect(text).toContain('Could not read')
+  })
+
+  // reason: board_criterion addresses a criterion by the index board_read
+  // shows — an agent has no other way to learn it, so board_read has to
+  // actually carry it.
+  it('renders acceptance criteria with their index and tick state', async () => {
+    const project = boardFixture({
+      'campaigns/q3/campaign.yaml': 'name: Q3\n',
+      'campaigns/q3/missions/m1/mission.yaml': 'name: M1\n',
+      'campaigns/q3/missions/m1/tasks/t1/task.yaml':
+        'name: T1\nacceptance_criteria:\n  - text: it works\n    done: true\n  - text: it is fast\n    done: false\n',
+    })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).toContain('(1/2 criteria)')
+    expect(text).toContain('[x] 0. it works')
+    expect(text).toContain('[ ] 1. it is fast')
+  })
+
+  it('ticks a criterion by the index board_read reported', async () => {
+    const project = boardFixture({
+      'campaigns/q3/campaign.yaml': 'name: Q3\n',
+      'campaigns/q3/missions/m1/mission.yaml': 'name: M1\n',
+      'campaigns/q3/missions/m1/tasks/t1/task.yaml': 'name: T1\nacceptance_criteria:\n  - text: it works\n    done: false\n',
+    })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    const out = await callTool(url, 'board_criterion', { folder: 'campaigns/q3/missions/m1/tasks/t1', index: 0, done: true })
+    expect(out.isError).toBeFalsy()
+    expect(textOf(await callTool(url, 'board_read'))).toContain('[x] 0. it works')
+  })
+
+  // reason: silently taking the add branch and dropping the tick is a call
+  // that reports success while doing something other than what was asked.
+  it('refuses board_criterion given both text and index/done', async () => {
+    const project = boardFixture({ 'campaigns/q3/campaign.yaml': 'name: Q3\n' })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    const out = await callTool(url, 'board_criterion', { folder: 'campaigns/q3', text: 'new one', index: 0, done: true })
+    expect(out.isError).toBe(true)
+    expect(textOf(out)).toContain('not both')
+  })
+
+  // reason: board_update's schema table promises the per-kind fields, and a
+  // bug created with board_create has no other way to fill them in.
+  it("fills a bug's per-kind fields through board_update and reads them back", async () => {
+    const project = boardFixture({ 'campaigns/q3/campaign.yaml': 'name: Q3\n' })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { kind: 'bug', name: 'Crash', parent: 'campaigns/q3' })
+    const out = await callTool(url, 'board_update', {
+      folder: 'campaigns/q3/bugs/crash',
+      severity: 'blocker',
+      steps_to_reproduce: 'open the app',
+      expected: 'it opens',
+      actual: 'it crashes',
+      rca: 'null pointer',
+      environment: 'macOS 15',
+    })
+    expect(out.isError).toBeFalsy()
+    const text = readFileSync(join(project, '.dsh', 'tasks', 'campaigns', 'q3', 'bugs', 'crash', 'bug.yaml'), 'utf8')
+    expect(text).toContain('severity: blocker')
+    expect(text).toContain('steps_to_reproduce: open the app')
+    expect(text).toContain('expected: it opens')
+    expect(text).toContain('actual: it crashes')
+    expect(text).toContain('rca: null pointer')
+    expect(text).toContain('environment: macOS 15')
   })
 })
