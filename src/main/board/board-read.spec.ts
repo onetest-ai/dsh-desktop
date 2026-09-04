@@ -109,6 +109,27 @@ describe('readBoard', () => {
     expect(board.campaigns[0].status).toBe('draft')
   })
 
+  // reason: the case the mission-with-a-draft-child test above can't catch —
+  // every child done, at both levels. A rollup that only fires on full
+  // completion (children.every(...)) is a no-op on a partial mission, so the
+  // rule needs a fixture where completion actually is full, for the mission
+  // and for the campaign above it, or a rollup can hide behind "all tests pass."
+  it('keeps a parent status as its file declares it, even when every child is done', () => {
+    put('campaigns/q3', 'campaign', 'name: Q3\nstatus: draft\n')
+    put('campaigns/q3/missions/m1', 'mission', 'name: M1\nstatus: draft\n')
+    put('campaigns/q3/missions/m1/tasks/t1', 'task', 'name: T1\nstatus: done\n')
+    put('campaigns/q3/missions/m1/tasks/t2', 'task', 'name: T2\nstatus: done\n')
+    const board = readBoard(project)
+    const campaign = board.campaigns[0]
+    const mission = campaign.children[0]
+    // Every task is done, and still neither parent's status moved.
+    expect(mission.status).toBe('draft')
+    expect(campaign.status).toBe('draft')
+    // Progress reports the same completion that status must not adopt.
+    expect(mission.progress).toEqual({ done: 2, total: 2 })
+    expect(campaign.progress).toEqual({ done: 0, total: 1 })
+  })
+
   it('never reads the trash', () => {
     put('campaigns/q3', 'campaign', 'name: Q3\n')
     put('.trash/campaigns/gone', 'campaign', 'name: Gone\n')
