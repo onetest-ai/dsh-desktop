@@ -1,7 +1,7 @@
 import { lstatSync, mkdirSync, readdirSync, renameSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { writeFileAtomic } from '../atomic-write'
-import { boardRoot, folderFor, resolveInBoard, TRASH_DIR } from './board-paths'
+import { boardRoot, folderFor, realpathAsFarAsExists, resolveInBoard, TRASH_DIR } from './board-paths'
 import { findEntity, readBoard } from './board-read'
 import { dumpEntity, ENTITY_STATUSES, type EntityFields, type EntityKind } from './entity-schema'
 import { slugify, uniqueSlug } from './slug'
@@ -212,6 +212,17 @@ export function trashEntity(project: string, folderPath: string): WriteResult {
     // No .trash yet — mkdirSync below makes an ordinary directory.
   }
   const into = join(trashRoot, parent)
+  // `into` reconstructs the entity's own folder path under `.trash`, so a
+  // symlink planted anywhere along that reconstruction — not just at `.trash`
+  // itself — walks mkdirSync/renameSync straight through it. The same walk
+  // resolveInBoard uses for a not-yet-existing target catches it here too:
+  // realpath as far as something exists, then require that to stay under the
+  // realpathed board root.
+  const realInto = realpathAsFarAsExists(into)
+  const realBoard = realpathAsFarAsExists(boardRoot(project))
+  if (realInto !== realBoard && !realInto.startsWith(realBoard + sep)) {
+    return { ok: false, reason: `${parent} is not inside this project's board.` }
+  }
   mkdirSync(into, { recursive: true })
   let taken: Set<string>
   try {

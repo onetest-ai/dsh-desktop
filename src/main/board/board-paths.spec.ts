@@ -95,25 +95,39 @@ describe('resolveInBoard', () => {
     expect(resolveInBoard(project, '.trash/campaigns/q3')).toBeUndefined()
   })
 
-  // reason: createEntity only ever calls this on a target that does not exist
-  // yet — the folder it is about to make — so a check that only realpaths an
-  // existing target never runs for the case that matters. A symlinked
-  // container one level up from the target must still be caught.
+  // reason: this proves the escape is refused, which only means something
+  // against a canonical root. Against the suite's un-hoisted, possibly
+  // non-canonical `project`, the pre-fix code (which compared a lexical
+  // target against a realpathed root) refused this path too — but for the
+  // wrong reason, since it refused every not-yet-existing path regardless of
+  // where it led. Realpathing this fixture's own root at setup is what makes
+  // a failure here mean the symlink walk was skipped, not that the root
+  // happened to disagree with itself.
   it('refuses a not-yet-existing target under a symlinked container', () => {
+    const canonicalProject = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-board-canon-')))
+    mkdirSync(join(canonicalProject, '.dsh', 'tasks', 'campaigns', 'q3'), { recursive: true })
     const outside = mkdtempSync(join(tmpdir(), 'dsh-outside-'))
-    symlinkSync(outside, join(project, '.dsh', 'tasks', 'campaigns', 'escaped'))
-    expect(resolveInBoard(project, 'campaigns/escaped/pwned')).toBeUndefined()
+    symlinkSync(outside, join(canonicalProject, '.dsh', 'tasks', 'campaigns', 'escaped'))
+    expect(resolveInBoard(canonicalProject, 'campaigns/escaped/pwned')).toBeUndefined()
     rmSync(outside, { recursive: true, force: true })
+    rmSync(canonicalProject, { recursive: true, force: true })
   })
 
-  // reason: the escaping symlink can sit several directories above the
-  // target, not only immediately above it — a mission and its task, both
-  // still to be created, under a campaign whose `missions/` is a symlink —
-  // so realpathing just the immediate parent would miss it.
+  // reason: same property as above, one layer deeper — the escaping symlink
+  // can sit several directories above the target, not only immediately above
+  // it (a mission and its task, both still to be created, under a campaign
+  // whose `missions/` is a symlink) — so realpathing just the immediate
+  // parent would miss it. Needs the same canonical root for the same reason:
+  // against a non-canonical one, the pre-fix code refuses this path too, but
+  // because it refuses every not-yet-existing path, not because it caught the
+  // symlink.
   it('refuses a not-yet-existing target several levels under a symlinked container', () => {
+    const canonicalProject = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-board-canon-')))
+    mkdirSync(join(canonicalProject, '.dsh', 'tasks', 'campaigns', 'q3'), { recursive: true })
     const outside = mkdtempSync(join(tmpdir(), 'dsh-outside-'))
-    symlinkSync(outside, join(project, '.dsh', 'tasks', 'campaigns', 'q3', 'missions'))
-    expect(resolveInBoard(project, 'campaigns/q3/missions/m1/tasks/t1')).toBeUndefined()
+    symlinkSync(outside, join(canonicalProject, '.dsh', 'tasks', 'campaigns', 'q3', 'missions'))
+    expect(resolveInBoard(canonicalProject, 'campaigns/q3/missions/m1/tasks/t1')).toBeUndefined()
     rmSync(outside, { recursive: true, force: true })
+    rmSync(canonicalProject, { recursive: true, force: true })
   })
 })

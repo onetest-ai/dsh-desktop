@@ -214,6 +214,24 @@ describe('trashEntity', () => {
     expect(existsSync(join(outside, 'campaigns'))).toBe(false)
     rmSync(outside, { recursive: true, force: true })
   })
+
+  // reason: `.trash` itself being a symlink is only half the escape. `into`
+  // is built from the entity's own parent path reconstructed under `.trash`
+  // (`.trash/campaigns/...`), so a symlink one directory deeper — with
+  // `.trash` a real directory — still walks mkdirSync/renameSync out of the
+  // repository while the caller sees `ok: true`.
+  it('refuses a real .trash whose campaigns subdirectory is a symlink out', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'dsh-outside-'))
+    mkdirSync(join(project, '.dsh', 'tasks', '.trash'), { recursive: true })
+    symlinkSync(outside, join(project, '.dsh', 'tasks', '.trash', 'campaigns'))
+    createEntity(project, 'campaign', '', 'Q3')
+    createEntity(project, 'mission', 'campaigns/q3', 'M1')
+    const out = trashEntity(project, 'campaigns/q3/missions/m1')
+    expect(out.ok).toBe(false)
+    expect(existsSync(join(project, '.dsh', 'tasks', 'campaigns', 'q3', 'missions', 'm1'))).toBe(true)
+    expect(existsSync(join(outside, 'q3'))).toBe(false)
+    rmSync(outside, { recursive: true, force: true })
+  })
 })
 
 describe('every write', () => {

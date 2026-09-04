@@ -67,10 +67,15 @@ export function folderFor(kind: EntityKind, parts: string[]): string {
  * `missions/` is a symlink, with the mission itself still to be created), so
  * realpathing just the immediate parent is not enough either — this walks up
  * to whichever ancestor genuinely exists.
+ *
+ * Exported because `trashEntity` needs the same walk for the same reason:
+ * its destination is also a path built from segments that may not exist yet
+ * (the trashed folder's own parents, reconstructed under `.trash`), and a
+ * symlink planted anywhere along it is the same escape one directory deeper.
  * @param target - an absolute, already lexically-resolved path.
  * @returns the path with every existing ancestor realpathed.
  */
-function realpathAsFarAsExists(target: string): string {
+export function realpathAsFarAsExists(target: string): string {
   const pending: string[] = []
   let at = target
   while (!existsSync(at)) {
