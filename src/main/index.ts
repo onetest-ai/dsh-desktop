@@ -858,10 +858,16 @@ async function openGitDiffInPane(repo: string, path: string, section: Section): 
  * @param repo - the repository.
  * @param paths - the paths to stage.
  * @param known - the repositories currently discovered.
+ * @param jobs - the remote operations in flight; a pull in this repository makes this wait.
  * @returns what the action reported, or the refusal.
  */
-export async function gitStageFor(repo: string, paths: string[], known: () => string[]): Promise<ActionOutcome> {
-  return refuseUnlessInProject(repo, paths, known) ?? (await stage(repo, paths))
+export async function gitStageFor(
+  repo: string,
+  paths: string[],
+  known: () => string[],
+  jobs: Map<string, RemoteJob> = remoteJobs,
+): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, paths, known) ?? refuseWhilePulling(repo, jobs) ?? (await stage(repo, paths))
 }
 
 /**
@@ -869,10 +875,16 @@ export async function gitStageFor(repo: string, paths: string[], known: () => st
  * @param repo - the repository.
  * @param paths - the paths to unstage.
  * @param known - the repositories currently discovered.
+ * @param jobs - the remote operations in flight; a pull in this repository makes this wait.
  * @returns what the action reported, or the refusal.
  */
-export async function gitUnstageFor(repo: string, paths: string[], known: () => string[]): Promise<ActionOutcome> {
-  return refuseUnlessInProject(repo, paths, known) ?? (await unstage(repo, paths))
+export async function gitUnstageFor(
+  repo: string,
+  paths: string[],
+  known: () => string[],
+  jobs: Map<string, RemoteJob> = remoteJobs,
+): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, paths, known) ?? refuseWhilePulling(repo, jobs) ?? (await unstage(repo, paths))
 }
 
 /**
@@ -886,6 +898,7 @@ export async function gitUnstageFor(repo: string, paths: string[], known: () => 
  * @param tracked - paths git knows about.
  * @param untracked - paths it does not.
  * @param known - the repositories currently discovered.
+ * @param jobs - the remote operations in flight; a pull in this repository makes this wait.
  * @returns what the action reported, or the refusal.
  */
 export async function gitDiscardFor(
@@ -893,8 +906,13 @@ export async function gitDiscardFor(
   tracked: string[],
   untracked: string[],
   known: () => string[],
+  jobs: Map<string, RemoteJob> = remoteJobs,
 ): Promise<ActionOutcome> {
-  return refuseUnlessInProject(repo, [...tracked, ...untracked], known) ?? (await discard(repo, tracked, untracked))
+  return (
+    refuseUnlessInProject(repo, [...tracked, ...untracked], known) ??
+    refuseWhilePulling(repo, jobs) ??
+    (await discard(repo, tracked, untracked))
+  )
 }
 
 /**
@@ -916,6 +934,7 @@ export async function gitDiscardFor(
  * @param keep - paths ticked only in Staged Changes.
  * @param staged - the paths currently in the index.
  * @param known - the repositories currently discovered.
+ * @param jobs - the remote operations in flight; a pull in this repository makes this wait.
  * @returns what the action reported, or the refusal.
  */
 export async function gitCommitFor(
@@ -925,9 +944,11 @@ export async function gitCommitFor(
   keep: string[],
   staged: string[],
   known: () => string[],
+  jobs: Map<string, RemoteJob> = remoteJobs,
 ): Promise<ActionOutcome> {
   return (
     refuseUnlessInProject(repo, [...add, ...keep, ...staged], known) ??
+    refuseWhilePulling(repo, jobs) ??
     (await commit(repo, message, add, keep, staged))
   )
 }
@@ -947,6 +968,7 @@ export async function gitCommitFor(
  * @param name - the branch to switch to.
  * @param remote - whether the row was a remote-tracking branch.
  * @param known - the repositories currently discovered.
+ * @param jobs - the remote operations in flight; a pull in this repository makes this wait.
  * @returns what the action reported — with the files that blocked it and
  *   which of git's two refusals it was, when git named any — or the refusal.
  */
@@ -955,8 +977,9 @@ export async function gitCheckoutFor(
   name: string,
   remote: boolean,
   known: () => string[],
+  jobs: Map<string, RemoteJob> = remoteJobs,
 ): Promise<ActionOutcome & { blocked?: string[]; blockedKind?: BlockedKind }> {
-  return refuseUnlessInProject(repo, [], known) ?? (await checkout(repo, name, remote))
+  return refuseUnlessInProject(repo, [], known) ?? refuseWhilePulling(repo, jobs) ?? (await checkout(repo, name, remote))
 }
 
 /**
@@ -964,10 +987,16 @@ export async function gitCheckoutFor(
  * @param repo - the repository.
  * @param name - the branch to create.
  * @param known - the repositories currently discovered.
+ * @param jobs - the remote operations in flight; a pull in this repository makes this wait.
  * @returns what the action reported, or the refusal.
  */
-export async function gitCreateBranchFor(repo: string, name: string, known: () => string[]): Promise<ActionOutcome> {
-  return refuseUnlessInProject(repo, [], known) ?? (await createBranch(repo, name))
+export async function gitCreateBranchFor(
+  repo: string,
+  name: string,
+  known: () => string[],
+  jobs: Map<string, RemoteJob> = remoteJobs,
+): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, [], known) ?? refuseWhilePulling(repo, jobs) ?? (await createBranch(repo, name))
 }
 
 /**
@@ -982,6 +1011,7 @@ export async function gitCreateBranchFor(repo: string, name: string, known: () =
  * @param message - what to call it; blank pushes without one.
  * @param untracked - true to take untracked files too; see `pushStash`.
  * @param known - the repositories currently discovered.
+ * @param jobs - the remote operations in flight; a pull in this repository makes this wait.
  * @returns what the action reported and the sha it named, or the refusal.
  */
 export async function gitStashPushFor(
@@ -989,8 +1019,11 @@ export async function gitStashPushFor(
   message: string,
   untracked: boolean,
   known: () => string[],
+  jobs: Map<string, RemoteJob> = remoteJobs,
 ): Promise<ActionOutcome & { ref?: string }> {
-  return refuseUnlessInProject(repo, [], known) ?? (await pushStash(repo, message, untracked))
+  return (
+    refuseUnlessInProject(repo, [], known) ?? refuseWhilePulling(repo, jobs) ?? (await pushStash(repo, message, untracked))
+  )
 }
 
 /**
@@ -999,6 +1032,7 @@ export async function gitStashPushFor(
  * @param ref - the stash, as `stash@{n}`.
  * @param pop - true to remove it once applied.
  * @param known - the repositories currently discovered.
+ * @param jobs - the remote operations in flight; a pull in this repository makes this wait.
  * @returns what the action reported, or the refusal.
  */
 export async function gitStashApplyFor(
@@ -1006,8 +1040,9 @@ export async function gitStashApplyFor(
   ref: string,
   pop: boolean,
   known: () => string[],
+  jobs: Map<string, RemoteJob> = remoteJobs,
 ): Promise<ActionOutcome> {
-  return refuseUnlessInProject(repo, [], known) ?? (await applyStash(repo, ref, pop))
+  return refuseUnlessInProject(repo, [], known) ?? refuseWhilePulling(repo, jobs) ?? (await applyStash(repo, ref, pop))
 }
 
 /**
@@ -1030,7 +1065,42 @@ export async function gitStashDropFor(repo: string, ref: string, known: () => st
  * serialised, because two remote operations in the same working tree race for
  * the same index lock and the loser reports a fault the user did not cause.
  */
-const remoteJobs = new Map<string, AbortController>()
+const remoteJobs = new Map<string, RemoteJob>()
+
+/**
+ * One remote operation in flight, and what it is.
+ *
+ * The operation is carried alongside the controller because not every remote
+ * touches this machine: `fetch` writes refs, `push` and `publish` write
+ * nothing here at all, and only `pull` rewrites the index and the working
+ * tree. A local write has to wait for that one and only that one — a rule
+ * that stopped every write for the two minutes a first fetch takes would cost
+ * more than the race it prevents.
+ */
+interface RemoteJob {
+  stop: AbortController
+  op: RemoteOp
+}
+
+/**
+ * Why a local write cannot run right now, if it cannot.
+ *
+ * `git pull` is a merge: it takes `.git/index.lock` and rewrites the working
+ * tree, and a stage or a discard landing in the middle of one loses the race
+ * and reports `Unable to create '…/index.lock': File exists.` — a fault the
+ * user did not cause, in words that read as though the app broke.
+ *
+ * Named rather than silent, and per repository: the panel is already showing
+ * `Pulling…` on that header, so the refusal reads as the explanation for a
+ * control that was pressed a moment too early.
+ * @param repo - the repository being written to.
+ * @param jobs - the remote operations in flight.
+ * @returns the refusal, or nothing when the write may proceed.
+ */
+function refuseWhilePulling(repo: string, jobs: Map<string, RemoteJob>): { ok: false; reason: string } | undefined {
+  if (jobs.get(repo)?.op !== 'pull') return undefined
+  return { ok: false, reason: `A pull is running in ${basename(repo)}. Wait for it to finish.` }
+}
 
 /**
  * Fetch, pull, push or publish, if the caller may act on the repository.
@@ -1049,20 +1119,20 @@ export async function gitRemoteFor(
   repo: string,
   op: RemoteOp,
   known: () => string[],
-  jobs: Map<string, AbortController> = remoteJobs,
+  jobs: Map<string, RemoteJob> = remoteJobs,
 ): Promise<RemoteOutcome> {
   const refusal = refuseUnlessInProject(repo, [], known)
   if (refusal !== undefined) return refusal
   if (jobs.has(repo)) return { ok: false, reason: `Something is already running in ${basename(repo)}.` }
-  const stop = new AbortController()
-  jobs.set(repo, stop)
+  const job = { stop: new AbortController(), op }
+  jobs.set(repo, job)
   try {
-    return await remote(repo, op, stop.signal)
+    return await remote(repo, op, job.stop.signal)
   } finally {
     // In a finally, and only when it is still ours: a job left behind would
     // refuse every later operation in that repository for the life of the
     // window, which is a panel that stops working with nothing to say why.
-    if (jobs.get(repo) === stop) jobs.delete(repo)
+    if (jobs.get(repo) === job) jobs.delete(repo)
   }
 }
 
@@ -1074,8 +1144,8 @@ export async function gitRemoteFor(
  * @param repo - the repository.
  * @param jobs - the running operations; injected so tests hold their own.
  */
-export function gitCancelRemote(repo: string, jobs: Map<string, AbortController> = remoteJobs): void {
-  jobs.get(repo)?.abort()
+export function gitCancelRemote(repo: string, jobs: Map<string, RemoteJob> = remoteJobs): void {
+  jobs.get(repo)?.stop.abort()
 }
 
 /**

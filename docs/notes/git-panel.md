@@ -124,6 +124,20 @@ to a fork nobody was watching is not a mistake to make on someone's behalf.
 
 Each is serialised per repo, shows that it is running, times out, and can be cancelled by killing the child.
 
+**A pull holds the local writes back, and only a pull does.** `git pull` is a
+merge: it takes `.git/index.lock` and rewrites the working tree, so a stage, a
+discard, a commit, a branch switch or a stash landing in the middle of one
+loses the race and reports `Unable to create '…/index.lock': File exists.` — a
+fault the user did not cause, in words that read as though the app broke. Those
+writes are refused for as long as the pull runs, naming it, since the header is
+already saying `Pulling…` and the refusal is the explanation for a control
+pressed a moment too early.
+
+The other three are not held back at all. `fetch` writes refs, `push` and
+`publish` write nothing on this machine, and a rule that stopped every write
+for the two minutes a first fetch takes would cost more than the race it
+prevents. Dropping a stash is allowed for the same reason: it moves a ref.
+
 ## Failing loudly
 
 Every git child runs with:

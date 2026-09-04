@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConfigResult, DesktopConfig } from './config'
 import type { OpenConfigFileResult } from './open-config-file'
@@ -387,6 +387,22 @@ vi.mock('./harness-theme', () => ({
 }))
 
 const readWorkspacesMock = vi.fn((): unknown[] => [])
+/** Every `terminals.start`, so a test can read the directory it was given. */
+const terminalStarts: { cwd: string }[] = []
+// The real one forks a utility process to host a pty; nothing here needs a
+// shell to actually run. What a test does need is the `cwd` main decided on,
+// which is the whole of what the git panel's Open in Terminal contributes.
+vi.mock('./terminal', () => ({
+  Terminals: class {
+    start(options: { cwd: string }): number {
+      terminalStarts.push(options)
+      return terminalStarts.length
+    }
+    send(): void {}
+    stop(): void {}
+  },
+}))
+
 vi.mock('./workspaces', () => ({
   readWorkspaces: (...args: unknown[]) => readWorkspacesMock(...(args as [])),
   workspacesPath: (home: string) => `${home}/storages/workspace.json`,
@@ -544,6 +560,10 @@ vi.mock('./server', () => ({
   dshWebCommand: (...args: unknown[]) => dshWebCommandMock(...(args as [])),
   resolveBinary: vi.fn((configured: string | undefined, name: string) => configured ?? name),
   stopGroup: vi.fn(async () => {}),
+  // Reached only through `probePath`, when a test actually starts a terminal.
+  // The composition itself is `server.ts`'s own to test; here it need only
+  // return a string so the shell gets a PATH.
+  composePath: vi.fn((inherited: string) => inherited),
 }))
 
 /** Whether the next spawned child's `stop()` hangs until `releaseStop()`. */
@@ -690,6 +710,10 @@ beforeEach(() => {
   for (const mock of [stageMock, unstageMock, discardMock, commitMock, checkoutMock, createBranchMock, pushStashMock, applyStashMock, dropStashMock, remoteMock]) {
     mock.mockResolvedValue({ ok: true })
   }
+  // A test that made the terminal page look mid-load must not leave it that
+  // way: main defers what it sends to a loading page, so the next test's
+  // `send` would silently never arrive.
+  fake.terminal.webContents.isLoading.mockReturnValue(false)
   fake.resetReady()
   fake.app.requestSingleInstanceLock.mockReturnValue(true)
   fake.app.getPath.mockReturnValue('/tmp/dsh-desktop-test-userdata')
@@ -2593,7 +2617,7 @@ describe('the git write channels', () => {
     // remote operations in one working tree race for the same index lock.
     it('refuses a second operation while one is running in the same repo', async () => {
       const { gitRemoteFor } = await exports()
-      const jobs = new Map<string, AbortController>([[repo, new AbortController()]])
+      const jobs = new Map([[repo, { stop: new AbortController(), op: 'fetch' as const }]])
       const out = await gitRemoteFor(repo, 'pull', () => [repo], jobs)
       expect(out.ok).toBe(false)
       if (!out.ok) expect(out.reason).toContain('already running')
@@ -2602,7 +2626,7 @@ describe('the git write channels', () => {
 
     it('lets a different repository run at the same time', async () => {
       const { gitRemoteFor } = await exports()
-      const jobs = new Map<string, AbortController>([['/p/other', new AbortController()]])
+      const jobs = new Map([['/p/other', { stop: new AbortController(), op: 'fetch' as const }]])
       expect(await gitRemoteFor(repo, 'fetch', () => [repo, '/p/other'], jobs)).toMatchObject({ ok: true })
     })
 
@@ -2610,8 +2634,8 @@ describe('the git write channels', () => {
     // every later fetch in that repository for the life of the window.
     it('forgets the job once it has finished', async () => {
       const { gitRemoteFor } = await exports()
-      const jobs = new Map<string, AbortController>()
-      await gitRemoteFor(repo, 'fetch', () => [repo], jobs)
+      const jobs = new Map<string, { stop: AbortController; op: string }>()
+      await gitRemoteFor(repo, 'fetch', () => [repo], jobs as never)
       expect(jobs.has(repo)).toBe(false)
     })
 
@@ -2620,15 +2644,15 @@ describe('the git write channels', () => {
     it('forgets the job even when the operation threw', async () => {
       const { gitRemoteFor } = await exports()
       remoteMock.mockRejectedValueOnce(new Error('boom'))
-      const jobs = new Map<string, AbortController>()
-      await expect(gitRemoteFor(repo, 'fetch', () => [repo], jobs)).rejects.toThrow('boom')
+      const jobs = new Map<string, { stop: AbortController; op: string }>()
+      await expect(gitRemoteFor(repo, 'fetch', () => [repo], jobs as never)).rejects.toThrow('boom')
       expect(jobs.has(repo)).toBe(false)
     })
 
     it('aborts the job running in that repository', async () => {
       const { gitCancelRemote } = await exports()
       const stop = new AbortController()
-      gitCancelRemote(repo, new Map([[repo, stop]]))
+      gitCancelRemote(repo, new Map([[repo, { stop, op: 'fetch' as const }]]))
       expect(stop.signal.aborted).toBe(true)
     })
 
@@ -2658,6 +2682,150 @@ describe('the git write channels', () => {
     it('falls back to nothing nameable when no project is open', async () => {
       const { terminalCwdFor } = await exports()
       expect(terminalCwdFor('/elsewhere', () => [repo], undefined)).toBe('')
+    })
+  })
+
+  describe('a local write while a remote runs', () => {
+    /** A pull in progress in `repo`, as `gitRemoteFor` would have recorded it. */
+    function pulling(): Map<string, { stop: AbortController; op: string }> {
+      return new Map([[repo, { stop: new AbortController(), op: 'pull' }]])
+    }
+
+    // reason: `git pull` rewrites the index and the working tree. A stage
+    // landing in the middle of one races it for `.git/index.lock`, and the
+    // loser reports a fault the user did not cause.
+    it('refuses to stage while a pull is running in that repository', async () => {
+      const { gitStageFor } = await exports()
+      const out = await gitStageFor(repo, ['src/a.ts'], () => [repo], pulling())
+      expect(out).toEqual({ ok: false, reason: `A pull is running in ${basename(repo)}. Wait for it to finish.` })
+      expect(stageMock).not.toHaveBeenCalled()
+    })
+
+    // reason: a fetch writes refs and nothing else. Refusing to let someone
+    // stage a file for the two minutes a first fetch takes would be a rule
+    // that costs more than the race it prevents.
+    it('stages while a fetch is running, which touches nothing local', async () => {
+      const { gitStageFor } = await exports()
+      const jobs = new Map([[repo, { stop: new AbortController(), op: 'fetch' as const }]])
+      expect(await gitStageFor(repo, ['src/a.ts'], () => [repo], jobs)).toMatchObject({ ok: true })
+      expect(stageMock).toHaveBeenCalled()
+    })
+
+    it('stages while a push is running, which writes nothing here either', async () => {
+      const { gitStageFor } = await exports()
+      const jobs = new Map([[repo, { stop: new AbortController(), op: 'push' as const }]])
+      expect(await gitStageFor(repo, ['src/a.ts'], () => [repo], jobs)).toMatchObject({ ok: true })
+    })
+
+    // reason: the whole point of per-repository jobs — a project holding
+    // several checkouts is the case this panel was built for.
+    it('stages while a pull runs in a different repository', async () => {
+      const { gitStageFor } = await exports()
+      const jobs = new Map([['/p/other', { stop: new AbortController(), op: 'pull' as const }]])
+      expect(await gitStageFor(repo, ['src/a.ts'], () => [repo, '/p/other'], jobs)).toMatchObject({ ok: true })
+    })
+
+    // reason: every one of these takes the index lock or rewrites the working
+    // tree, so every one of them races the merge a pull is in the middle of.
+    it('refuses every write that touches the index or the working tree', async () => {
+      const mod = await exports()
+      const here = (): string[] => [repo]
+      const said = `A pull is running in ${basename(repo)}. Wait for it to finish.`
+      expect(await mod.gitUnstageFor(repo, ['src/a.ts'], here, pulling())).toEqual({ ok: false, reason: said })
+      expect(await mod.gitDiscardFor(repo, ['src/a.ts'], [], here, pulling())).toEqual({ ok: false, reason: said })
+      expect(await mod.gitCommitFor(repo, 'm', ['src/a.ts'], [], [], here, pulling())).toEqual({ ok: false, reason: said })
+      expect(await mod.gitCheckoutFor(repo, 'other', false, here, pulling())).toEqual({ ok: false, reason: said })
+      expect(await mod.gitCreateBranchFor(repo, 'other', here, pulling())).toEqual({ ok: false, reason: said })
+      expect(await mod.gitStashPushFor(repo, 'm', false, here, pulling())).toEqual({ ok: false, reason: said })
+      expect(await mod.gitStashApplyFor(repo, 'abc123', true, here, pulling())).toEqual({ ok: false, reason: said })
+      for (const mock of [unstageMock, discardMock, commitMock, checkoutMock, createBranchMock, pushStashMock, applyStashMock]) {
+        expect(mock).not.toHaveBeenCalled()
+      }
+    })
+
+    // reason: dropping a stash moves a ref and nothing else, so it does not
+    // race a merge — and a refusal for it would be a refusal for nothing.
+    it('drops a stash while a pull runs, since that only moves a ref', async () => {
+      const { gitStashDropFor } = await exports()
+      expect(await gitStashDropFor(repo, 'abc123', () => [repo])).toMatchObject({ ok: true })
+    })
+
+    it('still aborts the job it finds under the new shape', async () => {
+      const { gitCancelRemote } = await exports()
+      const stop = new AbortController()
+      gitCancelRemote(repo, new Map([[repo, { stop, op: 'fetch' as const }]]))
+      expect(stop.signal.aborted).toBe(true)
+    })
+  })
+
+  describe('the channels themselves', () => {
+    /**
+     * Boot with `repo` as the open project, so the git channels have a
+     * repository to be checked against.
+     *
+     * Through the real boot rather than by reaching into the module: these
+     * tests exist because the wiring between an `ipcMain` handler and the
+     * helper it guards was the one part of this feature verified only by
+     * reading, and a test that skipped the boot would skip that wiring too.
+     * @returns resolution once the app is ready.
+     */
+    async function bootInRepo(): Promise<void> {
+      readWorkspacesMock.mockReturnValue([
+        { path: repo, title: 'repo', file: `${repo}/.dsh/mcp.json`, declared: false, servers: [] },
+      ])
+      findReposMock.mockReturnValue([repo])
+      await bootReady()
+      // The tree asks for the project as its page loads, and that is what
+      // makes one current. Without it `gitRepoPaths()` is empty and every
+      // channel below refuses for a reason that has nothing to do with what
+      // it is testing.
+      fake.sendIpc('pane:ask-project')
+    }
+
+    // reason: this is the one channel where a string from the renderer becomes
+    // a shell's working directory. The handler must store what the gate
+    // returned, never the argument it was given.
+    it('starts a terminal in the repository the panel named', async () => {
+      await bootInRepo()
+      fake.terminal.webContents.send.mockClear()
+      fake.sendIpc('git:open-terminal', repo)
+      expect(fake.terminal.webContents.send).toHaveBeenCalledWith('terminal:open-new')
+      terminalStarts.length = 0
+      fake.sendIpc('terminal:start', 80, 24)
+      expect(terminalStarts[0]?.cwd).toBe(repo)
+    })
+
+    // reason: a repository the project does not hold falls back to the
+    // project — the user asked for a terminal and gets one, in the place
+    // every other terminal opens — and never lands in the named directory.
+    it('does not start a terminal in a directory the project does not hold', async () => {
+      await bootInRepo()
+      const elsewhere = mkdtempSync(join(tmpdir(), 'dsh-git-elsewhere-'))
+      fake.sendIpc('git:open-terminal', elsewhere)
+      terminalStarts.length = 0
+      fake.sendIpc('terminal:start', 80, 24)
+      expect(terminalStarts[0]?.cwd).toBe(repo)
+      expect(terminalStarts[0]?.cwd).not.toBe(elsewhere)
+    })
+
+    it('runs the remote operation the panel asked for', async () => {
+      await bootInRepo()
+      await fake.sendIpc('git:remote', repo, 'fetch')
+      expect(remoteMock).toHaveBeenCalledWith(repo, 'fetch', expect.anything())
+    })
+
+    it('refuses a remote operation on a repository the project does not hold', async () => {
+      await bootInRepo()
+      const out = (await fake.sendIpc('git:remote', '/elsewhere', 'fetch')) as { ok: boolean }
+      expect(out.ok).toBe(false)
+      expect(remoteMock).not.toHaveBeenCalled()
+    })
+
+    // reason: a cancel can only ever stop something this app started, but the
+    // rule that every git channel is checked is worth more than the exception.
+    it('does not throw when a cancel names a repository it does not hold', async () => {
+      await bootInRepo()
+      expect(() => fake.sendIpc('git:cancel-remote', '/elsewhere')).not.toThrow()
     })
   })
 })
