@@ -166,8 +166,13 @@ describe('trashEntity', () => {
     expect(trashEntity(project, 'campaigns/q3').ok).toBe(true)
     expect(existsSync(join(project, '.dsh', 'tasks', 'campaigns', 'q3'))).toBe(false)
     expect(readBoard(project).campaigns).toEqual([])
-    const trashed = join(project, '.dsh', 'tasks', '.trash')
+    // reason: a directory existing is not evidence of a move — trashEntity
+    // creates .trash before it acts, so that much is true of a delete too.
+    // The folder's own file, still readable under its original path beneath
+    // .trash, is what only a move produces.
+    const trashed = join(project, '.dsh', 'tasks', '.trash', 'campaigns', 'q3')
     expect(existsSync(trashed)).toBe(true)
+    expect(readFileSync(join(trashed, 'campaign.yaml'), 'utf8')).toContain('name: Q3')
   })
 
   it('takes the children with it', () => {
@@ -175,6 +180,11 @@ describe('trashEntity', () => {
     createEntity(project, 'mission', 'campaigns/q3', 'M1')
     trashEntity(project, 'campaigns/q3')
     expect(readBoard(project).campaigns).toEqual([])
+    // reason: an empty board is also what a delete would leave — the mission's
+    // file, still readable under the trashed campaign, is what only a move
+    // (of the whole subtree) produces.
+    const trashedMission = join(project, '.dsh', 'tasks', '.trash', 'campaigns', 'q3', 'missions', 'm1')
+    expect(readFileSync(join(trashedMission, 'mission.yaml'), 'utf8')).toContain('name: M1')
   })
 
   // reason: trashing twice is ordinary — two agents, one stale board — and the
