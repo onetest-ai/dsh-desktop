@@ -61,9 +61,19 @@ On-disk keys are `snake_case`. Every kind carries `name`, `status`, `description
 | `role` | | | ✓ | |
 | `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment` | | | | ✓ |
 
-**Status** is one of `draft`, `executing`, `awaitingApproval`, `done`, `failed`, `cancelled`. These are the board's columns. The set is closed — a status the schema does not know is a validation finding, not a new column, because a board whose columns are whatever anyone typed is not a board.
+**Status** is one of `draft`, `executing`, `awaitingApproval`, `done`, `failed`, `cancelled`. These are the board's columns. The set is fixed — a status the schema does not know is a validation finding, not a new column, because a board whose columns are whatever anyone typed is not a board.
 
 **An acceptance criterion** is `{ text, done }`. A task with no criterion is a planning defect: a task with no checkable definition of done cannot be gated, and gating is the point. Validation says so; it does not refuse the write.
+
+### Status is set, never inferred
+
+**Nothing changes an entity's status but a person or an agent saying so.** A mission does not become `done` because its last task did; a campaign does not become `executing` because a mission started. There is no rollup, no cascade, and no completion that fires on its own.
+
+Upstream derives a parent's status from its children unless it is explicitly overridden — `managed-block.ts` calls it "the mission rollup". The cost of that is not the arithmetic, it is the ambiguity: reading `executing` on a campaign, you cannot tell whether someone decided it or whether a child moved and the number followed. A status that means two different things is worse than a stale one, because a stale status is at least a claim somebody made.
+
+So the rule is: **a status is a claim, and claims have authors.** Setting one is a write, from the panel or from `board_status`, and it lands in a diff with a name against it.
+
+**Progress is computed and shown, never written.** "3 of 7 tasks done", "5 of 6 criteria ticked" — those are read off disk every rebuild and rendered. They inform the person deciding; they do not decide. That distinction is the whole of this rule: derive what you display, never what you store.
 
 ### Unknown keys round-trip
 
@@ -128,6 +138,7 @@ Taken from `@octoshell/board` into `src/main/board/`, with a README recording th
 - **Tokenomics** — cost attribution read from agent transcripts that live outside the repository and are pruned. A reporting feature with its own collection timing, separable entirely.
 - **`managed-block.ts` and the migrations** — the older Markdown format and the path off it. This board is YAML from its first commit and has nothing to migrate.
 - **`missingIdFiles`** — legacy id markers that only existed for Markdown entities.
+- **The mission rollup** — a parent's status derived from its children. See *Status is set, never inferred*.
 
 **Changed:** the root moves from `.octobots/` to `.dsh/tasks/`, and imports adapt to this repo's CommonJS main-process build rather than the upstream ESM package.
 
@@ -135,7 +146,9 @@ Taken from `@octoshell/board` into `src/main/board/`, with a README recording th
 
 Upstream is on `js-yaml@^5.2.2`; this app already depends on `^4.3.1`, and **the two differ on the case the board actually hits**: v5 throws a `YAMLException` on an empty file where v4 returns `{}`. Upstream's own acceptance criteria record this, having been bitten by it.
 
-The vendored code is ported to the version this app already has, and empty, blank and whitespace-only files are a test case rather than an assumption. Adding a second copy of js-yaml to avoid the port would be a worse trade: two YAML parsers in one process, differing on exactly the inputs that break.
+**The decision is to stay on v4 and port**, for a reason beyond inertia: v4's behaviour is the one we want. A config reader that throws on an empty file is worse than one that reads it as empty, and this app's two existing call sites — `harness-theme.ts`, reading a `settings.yaml` it does not own, and `bundle-patch.ts` — would both inherit the regression. `load` and `dump` are otherwise compatible, so the port is small.
+
+Empty, blank and whitespace-only files are therefore a test case rather than an assumption. Adding a second copy of js-yaml to avoid porting would be the worst option of the three: two YAML parsers in one process, disagreeing on exactly the inputs that break.
 
 ## Testing
 
@@ -145,6 +158,7 @@ The hard parts are pure functions over bytes, so they test without Electron alon
 - **`BoardModel`** against temporary trees: a full four-level board, a mission with no tasks, a bug under a campaign and a bug under a mission, a folder with no YAML in it, and a board that is not there at all.
 - **The write paths**, each asserting the file on disk afterwards — including that an unmodelled key survives an unrelated edit, which is the regression that motivated `extra` upstream.
 - **Each tool**, that it refuses a path outside the project roots.
+- **That no write to a child ever changes its parent's status** — the regression this design is defined against, and the one a later convenience feature is most likely to reintroduce.
 - Each parser is broken deliberately to confirm its test fails, as this project asks of a test that guards something important.
 
 ## Deliberately not in this
