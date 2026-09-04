@@ -463,6 +463,10 @@ async function runRemote(repo: string, op: 'fetch' | 'pull' | 'push' | 'publish'
   trouble = undefined
   running.set(repo, DOING[op])
   draw()
+  // The clicked sync item and the eventual running/idle control never share a
+  // `data-key`, so `draw`'s by-key restore finds nothing for either — without
+  // this the keyboard falls to `<body>`, both while it runs and once it answers.
+  focusBranch(repo)
   const out = await window.pane.gitRemote(repo, op)
   running.delete(repo)
   if (!out.ok) {
@@ -472,6 +476,7 @@ async function runRemote(repo: string, op: 'fetch' | 'pull' | 'push' | 'publish'
     else say(out.reason)
   }
   draw()
+  focusBranch(repo)
 }
 
 /**

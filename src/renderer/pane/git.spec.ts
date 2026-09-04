@@ -1224,4 +1224,39 @@ describe('the remote', () => {
     )
     expect(open).toBeUndefined()
   })
+
+  // reason: the clicked `.sync-item` and the eventual running/idle control
+  // never share a `data-key`, so `draw`'s by-key restore finds nothing for
+  // either draw on its own — without a deliberate refocus, a keyboard user
+  // who pressed Fetch is dropped to `<body>` and returned to the top of the
+  // panel, both while it runs and once it answers.
+  it('keeps the keyboard on the branch control across a remote operation', async () => {
+    const bridge = stubBridge({ repos: [repo({})], hold: true })
+    await load(bridge)
+    pressSync('Fetch')
+    for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.sync-running')).not.toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('.repo-branch'))
+    bridge.finish({ ok: true })
+    for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.sync-running')).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('.repo-branch'))
+  })
+
+  // reason: Cancel removes its own `.sync-cancel` control once the operation
+  // it stopped resolves, which is the same kind of vanishing control as the
+  // ordinary finish above — so the keyboard is just as liable to fall to
+  // `<body>` on the way back to idle.
+  it('keeps the keyboard on the branch control after Cancel resolves', async () => {
+    const bridge = stubBridge({ repos: [repo({})], hold: true })
+    await load(bridge)
+    pressSync('Fetch')
+    for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    const cancel = document.querySelector<HTMLButtonElement>('.sync-cancel')
+    cancel?.click()
+    bridge.finish({ ok: false, reason: 'cancelled' })
+    for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.sync-running')).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('.repo-branch'))
+  })
 })
