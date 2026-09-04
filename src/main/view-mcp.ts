@@ -2,6 +2,9 @@ import { createServer, type Server } from 'node:http'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
+import { readBoard, type Board, type Entity } from './board/board-read'
+import { addCriterion, createEntity, setStatus, tickCriterion, trashEntity, updateEntity } from './board/board-write'
+import { ENTITY_STATUSES } from './board/entity-schema'
 import type { ActionResult } from './browser-actions'
 import type { ConsoleEntry, DialogRecord, Evaluated, NavigationRecord } from './browser-cdp'
 import { loadableUrl, locate } from './view-tools'
@@ -140,6 +143,50 @@ function refuse(message: string): { content: { type: 'text'; text: string }[]; i
 /** Tool result for a call that did what it said. */
 function done(message: string): { content: { type: 'text'; text: string }[] } {
   return { content: [{ type: 'text' as const, text: message }] }
+}
+
+/**
+ * The project a board tool acts on.
+ *
+ * The board belongs to one project, and these tools take no path — so the open
+ * project is the whole of their addressing. Several open projects is refused
+ * rather than guessed: writing a plan into whichever one happened to be first
+ * is not a mistake to make on the user's behalf.
+ * @param roots - the projects the harness has opened.
+ * @returns the project, or why there is not exactly one.
+ */
+function boardProject(roots: string[]): { ok: true; project: string } | { ok: false; reason: string } {
+  if (roots.length === 0) return { ok: false, reason: 'No project is open, so there is no board.' }
+  if (roots.length > 1) return { ok: false, reason: 'More than one project is open, so which board is ambiguous.' }
+  return { ok: true, project: roots[0] }
+}
+
+/**
+ * The board as an agent reads it: one line per entity, indented by depth.
+ *
+ * Lines rather than JSON. An agent reads this to decide what to do next, and
+ * an indented list of names with their statuses and progress is what that
+ * decision is made from — a nested object costs more tokens to say the same
+ * thing and is harder to scan.
+ * @param board - the board to render.
+ * @returns the text, including findings when there are any.
+ */
+function renderBoard(board: Board): string {
+  if (!board.present) return 'This project has no board. Create a campaign to start one.'
+  const lines: string[] = []
+  const walk = (entity: Entity, depth: number): void => {
+    const progress = entity.progress.total > 0 ? `  (${String(entity.progress.done)}/${String(entity.progress.total)} done)` : ''
+    lines.push(`${'  '.repeat(depth)}[${entity.status}] ${entity.kind} ${entity.name}${progress}`)
+    lines.push(`${'  '.repeat(depth)}  ${entity.folderPath}`)
+    for (const child of entity.children) walk(child, depth + 1)
+  }
+  for (const campaign of board.campaigns) walk(campaign, 0)
+  if (lines.length === 0) lines.push('The board is empty.')
+  if (board.findings.length > 0) {
+    lines.push('', 'Could not read:')
+    for (const finding of board.findings) lines.push(`  ${finding.folderPath}: ${finding.says}`)
+  }
+  return lines.join('\n')
 }
 
 /**
@@ -531,6 +578,125 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
       inputSchema: {},
     },
     async () => done(await deps.selection()),
+  )
+
+  if (editor) server.registerTool(
+    'board_read',
+    {
+      title: 'Read the project board',
+      description:
+        "The whole board for the open project: campaigns, their missions, the tasks and bugs under them, each with its status and folder path. The board is YAML files under `.dsh/tasks/`, committed with the code. Read this before planning work, and read it again before claiming any of it is done — someone else may have moved it. Every other board tool addresses an entity by the folder path this returns.",
+      inputSchema: {},
+    },
+    () => {
+      const project = boardProject(deps.roots())
+      if (!project.ok) return refuse(project.reason)
+      return done(renderBoard(readBoard(project.project)))
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_create',
+    {
+      title: 'Add something to the project board',
+      description:
+        "Create a campaign, mission, task or bug. A campaign is an outcome; a mission is an independently shippable slice of it; a task is one small verifiable unit; a bug is a defect. A mission goes under a campaign, a task under a mission, and a bug under either. Give `parent` the folder path from board_read — omit it only for a campaign. A task should be given at least one acceptance criterion with board_criterion: a task with no checkable definition of done cannot be gated.",
+      inputSchema: {
+        kind: z.enum(['campaign', 'mission', 'task', 'bug']).describe('What to create.'),
+        name: z.string().describe('The display name. The folder is named after it.'),
+        parent: z.string().optional().describe("The parent's folder path from board_read. Omit for a campaign."),
+      },
+    },
+    ({ kind, name, parent }) => {
+      const project = boardProject(deps.roots())
+      if (!project.ok) return refuse(project.reason)
+      const out = createEntity(project.project, kind, parent ?? '', name)
+      return out.ok ? done(`Created ${out.folderPath}.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_update',
+    {
+      title: 'Edit an entity on the board',
+      description:
+        "Change an entity's name, description or notes. Notes are free-form prose for decisions, rationale and sign-offs — appended reasoning that outlives the conversation it was decided in. This does not change status: use board_status for that.",
+      inputSchema: {
+        folder: z.string().describe('The folder path from board_read.'),
+        name: z.string().optional().describe('A new display name. The folder does not move.'),
+        description: z.string().optional().describe('What this entity is.'),
+        notes: z.string().optional().describe('Decisions and rationale, in prose.'),
+      },
+    },
+    ({ folder, name, description, notes }) => {
+      const project = boardProject(deps.roots())
+      if (!project.ok) return refuse(project.reason)
+      const patch = { ...(name !== undefined && { name }), ...(description !== undefined && { description }), ...(notes !== undefined && { notes }) }
+      if (Object.keys(patch).length === 0) return refuse('Name at least one field to change.')
+      const out = updateEntity(project.project, folder, patch)
+      return out.ok ? done(`Updated ${folder}.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_status',
+    {
+      title: 'Move an entity to a status',
+      description:
+        `Set one entity's status to one of: ${ENTITY_STATUSES.join(', ')}. Nothing else changes it — a mission does not become done because its last task did, and a campaign does not start because a mission did. A status is a claim, so make it deliberately, and only for the entity you are actually talking about.`,
+      inputSchema: {
+        folder: z.string().describe('The folder path from board_read.'),
+        status: z.string().describe(`One of: ${ENTITY_STATUSES.join(', ')}.`),
+      },
+    },
+    ({ folder, status }) => {
+      const project = boardProject(deps.roots())
+      if (!project.ok) return refuse(project.reason)
+      const out = setStatus(project.project, folder, status)
+      return out.ok ? done(`${folder} is now ${status}.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_criterion',
+    {
+      title: 'Add or tick an acceptance criterion',
+      description:
+        "Add a criterion to an entity, or tick one that is now met. A criterion is a statement that is checkably true or false about observable behaviour — not a description of the work. Give `text` to add one; give `index` and `done` to tick or clear one, where index is its zero-based position in the list board_read shows. Ticking is a claim that you verified it, not that you intended it.",
+      inputSchema: {
+        folder: z.string().describe('The folder path from board_read.'),
+        text: z.string().optional().describe('A new criterion, added unticked.'),
+        index: z.number().optional().describe('Zero-based position of the criterion to tick.'),
+        done: z.boolean().optional().describe('True to tick it, false to clear it.'),
+      },
+    },
+    ({ folder, text, index, done: ticked }) => {
+      const project = boardProject(deps.roots())
+      if (!project.ok) return refuse(project.reason)
+      if (text !== undefined) {
+        const out = addCriterion(project.project, folder, text)
+        return out.ok ? done(`Added a criterion to ${folder}.`) : refuse(out.reason)
+      }
+      if (index === undefined || ticked === undefined) return refuse('Give either text to add one, or index and done to tick one.')
+      const out = tickCriterion(project.project, folder, index, ticked)
+      return out.ok ? done(`${ticked ? 'Ticked' : 'Cleared'} criterion ${String(index)} on ${folder}.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_delete',
+    {
+      title: 'Move a board entity to the trash',
+      description:
+        "Move an entity, and everything under it, to `.dsh/tasks/.trash/`. It leaves the board but stays on disk, so a delete made in error is recoverable. Deleting a campaign takes its missions, tasks and bugs with it.",
+      inputSchema: { folder: z.string().describe('The folder path from board_read.') },
+    },
+    ({ folder }) => {
+      const project = boardProject(deps.roots())
+      if (!project.ok) return refuse(project.reason)
+      const out = trashEntity(project.project, folder)
+      return out.ok ? done(`Moved ${folder} to the board's trash.`) : refuse(out.reason)
+    },
   )
 
   return server
