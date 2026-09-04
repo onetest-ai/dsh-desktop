@@ -98,3 +98,45 @@ describe.skipIf(!gitInstalled)('runGit (spawns a real git; skipped when git is n
     expect((await runGit(dir, ['--version'])).code).toBe(0)
   })
 })
+
+describe('runGit under options', () => {
+  // `git hash-object --stdin` reads until end of input, and nothing here ever
+  // closes the child's stdin, so it is a hang this machine can rely on.
+  const HANG = ['hash-object', '--stdin']
+
+  // reason: a fetch over a slow link takes longer than the default, and one
+  // that is going nowhere has to stop when it is told to rather than holding
+  // the panel on a spinner for the rest of the timeout.
+  it.skipIf(!gitInstalled)('stops when the signal is aborted', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'git-abort-'))
+    execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' })
+    const stop = new AbortController()
+    const running = runGit(dir, HANG, 'git', { signal: stop.signal })
+    stop.abort()
+    const out = await running
+    expect(out.code).not.toBe(0)
+  }, 10_000)
+
+  // reason: without a timeout of its own every remote operation would be cut
+  // off at the default thirty seconds, which is a normal clone's first fetch.
+  it.skipIf(!gitInstalled)('honours a timeout it was given', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'git-timeout-'))
+    execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' })
+    const began = Date.now()
+    const out = await runGit(dir, HANG, 'git', { timeoutMs: 200 })
+    expect(out.code).not.toBe(0)
+    // Far below the 30s default: this asserts the option was used, not merely
+    // that a hanging git eventually ends.
+    expect(Date.now() - began).toBeLessThan(10_000)
+  }, 20_000)
+
+  // reason: a caller that passes no options must keep the behaviour every
+  // existing call site was written against.
+  it.skipIf(!gitInstalled)('still works with no options at all', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'git-plain-'))
+    execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' })
+    const out = await runGit(dir, ['rev-parse', '--is-inside-work-tree'])
+    expect(out.code).toBe(0)
+    expect(out.stdout.toString('utf8').trim()).toBe('true')
+  }, 20_000)
+})

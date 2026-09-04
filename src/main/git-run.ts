@@ -60,6 +60,21 @@ export function setGitPath(source: () => string | undefined): void {
   gitPathSource = source
 }
 
+/** What a caller may change about one git child. */
+export interface RunOptions {
+  /** How long it may take, in milliseconds; `TIMEOUT_MS` when absent. */
+  timeoutMs?: number
+  /**
+   * Aborts the child.
+   *
+   * A remote operation is the only git here that waits on something outside
+   * this machine, so it is the only one a user can be left watching with no
+   * way to stop it. `execFile` kills the child on abort, which is what makes
+   * Cancel a real cancel rather than a button that hides a spinner.
+   */
+  signal?: AbortSignal
+}
+
 /**
  * Run git, and report what it said.
  *
@@ -70,14 +85,27 @@ export function setGitPath(source: () => string | undefined): void {
  * @param cwd - the working directory, normally a repository.
  * @param args - the arguments, without the program name.
  * @param gitPath - the binary to run; `git` from `PATH` by default.
+ * @param opts - a timeout of its own and a signal that kills it; see `RunOptions`.
  * @returns the exit code and both streams.
  */
-export async function runGit(cwd: string, args: string[], gitPath = 'git'): Promise<GitResult> {
+export async function runGit(
+  cwd: string,
+  args: string[],
+  gitPath = 'git',
+  opts: RunOptions = {},
+): Promise<GitResult> {
   return await new Promise<GitResult>((resolve) => {
     execFile(
       gitPath,
       args,
-      { cwd, env: gitEnv(process.env, gitPathSource()), timeout: TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, encoding: 'buffer' },
+      {
+        cwd,
+        env: gitEnv(process.env, gitPathSource()),
+        timeout: opts.timeoutMs ?? TIMEOUT_MS,
+        signal: opts.signal,
+        maxBuffer: 64 * 1024 * 1024,
+        encoding: 'buffer',
+      },
       (error, stdout, stderr) => {
         const code = error === null ? 0 : ((error as NodeJS.ErrnoException & { code?: number }).code ?? 1)
         resolve({
