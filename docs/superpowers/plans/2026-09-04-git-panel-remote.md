@@ -851,7 +851,7 @@ export function gitCancelRemote(repo: string, jobs: Map<string, AbortController>
 }
 ```
 
-`basename` is already imported in `index.ts`; confirm it before adding an import.
+`basename` is NOT imported in `index.ts` today — line 3 imports only `join` from `node:path`. Widen it to `import { basename, join } from 'node:path'`.
 
 - [ ] **Step 4: Run the tests**
 
@@ -1189,7 +1189,7 @@ describe('the remote', () => {
     await load(bridge)
     pressSync('Pull')
     for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
-    expect(bridge.gitCalls).toContainEqual(['remote', '/p/repo', 'pull'])
+    expect(bridge.gitCalls).toContainEqual(['remote', '/r', 'pull'])
   })
 
   // reason: these take seconds, and a panel that looked idle through all of
@@ -1204,7 +1204,7 @@ describe('the remote', () => {
     const cancel = document.querySelector<HTMLButtonElement>('.sync-cancel')
     expect(cancel).not.toBeNull()
     cancel?.click()
-    expect(bridge.gitCalls).toContainEqual(['cancel-remote', '/p/repo'])
+    expect(bridge.gitCalls).toContainEqual(['cancel-remote', '/r'])
   })
 
   it('clears the running state when the operation answers', async () => {
@@ -1476,11 +1476,11 @@ Append to the `describe('the remote', …)` block in `src/renderer/pane/git.spec
     await sync('Push')
     const note = document.querySelector('.sync-trouble')
     expect(note?.textContent).toContain('HTTPS credential')
-    expect(note?.textContent).toContain('repo')
+    expect(note?.textContent).toContain('r:')
     const open = document.querySelector<HTMLButtonElement>('.sync-trouble-terminal')
     expect(open).not.toBeNull()
     open?.click()
-    expect(bridge.gitCalls).toContainEqual(['open-terminal', '/p/repo'])
+    expect(bridge.gitCalls).toContainEqual(['open-terminal', '/r'])
   })
 
   it('offers the same way out for a key the agent is not holding', async () => {
@@ -1509,7 +1509,7 @@ Append to the `describe('the remote', …)` block in `src/renderer/pane/git.spec
     expect(publish).not.toBeNull()
     publish?.click()
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
-    expect(bridge.gitCalls).toContainEqual(['remote', '/p/repo', 'publish'])
+    expect(bridge.gitCalls).toContainEqual(['remote', '/r', 'publish'])
   })
 
   // reason: a note left up after the thing it described was fixed is a note
