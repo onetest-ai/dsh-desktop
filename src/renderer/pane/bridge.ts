@@ -92,6 +92,13 @@ declare global {
       pushStash(repo: string, message: string, untracked?: boolean): Promise<GitResult & { ref?: string }>
       applyStash(repo: string, ref: string, pop: boolean): Promise<GitResult>
       dropStash(repo: string, ref: string): Promise<GitResult>
+      // `trouble` says which failure it was, so the note can offer the way
+      // out of that particular one rather than a generic apology.
+      gitRemote(
+        repo: string,
+        op: 'fetch' | 'pull' | 'push' | 'publish',
+      ): Promise<GitResult & { trouble?: 'https' | 'publickey' | 'hostkey' | 'rejected' | 'no-upstream' }>
+      cancelGitRemote(repo: string): void
       onDiffTexts(
         listener: (root: string, relative: string, original: string, modified: string, inline: boolean) => void,
       ): void

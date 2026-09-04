@@ -113,6 +113,8 @@ contextBridge.exposeInMainWorld('pane', {
     ipcRenderer.invoke('git:stash-push', repo, message, untracked),
   applyStash: (repo: string, ref: string, pop: boolean) => ipcRenderer.invoke('git:stash-apply', repo, ref, pop),
   dropStash: (repo: string, ref: string) => ipcRenderer.invoke('git:stash-drop', repo, ref),
+  gitRemote: (repo: string, op: string) => ipcRenderer.invoke('git:remote', repo, op),
+  cancelGitRemote: (repo: string) => ipcRenderer.send('git:cancel-remote', repo),
   onShowDiff: (listener: (root: string, relative: string, proposed: string) => void) => {
     ipcRenderer.on('pane:diff', (_event, root: string, relative: string, proposed: string) =>
       listener(root, relative, proposed),

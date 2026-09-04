@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, shell, utilityProcess } from 'electron'
 import { accessSync, constants, existsSync, mkdirSync, renameSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { loadDeclaredPatchRows } from './bundle-patch'
 import { checkBinaries } from './check-binaries'
@@ -54,6 +54,7 @@ import { findRepos, hasGit } from './git-find'
 import { commit, discard, stage, unstage, type ActionOutcome } from './git-actions'
 import { checkout, createBranch, type BlockedKind } from './git-branch'
 import { applyStash, dropStash, pushStash, stashLabel } from './git-stash'
+import { remote, type RemoteOp, type RemoteOutcome } from './git-remote'
 import type { Section } from './git-status'
 import { setGitPath } from './git-run'
 import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
@@ -983,6 +984,63 @@ export async function gitStashApplyFor(
  */
 export async function gitStashDropFor(repo: string, ref: string, known: () => string[]): Promise<ActionOutcome> {
   return refuseUnlessInProject(repo, [], known) ?? (await dropStash(repo, ref))
+}
+
+/**
+ * The remote operation running in each repository, and what stops it.
+ *
+ * Per repository rather than one at a time overall: a project holding several
+ * checkouts is the case this panel was built for, and a fetch in one has
+ * nothing to say about a fetch in another. Within one repository they are
+ * serialised, because two remote operations in the same working tree race for
+ * the same index lock and the loser reports a fault the user did not cause.
+ */
+const remoteJobs = new Map<string, AbortController>()
+
+/**
+ * Fetch, pull, push or publish, if the caller may act on the repository.
+ *
+ * No paths, so an empty list — the repository check still applies. A second
+ * operation in a repository that already has one is refused rather than
+ * queued: the panel shows the first one running, and a queue would leave a
+ * button that did nothing visible for as long as the first one took.
+ * @param repo - the repository.
+ * @param op - which operation.
+ * @param known - the repositories currently discovered.
+ * @param jobs - the running operations; injected so tests hold their own.
+ * @returns what the operation reported, or the refusal.
+ */
+export async function gitRemoteFor(
+  repo: string,
+  op: RemoteOp,
+  known: () => string[],
+  jobs: Map<string, AbortController> = remoteJobs,
+): Promise<RemoteOutcome> {
+  const refusal = refuseUnlessInProject(repo, [], known)
+  if (refusal !== undefined) return refusal
+  if (jobs.has(repo)) return { ok: false, reason: `Something is already running in ${basename(repo)}.` }
+  const stop = new AbortController()
+  jobs.set(repo, stop)
+  try {
+    return await remote(repo, op, stop.signal)
+  } finally {
+    // In a finally, and only when it is still ours: a job left behind would
+    // refuse every later operation in that repository for the life of the
+    // window, which is a panel that stops working with nothing to say why.
+    if (jobs.get(repo) === stop) jobs.delete(repo)
+  }
+}
+
+/**
+ * Stop whatever remote operation is running in a repository.
+ *
+ * Nothing when there is none: a cancel pressed as the spinner cleared is
+ * ordinary, and an error for it would be an error for doing the right thing.
+ * @param repo - the repository.
+ * @param jobs - the running operations; injected so tests hold their own.
+ */
+export function gitCancelRemote(repo: string, jobs: Map<string, AbortController> = remoteJobs): void {
+  jobs.get(repo)?.abort()
 }
 
 /**
@@ -2553,6 +2611,22 @@ if (!app.requestSingleInstanceLock()) {
       const out = await gitStashDropFor(repo, ref, gitRepoPaths)
       notifyGitChanged()
       return out
+    })
+    // Fetch, pull, push and publish. Serialised per repository inside the
+    // helper, and refreshed afterwards either way: a failed pull still moves
+    // the ahead and behind counts often enough that not refreshing would
+    // leave the header lying about where the branch stands.
+    ipcMain.handle('git:remote', async (_event, repo: string, op: RemoteOp) => {
+      const out = await gitRemoteFor(repo, op, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.on('git:cancel-remote', (_event, repo: string) => {
+      // Gated like every other channel, even though a cancel can only ever
+      // stop something this app itself started: the check costs nothing and
+      // the rule that every git channel is checked is worth more than the
+      // exception.
+      if (refuseUnlessInProject(repo, [], gitRepoPaths) === undefined) gitCancelRemote(repo)
     })
     ipcMain.on('shell:toggle-terminal', toggleTerminalPanel)
     // The harness telling us which project it is working in — pushed by the

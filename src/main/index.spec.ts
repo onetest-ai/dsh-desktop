@@ -448,6 +448,11 @@ vi.mock('./git-stash', () => ({
   stashLabel: (ref: string) => ref,
 }))
 
+const remoteMock = vi.fn(async (): Promise<unknown> => ({ ok: true }))
+vi.mock('./git-remote', () => ({
+  remote: (...args: unknown[]) => remoteMock(...(args as [])),
+}))
+
 const preflightMock = vi.fn(() => ({ ok: true }))
 vi.mock('./preflight', () => ({ preflight: (...args: unknown[]) => preflightMock(...(args as [])) }))
 
@@ -682,7 +687,7 @@ beforeEach(() => {
   // test that changes any of these must not change it for the next one.
   findReposMock.mockReturnValue([])
   fake.showMessageBox.mockResolvedValue({ response: 1 })
-  for (const mock of [stageMock, unstageMock, discardMock, commitMock, checkoutMock, createBranchMock, pushStashMock, applyStashMock, dropStashMock]) {
+  for (const mock of [stageMock, unstageMock, discardMock, commitMock, checkoutMock, createBranchMock, pushStashMock, applyStashMock, dropStashMock, remoteMock]) {
     mock.mockResolvedValue({ ok: true })
   }
   fake.resetReady()
@@ -2563,5 +2568,76 @@ describe('the git write channels', () => {
     await fake.sendIpc('git:unstage', repo, ['src/a.ts'])
     await new Promise((resolve) => setTimeout(resolve, 300))
     expect(fake.views.git.webContents.send).toHaveBeenCalledWith('git:changed')
+  })
+
+  describe('the remote', () => {
+    // reason: the same gate every other git channel goes through — a
+    // directory the project does not hold is not one this app fetches into.
+    it('refuses a repository the project does not hold', async () => {
+      const { gitRemoteFor } = await exports()
+      expect(await gitRemoteFor('/elsewhere', 'fetch', () => [repo])).toEqual({
+        ok: false,
+        reason: 'That repository is not in the open project.',
+      })
+      expect(remoteMock).not.toHaveBeenCalled()
+    })
+
+    it('runs the operation it was asked for', async () => {
+      const { gitRemoteFor } = await exports()
+      expect(await gitRemoteFor(repo, 'pull', () => [repo])).toMatchObject({ ok: true })
+      expect(remoteMock).toHaveBeenCalledWith(repo, 'pull', expect.anything())
+    })
+
+    // reason: an agent rebasing in the terminal panel and a user pressing
+    // Fetch twice both produce two git children in one repository, and two
+    // remote operations in one working tree race for the same index lock.
+    it('refuses a second operation while one is running in the same repo', async () => {
+      const { gitRemoteFor } = await exports()
+      const jobs = new Map<string, AbortController>([[repo, new AbortController()]])
+      const out = await gitRemoteFor(repo, 'pull', () => [repo], jobs)
+      expect(out.ok).toBe(false)
+      if (!out.ok) expect(out.reason).toContain('already running')
+      expect(remoteMock).not.toHaveBeenCalled()
+    })
+
+    it('lets a different repository run at the same time', async () => {
+      const { gitRemoteFor } = await exports()
+      const jobs = new Map<string, AbortController>([['/p/other', new AbortController()]])
+      expect(await gitRemoteFor(repo, 'fetch', () => [repo, '/p/other'], jobs)).toMatchObject({ ok: true })
+    })
+
+    // reason: a job left in the map after the operation ended would refuse
+    // every later fetch in that repository for the life of the window.
+    it('forgets the job once it has finished', async () => {
+      const { gitRemoteFor } = await exports()
+      const jobs = new Map<string, AbortController>()
+      await gitRemoteFor(repo, 'fetch', () => [repo], jobs)
+      expect(jobs.has(repo)).toBe(false)
+    })
+
+    // reason: an operation that threw would otherwise leave its job behind,
+    // which is the same panel-stops-working failure by another route.
+    it('forgets the job even when the operation threw', async () => {
+      const { gitRemoteFor } = await exports()
+      remoteMock.mockRejectedValueOnce(new Error('boom'))
+      const jobs = new Map<string, AbortController>()
+      await expect(gitRemoteFor(repo, 'fetch', () => [repo], jobs)).rejects.toThrow('boom')
+      expect(jobs.has(repo)).toBe(false)
+    })
+
+    it('aborts the job running in that repository', async () => {
+      const { gitCancelRemote } = await exports()
+      const stop = new AbortController()
+      gitCancelRemote(repo, new Map([[repo, stop]]))
+      expect(stop.signal.aborted).toBe(true)
+    })
+
+    // reason: a cancel arriving after the operation already finished is
+    // ordinary — the user pressed it as the spinner cleared — and must not
+    // throw across the bridge.
+    it('does nothing when there is no job to stop', async () => {
+      const { gitCancelRemote } = await exports()
+      expect(() => gitCancelRemote(repo, new Map())).not.toThrow()
+    })
   })
 })
