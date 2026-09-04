@@ -1,4 +1,30 @@
 import type { Project, TreeEntry } from './tree.ts'
+import type { BranchRowView, RepoStatusView, RowGroup, StashRowView } from './git-rows.ts'
+
+/**
+ * What the git panel is showing, or why it is showing nothing.
+ *
+ * Declared here rather than imported from main's `git-model.ts`: the renderer
+ * never imports from `src/main`, and this is the shape that crosses the
+ * bridge, not main's own model.
+ */
+export type ProjectGitView =
+  | {
+      ok: true
+      repos: { path: string; name: string; status: RepoStatusView; branches: BranchRowView[]; stashes: StashRowView[] }[]
+    }
+  | { ok: false; reason: string }
+
+/**
+ * What one git write reports back.
+ *
+ * Declared here rather than imported from main's `ActionOutcome`: the renderer
+ * never imports from `src/main`, and this is the shape that crosses the
+ * bridge. A refusal carries a reason to show — except when the user answered a
+ * confirmation with Cancel, where the reason is empty because they already
+ * know why nothing happened.
+ */
+export type GitResult = { ok: true } | { ok: false; reason: string }
 
 /** What an operation on one entry reports back. */
 export type OpResult = { ok: true; relative: string } | { ok: false; reason: string }
@@ -20,10 +46,13 @@ declare global {
       openFile(root: string, relative: string): void
       createFile(root: string, relative: string): Promise<{ ok: true; relative: string } | { ok: false; reason: string }>
       createFolder(root: string, relative: string): Promise<{ ok: true; relative: string } | { ok: false; reason: string }>
-      treeMenu(target: { directory: boolean; pending: boolean }): Promise<string | undefined>
+      treeMenu(target: { directory: boolean; pending: boolean; name: string }): Promise<string | undefined>
       renameEntry(root: string, relative: string, name: string): Promise<OpResult>
       deleteEntry(root: string, relative: string, directory: boolean): Promise<OpResult>
       pasteEntry(root: string, relative: string, into: string, move: boolean): Promise<OpResult>
+      openInWeb(root: string, relative: string): void
+      loadInWeb(root: string, relative: string): void
+      onSaveForWeb(listener: (root: string, relative: string) => void): void
       revealEntry(root: string, relative: string): void
       copyPath(root: string, relative: string): void
       addToChat(root: string, relative: string, directory: boolean): void
@@ -40,6 +69,40 @@ declare global {
       webForward(): void
       webReload(): void
       onWebState(listener: (state: { url: string; canGoBack: boolean; canGoForward: boolean }) => void): void
+      readGit(): Promise<ProjectGitView>
+      onGitChanged(listener: () => void): void
+      openGitDiff(repo: string, path: string, section: RowGroup['section']): void
+      gitRowMenu(section: RowGroup['section']): Promise<string | undefined>
+      stageFiles(repo: string, paths: string[]): Promise<GitResult>
+      unstageFiles(repo: string, paths: string[]): Promise<GitResult>
+      discardFiles(repo: string, tracked: string[], untracked: string[]): Promise<GitResult>
+      commitFiles(repo: string, message: string, add: string[], keep: string[], staged: string[]): Promise<GitResult>
+      // `blockedKind` says which of git's two refusals it was: an untracked
+      // one is not cleared by a plain `git stash push`, so the offer the panel
+      // draws for it has to stash differently and say so.
+      checkoutBranch(
+        repo: string,
+        name: string,
+        remote: boolean,
+      ): Promise<GitResult & { blocked?: string[]; blockedKind?: 'tracked' | 'untracked' }>
+      createBranch(repo: string, name: string): Promise<GitResult>
+      // The sha of what was created comes back with it: `stash@{0}` is a
+      // position, and anything else stashing in the same repository — the
+      // agent in the terminal panel — moves every entry down one.
+      pushStash(repo: string, message: string, untracked?: boolean): Promise<GitResult & { ref?: string }>
+      applyStash(repo: string, ref: string, pop: boolean): Promise<GitResult>
+      dropStash(repo: string, ref: string): Promise<GitResult>
+      // `trouble` says which failure it was, so the note can offer the way
+      // out of that particular one rather than a generic apology.
+      gitRemote(
+        repo: string,
+        op: 'fetch' | 'pull' | 'push' | 'publish',
+      ): Promise<GitResult & { trouble?: 'https' | 'publickey' | 'hostkey' | 'rejected' | 'no-upstream' }>
+      cancelGitRemote(repo: string): void
+      openGitTerminal(repo: string): void
+      onDiffTexts(
+        listener: (root: string, relative: string, original: string, modified: string, inline: boolean) => void,
+      ): void
       askTheme(): void
       onTheme(listener: (dark: boolean) => void): void
     }

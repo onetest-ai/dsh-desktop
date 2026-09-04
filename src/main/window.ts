@@ -46,8 +46,16 @@ export interface MainWindow {
   harness: WebContentsView
   /** Holds this app's editor, in the middle column. */
   pane: WebContentsView
-  /** Holds the file tree, in the right-hand column. */
+  /** Holds the file tree, in the side column. */
   files: WebContentsView
+  /**
+   * Holds the source-control panel, in the side column.
+   *
+   * A view of its own rather than a second panel inside the tree's page: the
+   * two take turns in one column, and a view that is given no bounds keeps
+   * whatever it drew, so switching back costs no reload.
+   */
+  git: WebContentsView
   /** Holds the terminal panel, along the bottom of the columns. */
   terminal: WebContentsView
   /**
@@ -189,6 +197,13 @@ export function createWindow(columns: Columns): MainWindow {
       preload: join(__dirname, '..', 'preload', 'pane.js'),
     },
   })
+  const git = new WebContentsView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: join(__dirname, '..', 'preload', 'pane.js'),
+    },
+  })
   const terminal = new WebContentsView({
     webPreferences: {
       contextIsolation: true,
@@ -204,11 +219,17 @@ export function createWindow(columns: Columns): MainWindow {
   window.contentView.addChildView(harness)
   window.contentView.addChildView(pane)
   window.contentView.addChildView(files)
+  window.contentView.addChildView(git)
   window.contentView.addChildView(terminal)
   // Added last so it stacks over the editor column it covers.
   window.contentView.addChildView(web)
   void pane.webContents.loadURL(`${PANE_ORIGIN}/pane.html`)
   void files.webContents.loadURL(`${PANE_ORIGIN}/files.html`)
+  // Loaded with the window even though the column starts on the tree, for the
+  // reason the web and terminal views are: an unloaded view is a target that
+  // never finishes loading, and an automation client attaching to this window
+  // waits on it.
+  void git.webContents.loadURL(`${PANE_ORIGIN}/git.html`)
   // Loaded up front rather than left on its initial blank document: an
   // unloaded view is a target that never finishes, and an automation client
   // attaching to this window waits for it.
@@ -225,7 +246,7 @@ export function createWindow(columns: Columns): MainWindow {
     return { action: 'deny' }
   })
 
-  const views = { window, harness, pane, files, terminal, web }
+  const views = { window, harness, pane, files, git, terminal, web }
   applyLayout(views, columns, false)
   window.on('resize', () => applyLayout(views, lastColumns, webShowing))
   // Laid out again once the page can hear it. The rail and the dividers have
@@ -265,7 +286,7 @@ export function createWindow(columns: Columns): MainWindow {
 let webShowing = false
 let lastColumns: Columns = {
   editor: { width: DEFAULT_EDITOR_WIDTH, open: false },
-  files: { width: DEFAULT_FILES_WIDTH, open: false },
+  files: { width: DEFAULT_FILES_WIDTH, open: false, view: 'files' },
   terminal: { width: DEFAULT_TERMINAL_WIDTH, height: DEFAULT_TERMINAL_HEIGHT, open: false },
 }
 
@@ -286,7 +307,13 @@ export function applyLayout(views: MainWindow, columns: Columns, webVisible: boo
   const places = layout({ width, height }, columns)
   views.harness.setBounds(places.harness)
   views.pane.setBounds(places.editor)
-  views.files.setBounds(places.files)
+  // The tree and the git panel take turns in the side column: whichever is
+  // not showing is given no rectangle at all rather than being hidden by CSS,
+  // so a page nobody can see is laying nothing out.
+  const showingGit = columns.files.view === 'git'
+  const nowhere = { x: places.files.x, y: places.files.y, width: 0, height: 0 }
+  views.files.setBounds(showingGit ? nowhere : places.files)
+  views.git.setBounds(showingGit ? places.files : nowhere)
   views.terminal.setBounds(places.terminal)
   // The web view covers the editor column's panel area, minus its tab strip
   // and the address bar under it, so both stay reachable while a page shows.
@@ -300,7 +327,8 @@ export function applyLayout(views: MainWindow, columns: Columns, webVisible: boo
   // A hidden view is given no bounds to render in rather than being detached:
   // it keeps whatever it was showing, so reopening costs no reload.
   views.pane.setVisible(columns.editor.open)
-  views.files.setVisible(columns.files.open)
+  views.files.setVisible(columns.files.open && !showingGit)
+  views.git.setVisible(columns.files.open && showingGit)
   views.terminal.setVisible(columns.terminal.open)
   views.web.setVisible(columns.editor.open && webVisible)
   // The window's own page draws the dividers and the rail but cannot see
@@ -315,7 +343,8 @@ export function applyLayout(views: MainWindow, columns: Columns, webVisible: boo
     // The rail's buttons show which columns are up, so it is told.
     open: {
       editor: columns.editor.open,
-      files: columns.files.open,
+      files: columns.files.open && !showingGit,
+      git: columns.files.open && showingGit,
       terminal: columns.terminal.open,
       web: columns.editor.open && webVisible,
     },
@@ -371,6 +400,7 @@ export function installMenu(
   onSettings: () => void,
   panes: {
     toggleFiles(): void
+    toggleGit(): void
     toggleWeb(): void
     toggleTerminal(): void
     zoomIn(): void
@@ -402,6 +432,7 @@ export function installMenu(
           // Alt rather than plain Cmd+B and Cmd+W, both of which the harness
           // Web UI may want — and Cmd+W already closes a window.
           { label: 'Toggle File Tree', accelerator: 'CmdOrCtrl+Alt+B', click: panes.toggleFiles },
+          { label: 'Toggle Source Control', accelerator: 'CmdOrCtrl+Alt+G', click: panes.toggleGit },
           { label: 'Toggle Browser', accelerator: 'CmdOrCtrl+Alt+W', click: panes.toggleWeb },
           { label: 'Toggle Terminal', accelerator: 'CmdOrCtrl+Alt+J', click: panes.toggleTerminal },
           { type: 'separator' },

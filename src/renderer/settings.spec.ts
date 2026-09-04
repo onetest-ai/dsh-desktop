@@ -333,9 +333,21 @@ const NO_MCP = { presets: [] as unknown[] }
 /** The MCP half of a read result's form: the master switch only. */
 const NO_MCP_FORM = false
 
-/** Default read result: a configured local source with an empty plugin list. */
-function defaultRead(): Promise<unknown> {
-  return Promise.resolve({
+/**
+ * A read result in the shape `load()` expects, with `overrides` applied.
+ *
+ * Built here rather than written out per test because `load()` reads every
+ * top-level key without guarding, and it runs as an unawaited `void load()`:
+ * a fixture missing one throws into an unhandled rejection that Vitest
+ * reports but no test fails on. Tests state only the part they are about.
+ * @param overrides - keys to replace; `form` is merged into the default form
+ *   rather than replacing it, since a test that sets one field still needs
+ *   the rest.
+ * @returns the read result.
+ */
+function readResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const { form, ...rest } = overrides
+  return {
     configured: true,
     form: {
       ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
@@ -343,10 +355,17 @@ function defaultRead(): Promise<unknown> {
       // Absent means on, which is what `formFor` reports for a config that
       // has never touched the switch.
       viewTools: true,
+      ...(form as Record<string, unknown> | undefined),
     },
     plugins: [],
     mcp: NO_MCP,
-  })
+    ...rest,
+  }
+}
+
+/** Default read result: a configured local source with an empty plugin list. */
+function defaultRead(): Promise<unknown> {
+  return Promise.resolve(readResult())
 }
 
 /**
@@ -908,14 +927,14 @@ describe('plugins', () => {
   const DECK = '@onetest/dsh-deck'
 
   const READ_WITH_PLUGINS = (): Promise<unknown> =>
-    Promise.resolve({
-      configured: true,
-      form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
-      plugins: [
-        { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
-        { spec: `${DECK}@0.2.1`, package: DECK, pinned: true, version: undefined },
-      ],
-    })
+    Promise.resolve(
+      readResult({
+        plugins: [
+          { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
+          { spec: `${DECK}@0.2.1`, package: DECK, pinned: true, version: undefined },
+        ],
+      }),
+    )
 
   it("reports each entry's resolved version and pinned state as its own row", async () => {
     const renderer = await load(async () => ({ ok: true, warnings: [] }), READ_WITH_PLUGINS)
@@ -988,20 +1007,20 @@ describe('plugins', () => {
   })
 
   it("shows a disabled plugin's own reason on its row, and marks the row, while a healthy row carries neither", async () => {
-    const onRead = vi.fn().mockResolvedValue({
-      configured: true,
-      form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
-      plugins: [
-        { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
-        {
-          spec: `${DECK}@0.2.1`,
-          package: DECK,
-          pinned: true,
-          version: '0.2.1',
-          disabledReason: 'base must be a non-empty string starting with "/", received undefined (at base)',
-        },
-      ],
-    })
+    const onRead = vi.fn().mockResolvedValue(
+      readResult({
+        plugins: [
+          { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
+          {
+            spec: `${DECK}@0.2.1`,
+            package: DECK,
+            pinned: true,
+            version: '0.2.1',
+            disabledReason: 'base must be a non-empty string starting with "/", received undefined (at base)',
+          },
+        ],
+      }),
+    )
     const renderer = await load(async () => ({ ok: true, warnings: [] }), onRead)
 
     const deckText = renderer.renderedPluginRows().find((row) => row.includes(DECK))
@@ -1016,31 +1035,31 @@ describe('plugins', () => {
   })
 
   it("presents a needs-configuration row as a calmer setup step, not the failed presentation, while a genuine failure and a healthy row are unaffected", async () => {
-    const onRead = vi.fn().mockResolvedValue({
-      configured: true,
-      form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
-      plugins: [
-        { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
-        {
-          spec: `${DECK}@0.2.1`,
-          package: DECK,
-          pinned: true,
-          version: '0.2.1',
-          disabledReason: 'base must be a non-empty string starting with "/", received undefined (at base)',
-          disabledKind: 'failed',
-        },
-        {
-          spec: '@deepseek-ai/dsh-mcp-client@1.0.0',
-          package: '@deepseek-ai/dsh-mcp-client',
-          pinned: true,
-          version: '1.0.0',
-          disabledReason:
-            'failed to apply loader entry deepseek-ai-dsh-mcp-client (/home/dev/.dsh/plugins/deepseek-ai-dsh-mcp-client/lib/index.js): invalid config: - expected { serverName: string } but got {}',
-          disabledSummary: 'invalid config: - expected { serverName: string } but got {}',
-          disabledKind: 'needs-configuration',
-        },
-      ],
-    })
+    const onRead = vi.fn().mockResolvedValue(
+      readResult({
+        plugins: [
+          { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
+          {
+            spec: `${DECK}@0.2.1`,
+            package: DECK,
+            pinned: true,
+            version: '0.2.1',
+            disabledReason: 'base must be a non-empty string starting with "/", received undefined (at base)',
+            disabledKind: 'failed',
+          },
+          {
+            spec: '@deepseek-ai/dsh-mcp-client@1.0.0',
+            package: '@deepseek-ai/dsh-mcp-client',
+            pinned: true,
+            version: '1.0.0',
+            disabledReason:
+              'failed to apply loader entry deepseek-ai-dsh-mcp-client (/home/dev/.dsh/plugins/deepseek-ai-dsh-mcp-client/lib/index.js): invalid config: - expected { serverName: string } but got {}',
+            disabledSummary: 'invalid config: - expected { serverName: string } but got {}',
+            disabledKind: 'needs-configuration',
+          },
+        ],
+      }),
+    )
     const renderer = await load(async () => ({ ok: true, warnings: [] }), onRead)
 
     const mcpText = renderer.renderedPluginRows().find((row) => row.includes('dsh-mcp-client'))
@@ -1058,20 +1077,20 @@ describe('plugins', () => {
   it("shows the extracted summary inline and keeps the harness's raw reason reachable behind an expander", async () => {
     const rawReason =
       'dsh-desktop: the harness exited with code 1 before starting. { [cause]: Error: failed to apply loader entry deepseek-ai-dsh-mcp-client (/home/dev/.dsh/plugins/deepseek-ai-dsh-mcp-client/lib/index.js): invalid config: - expected { serverName: string } but got {} at Entry._init (file:///…) }'
-    const onRead = vi.fn().mockResolvedValue({
-      configured: true,
-      form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
-      plugins: [
-        {
-          spec: DECK,
-          package: DECK,
-          pinned: false,
-          version: '0.2.1',
-          disabledReason: rawReason,
-          disabledSummary: 'invalid config: - expected { serverName: string } but got {}',
-        },
-      ],
-    })
+    const onRead = vi.fn().mockResolvedValue(
+      readResult({
+        plugins: [
+          {
+            spec: DECK,
+            package: DECK,
+            pinned: false,
+            version: '0.2.1',
+            disabledReason: rawReason,
+            disabledSummary: 'invalid config: - expected { serverName: string } but got {}',
+          },
+        ],
+      }),
+    )
     const renderer = await load(async () => ({ ok: true, warnings: [] }), onRead)
 
     const deckText = renderer.renderedPluginRows().find((row) => row.includes(DECK))
@@ -1219,14 +1238,14 @@ describe('plugins', () => {
 
   it('an update offered for one row does not disturb the others', async () => {
     const readTwoFloating = (): Promise<unknown> =>
-      Promise.resolve({
-        configured: true,
-        form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
-        plugins: [
-          { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
-          { spec: DECK, package: DECK, pinned: false, version: '0.2.0' },
-        ],
-      })
+      Promise.resolve(
+        readResult({
+          plugins: [
+            { spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' },
+            { spec: DECK, package: DECK, pinned: false, version: '0.2.0' },
+          ],
+        }),
+      )
     const renderer = await load(async () => ({ ok: true, warnings: [] }), readTwoFloating)
     const deckRowBefore = renderer.renderedPluginRows().find((row) => row.includes(DECK))
 
@@ -1246,11 +1265,9 @@ describe('plugins', () => {
 
   describe('accepting an update', () => {
     const readOneFloating = (): Promise<unknown> =>
-      Promise.resolve({
-        configured: true,
-        form: Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]),
-        plugins: [{ spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' }],
-      })
+      Promise.resolve(
+        readResult({ plugins: [{ spec: HOOKS, package: HOOKS, pinned: false, version: '0.1.1-rc.2' }] }),
+      )
 
     it('calls acceptPluginUpdate with the package and version, never rewriting the row into a save', async () => {
       const save = vi.fn(async () => ({ ok: true, warnings: [] }))
@@ -1762,12 +1779,7 @@ describe('MCP tab', () => {
 
   /** A read result whose MCP half carries the catalog and a master-switch state. */
   function readWithMcp(mcpEnabled: boolean) {
-    return async () => ({
-      configured: true,
-      form: { ...Object.fromEntries([['kind', 'local'], ...FIELDS.map((name) => [name, ''])]), mcpEnabled },
-      plugins: [],
-      mcp: { presets: PRESETS },
-    })
+    return async () => readResult({ form: { mcpEnabled }, mcp: { presets: PRESETS } })
   }
 
   it('shows the servers mcp.json holds', async () => {

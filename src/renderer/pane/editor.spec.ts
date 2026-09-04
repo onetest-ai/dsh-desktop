@@ -57,7 +57,7 @@ function deps(overrides: Omit<Partial<EditorDeps>, 'documents'> = {}): Fake {
         made.push(made1)
         return made1
       },
-      openDiff: (_original: string, proposed: string) => {
+      openDiff: (_original: string, proposed: string, _name: string, _inline?: boolean) => {
         const made1 = document(proposed)
         made.push(made1)
         return made1
@@ -236,6 +236,34 @@ describe('Editor and changes made outside it', () => {
   })
 })
 
+// reason: a file may now hold two tabs, and the diff is added first — a
+// lookup by path alone finds it, sees a mode that is not `edit`, and returns.
+// The editable tab behind it would then never reload and never be written:
+// the user reads text from before the agent's change, and their own edits
+// stay on the floor. Both of these fail if the lookup is not mode-aware.
+describe('Editor with a diff and the file itself open at once', () => {
+  it('reloads the editable tab past a diff for the same file', async () => {
+    const d = deps()
+    const editor = new Editor(d)
+    editor.showTexts(FILE, 'index', 'working', false)
+    await editor.open(FILE)
+    ;(d.readFile as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, text: 'changed' })
+    await editor.reload(FILE)
+    expect(editor.openTabs.map((tab) => tab.mode)).toEqual(['diff', 'edit'])
+    expect(editor.openTabs[1].document.text()).toBe('changed')
+  })
+
+  it('saves the editable tab past a diff for the same file', async () => {
+    const d = deps()
+    const editor = new Editor(d)
+    editor.showTexts(FILE, 'index', 'working', false)
+    await editor.open(FILE)
+    d.documents.made[1].buffer = 'my edits'
+    await editor.saveIfDirty(FILE.root, FILE.relative)
+    expect(d.writeFile).toHaveBeenCalledWith(FILE.root, FILE.relative, 'my edits')
+  })
+})
+
 describe('Editor and proposed changes', () => {
   it('shows a file beside the text proposed for it', async () => {
     const d = deps()
@@ -278,13 +306,24 @@ describe('Editor and proposed changes', () => {
     expect(d.said.some((message) => message.includes('unsaved edits'))).toBe(true)
   })
 
-  it('goes back to editing when the file is opened after a diff', async () => {
+  // reason: an agent's proposal is a claim on the file itself, and opening
+  // the file answers it. A git diff is a second view of the same file and
+  // stays — which is why the two kinds cannot share one rule.
+  it('answers a proposal by opening the file, and closes it', async () => {
     const d = deps()
     const editor = new Editor(d)
     await editor.showDiff(FILE, '# proposed')
     await editor.open(FILE)
-    expect(editor.openTabs.length).toBe(1)
-    expect(editor.openTabs[0].mode).toBe('edit')
+    expect(editor.openTabs.map((tab) => tab.mode)).toEqual(['edit'])
+  })
+
+  it('opens an editable tab beside a git diff rather than closing it', async () => {
+    const d = deps()
+    const editor = new Editor(d)
+    editor.showTexts(FILE, 'before', 'after', true)
+    await editor.open(FILE)
+    expect(editor.openTabs.map((tab) => tab.mode)).toEqual(['diff', 'edit'])
+    // The editable one is what is showing, and what a save writes.
     await editor.save()
     expect(d.writeFile).toHaveBeenCalled()
   })
@@ -357,5 +396,123 @@ describe('Editor and files that are not text', () => {
     editor.close(editor.openTabs[0])
     expect(editor.openTabs.length).toBe(0)
     expect(d.columnClosed).toBe(1)
+  })
+
+  // reason: the tree is its own page and cannot see these buffers, so
+  // anything acting on a file as it stands has to save through here first.
+  describe('saveIfDirty', () => {
+    it('writes a file that is open with unsaved edits, even when another tab is showing', async () => {
+      const d = deps()
+      const editor = await withOpen(d, FILE, OTHER)
+      const tab = editor.openTabs.find((each) => each.file.relative === FILE.relative)
+      // The fake document is the buffer; a test edit is a write to it.
+      ;(tab?.document as unknown as { buffer: string }).buffer = 'edited'
+      expect(editor.current).toEqual(OTHER)
+
+      await editor.saveIfDirty(FILE.root, FILE.relative)
+      expect(d.writeFile).toHaveBeenCalledWith(FILE.root, FILE.relative, 'edited')
+    })
+
+    it('writes nothing for a file that is open and clean', async () => {
+      const d = deps()
+      const editor = await withOpen(d, FILE)
+      await editor.saveIfDirty(FILE.root, FILE.relative)
+      expect(d.writeFile).not.toHaveBeenCalled()
+    })
+
+    it('writes nothing for a file that is not open at all', async () => {
+      const d = deps()
+      const editor = await withOpen(d, FILE)
+      await editor.saveIfDirty('/p/demo', 'never-opened.html')
+      expect(d.writeFile).not.toHaveBeenCalled()
+    })
+  })
+})
+
+// reason: `showDiff` reads disk as the original because it was written for
+// an agent proposing a change. A git diff supplies both sides itself.
+describe('showTexts', () => {
+  it('opens a diff from two texts, reading nothing from disk', async () => {
+    const d = deps()
+    const editor = await withOpen(d, FILE)
+    ;(d.readFile as ReturnType<typeof vi.fn>).mockClear()
+    editor.showTexts({ root: '/p/demo', relative: 'x.ts' }, 'before', 'after', true)
+    expect(d.readFile).not.toHaveBeenCalled()
+    expect(editor.openTabs.some((tab) => tab.mode === 'diff')).toBe(true)
+  })
+
+  // reason: a file with unsaved edits is exactly when its diff is most
+  // worth seeing. `showDiff` refuses in that case, to protect the user's
+  // work from an agent's proposal; that rule does not apply here.
+  it('leaves the editor tab open, and opens beside it even when dirty', async () => {
+    const d = deps()
+    const editor = await withOpen(d, FILE)
+    const tab = editor.openTabs[0]
+    ;(tab.document as unknown as { buffer: string }).buffer = 'edited'
+    editor.showTexts(FILE, 'before', 'after', true)
+    expect(editor.openTabs.length).toBe(2)
+    expect(editor.openTabs.filter((each) => each.mode === 'diff').length).toBe(1)
+    expect(editor.openTabs.some((each) => each.mode === 'edit')).toBe(true)
+  })
+
+  it('replaces its own diff tab rather than stacking them up', async () => {
+    const editor = await withOpen(deps(), FILE)
+    editor.showTexts(FILE, 'a', 'b', true)
+    editor.showTexts(FILE, 'c', 'd', true)
+    expect(editor.openTabs.filter((each) => each.mode === 'diff').length).toBe(1)
+  })
+
+  // reason: `showDiff` protects unsaved work by refusing, and `showTexts`
+  // deliberately does not. Both looked a file up by path alone, so with an
+  // edit tab and a git diff both open each could find the other's tab — and
+  // a protection that inspects the wrong tab is not a protection.
+  describe('the two diff kinds do not stand in for each other', () => {
+    // reason: the git diff is opened FIRST here, which is the real order —
+    // click a row in the panel, then open the file from the tree. A lookup
+    // by path alone then finds the diff, whose buffer is never dirty, and
+    // the refusal never fires.
+    it('refuses a proposal for a dirty file whose git diff was opened first', async () => {
+      const d = deps()
+      const editor = new Editor(d)
+      editor.showTexts(FILE, 'before', 'after', true)
+      await editor.open(FILE)
+      const edit = editor.openTabs.find((tab) => tab.mode === 'edit')
+      ;(edit?.document as unknown as { buffer: string }).buffer = 'my edits'
+
+      await editor.showDiff(FILE, '# proposed')
+      expect(d.said.some((message) => message.includes('unsaved edits'))).toBe(true)
+      expect(editor.openTabs.some((tab) => tab.diffKind === 'proposal')).toBe(false)
+    })
+
+    it('leaves a git diff alone when a proposal arrives for the same file', async () => {
+      const d = deps()
+      const editor = new Editor(d)
+      editor.showTexts(FILE, 'before', 'after', true)
+      await editor.showDiff(FILE, '# proposed')
+      expect(editor.openTabs.filter((tab) => tab.mode === 'diff').map((tab) => tab.diffKind)).toEqual([
+        'git',
+        'proposal',
+      ])
+    })
+
+    it('leaves a proposal alone when a git diff arrives for the same file', async () => {
+      const d = deps()
+      const editor = new Editor(d)
+      await editor.showDiff(FILE, '# proposed')
+      editor.showTexts(FILE, 'before', 'after', true)
+      expect(editor.openTabs.filter((tab) => tab.mode === 'diff').map((tab) => tab.diffKind)).toEqual([
+        'proposal',
+        'git',
+      ])
+    })
+
+    it('replaces its own kind rather than stacking, for each kind', async () => {
+      const editor = new Editor(deps())
+      await editor.showDiff(FILE, '# one')
+      await editor.showDiff(FILE, '# two')
+      editor.showTexts(FILE, 'a', 'b', true)
+      editor.showTexts(FILE, 'c', 'd', true)
+      expect(editor.openTabs.filter((tab) => tab.mode === 'diff').length).toBe(2)
+    })
   })
 })

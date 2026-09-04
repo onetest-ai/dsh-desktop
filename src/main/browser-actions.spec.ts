@@ -5,6 +5,10 @@ import {
   click,
   cssFor,
   drag,
+  dragCancel,
+  dragDrop,
+  dragMove,
+  dragStart,
   hover,
   press,
   readPage,
@@ -493,6 +497,150 @@ describe('drag', () => {
       { enabled: true },
       { enabled: false },
     ])
+  })
+})
+
+/**
+ * A gesture held open across calls.
+ *
+ * The one-shot `drag` commits to its whole path before the first move, so it
+ * cannot see what the page did in the middle of it — which is the difference
+ * between landing on the third row of a sortable and landing on the second.
+ * These let the caller move, read the page, and move again.
+ */
+describe('a drag held open across calls', () => {
+  const both = { '#from': AT, '#to': ELSEWHERE }
+  const intercept = { 'Input.dragIntercepted': { data: { items: [] } } }
+
+  it('presses and holds, without releasing or dropping', async () => {
+    const { session, sent } = targetedSession(both)
+    expect(await dragStart(session, '#from')).toEqual({ ok: true, message: 'Holding button. Move, then drop.' })
+    const mouse = sent.filter((each) => each.method === 'Input.dispatchMouseEvent')
+    // The third is the probe: an HTML5 drag source starts on the first move,
+    // so the press alone cannot tell which kind of drag the page took it as.
+    expect(mouse.map((each) => each.params?.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseMoved'])
+    expect(sent.some((each) => each.params?.type === 'mouseReleased')).toBe(false)
+    expect(sent.some((each) => each.method === 'Input.dispatchDragEvent')).toBe(false)
+    await dragCancel(session)
+  })
+
+  it('refuses a move and a drop when nothing is being held', async () => {
+    const { session } = targetedSession(both)
+    expect(await dragMove(session, '#to')).toEqual({ ok: false, reason: 'Nothing is being dragged. Start one first.' })
+    expect(await dragDrop(session, '#to')).toEqual({ ok: false, reason: 'Nothing is being dragged. Start one first.' })
+  })
+
+  // reason: the point of holding one open is to read the page between moves,
+  // which only works if each move is its own path rather than a jump.
+  it('moves in steps with the button held, and still holds afterwards', async () => {
+    const { session, sent } = targetedSession(both)
+    await dragStart(session, '#from')
+    const before = sent.length
+    expect(await dragMove(session, '#to')).toEqual({ ok: true, message: 'Moved to div. Still holding.' })
+    const moves = sent.slice(before).filter((each) => each.params?.type === 'mouseMoved')
+    expect(moves.length).toBeGreaterThan(4)
+    expect(sent.some((each) => each.params?.type === 'mouseReleased')).toBe(false)
+    await dragCancel(session)
+  })
+
+  it('releases at the drop, and forgets the gesture', async () => {
+    const { session, sent } = targetedSession(both)
+    await dragStart(session, '#from')
+    await dragMove(session, '#to')
+    expect(await dragDrop(session, '#to')).toEqual({ ok: true, message: 'Dropped on div.' })
+    expect(sent.filter((each) => each.method === 'Input.dispatchMouseEvent').at(-1)?.params).toMatchObject({
+      type: 'mouseReleased',
+    })
+    expect(await dragMove(session, '#to')).toEqual({ ok: false, reason: 'Nothing is being dragged. Start one first.' })
+  })
+
+  it('moves by an offset when nothing is named, which is what a resize handle needs', async () => {
+    const { session, sent } = targetedSession(both)
+    await dragStart(session, '#from')
+    const before = sent.length
+    expect(await dragMove(session, undefined, { dx: 60, dy: 0 })).toEqual({
+      ok: true,
+      message: 'Moved by 60 across and 0 down. Still holding.',
+    })
+    expect(sent.slice(before).filter((each) => each.params?.type === 'mouseMoved').at(-1)?.params).toMatchObject({
+      x: 90,
+      y: 40,
+    })
+    await dragCancel(session)
+  })
+
+  // reason: a second start would press a button already down, and the page
+  // would see a press with no release between two drags.
+  it('refuses to start a second gesture while one is held', async () => {
+    const { session } = targetedSession(both)
+    await dragStart(session, '#from')
+    expect(await dragStart(session, '#from')).toEqual({
+      ok: false,
+      reason: 'A drag is already being held. Drop it or cancel it first.',
+    })
+    await dragCancel(session)
+  })
+
+  it('releases the button and stops intercepting when cancelled', async () => {
+    const { session, sent } = targetedSession(both)
+    await dragStart(session, '#from')
+    expect(await dragCancel(session)).toEqual({ ok: true, message: 'Cancelled the drag.' })
+    expect(sent.some((each) => each.params?.type === 'mouseReleased')).toBe(true)
+    expect(sent.filter((each) => each.method === 'Input.setInterceptDrags').at(-1)?.params).toEqual({ enabled: false })
+  })
+
+  it('says so when there is nothing to cancel', async () => {
+    const { session, sent } = targetedSession(both)
+    expect(await dragCancel(session)).toEqual({ ok: false, reason: 'Nothing is being dragged.' })
+    expect(sent).toEqual([])
+  })
+
+  describe('when the page starts a native drag', () => {
+    it('reports it, and carries later moves across as drag events', async () => {
+      const { session, sent } = targetedSession(both, {}, intercept)
+      expect(await dragStart(session, '#from')).toEqual({
+        ok: true,
+        message: 'Holding button, as an HTML5 drag. Move, then drop.',
+      })
+      const before = sent.length
+      await dragMove(session, '#to')
+      const drags = sent.slice(before).filter((each) => each.method === 'Input.dispatchDragEvent')
+      expect(drags.filter((each) => each.params?.type === 'dragEnter').length).toBeGreaterThan(4)
+      expect(drags.filter((each) => each.params?.type === 'dragOver').length).toBeGreaterThan(4)
+      expect(sent.slice(before).some((each) => each.params?.type === 'mouseMoved')).toBe(false)
+      await dragCancel(session)
+    })
+
+    it('drops as a drag event, and never releases the mouse', async () => {
+      const { session, sent } = targetedSession(both, {}, intercept)
+      await dragStart(session, '#from')
+      expect(await dragDrop(session, '#to')).toEqual({ ok: true, message: 'Dropped on div, as an HTML5 drag.' })
+      expect(sent.filter((each) => each.method === 'Input.dispatchDragEvent').at(-1)?.params).toMatchObject({
+        type: 'drop',
+      })
+      expect(sent.some((each) => each.params?.type === 'mouseReleased')).toBe(false)
+    })
+
+    // reason: left intercepting, the next drag on the page is caught and
+    // never completed — including one the user makes with their own mouse.
+    it('stops intercepting once dropped', async () => {
+      const { session, sent } = targetedSession(both, {}, intercept)
+      await dragStart(session, '#from')
+      await dragDrop(session, '#to')
+      expect(sent.filter((each) => each.method === 'Input.setInterceptDrags').at(-1)?.params).toEqual({
+        enabled: false,
+      })
+    })
+
+    it('cancels with a dragCancel rather than a release', async () => {
+      const { session, sent } = targetedSession(both, {}, intercept)
+      await dragStart(session, '#from')
+      await dragCancel(session)
+      expect(sent.filter((each) => each.method === 'Input.dispatchDragEvent').at(-1)?.params).toMatchObject({
+        type: 'dragCancel',
+      })
+      expect(sent.some((each) => each.params?.type === 'mouseReleased')).toBe(false)
+    })
   })
 })
 

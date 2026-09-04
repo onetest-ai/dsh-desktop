@@ -259,8 +259,23 @@ describe('the stored pane state', () => {
   }
 
   it('keeps a usable width and open flag for each column', () => {
-    const stored = { editor: { width: 560, open: true }, files: { width: 240, open: false } }
+    const stored = { editor: { width: 560, open: true }, files: { width: 240, open: false, view: 'git' } }
     expect(withPane(stored)).toEqual(stored)
+  })
+
+  // reason: `view` was added with the git panel, so every config written by an
+  // older build lacks it. Dropping the whole block over its absence would lose
+  // the widths the user dragged; anything but `git` is the tree.
+  it.each([
+    ['a config from before the git panel', undefined],
+    ['a view nobody wrote', 'source-control'],
+    ['a view that is not a string', 3],
+  ])('opens the side column on the tree given %s', (_case, view) => {
+    const stored = { editor: { width: 560, open: true }, files: { width: 240, open: true, view } }
+    expect(withPane(stored)).toEqual({
+      editor: { width: 560, open: true },
+      files: { width: 240, open: true, view: 'files' },
+    })
   })
 
   // reason: this is window state the app writes for itself. Refusing to start
@@ -282,7 +297,10 @@ describe('the stored pane state', () => {
 
   it('treats anything but true as closed', () => {
     const stored = { editor: { width: 560, open: 'yes' }, files: { width: 240, open: 1 } }
-    expect(withPane(stored)).toEqual({ editor: { width: 560, open: false }, files: { width: 240, open: false } })
+    expect(withPane(stored)).toEqual({
+      editor: { width: 560, open: false },
+      files: { width: 240, open: false, view: 'files' },
+    })
   })
 })
 

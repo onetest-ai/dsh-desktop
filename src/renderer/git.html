@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Source Control</title>
+<!-- The harness's own tokens, vendored; see vendor/dsh-theme/README.md. -->
+<link rel="stylesheet" href="theme/base.css">
+<link rel="stylesheet" href="theme/design-platform.css">
+<link rel="stylesheet" href="pane.css">
+<body class="files">
+<main class="pane">
+  <!-- Not a picker, for the tree's reason: which project is open is the
+       harness's to decide. -->
+  <div class="column-head">
+    <span class="project-name" id="git-title">Source Control</span>
+    <span class="head-spacer"></span>
+  </div>
+  <section class="panel">
+    <!-- Hidden until the first read lands: the panel would otherwise flash a
+         message about a project it has not looked at yet. -->
+    <p class="empty" id="git-empty" hidden>No repository in this project.</p>
+    <!-- Outside #repos, which is rebuilt on every tick and every refresh: a
+         message box redrawn under the cursor loses what was typed into it. -->
+    <form id="commit-form" class="commit" hidden>
+      <!-- Shown only when more than one repository has something ticked. A
+           commit belongs to one repository, and which one is a choice the
+           user makes rather than one the panel infers from the ticks. -->
+      <label class="commit-repo" id="commit-repo-row" hidden>
+        <span class="commit-repo-label">Repository</span>
+        <select id="commit-repo" aria-label="Repository to commit to"></select>
+      </label>
+      <textarea id="commit-message" class="commit-message" rows="2" placeholder="Message" aria-label="Commit message"></textarea>
+      <button type="submit" id="commit" class="commit-button">Commit</button>
+    </form>
+    <!-- What a git action said when it would not run. Never a stack trace.
+         A live region: this is the only surface that reports "your changes are
+         stashed, but the switch failed", and a message a screen reader never
+         announces is one that only sighted users get the safety of. -->
+    <p class="git-note" id="git-note" role="status" hidden></p>
+    <div id="repos"></div>
+  </section>
+</main>
+<script src="git-bundle.js"></script>

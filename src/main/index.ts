@@ -1,6 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, shell, utilityProcess } from 'electron'
 import { accessSync, constants, existsSync, mkdirSync, renameSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { loadDeclaredPatchRows } from './bundle-patch'
 import { checkBinaries } from './check-binaries'
 import { DEFAULT_VIEW_TOOLS_PORT, loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
@@ -47,7 +48,15 @@ import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, cr
 } from './window'
 import { readWorkspaces } from './workspaces'
 import { readDirectory } from './file-tree'
-import { DIVIDER_WIDTH, RAIL_WIDTH, type Columns } from './layout'
+import { DIVIDER_WIDTH, RAIL_WIDTH, nextSideView, type Columns, type SideView } from './layout'
+import { gitDiffFor, readProject, refuseUnlessInProject, type ProjectGit } from './git-model'
+import { findRepos, hasGit } from './git-find'
+import { commit, discard, stage, unstage, type ActionOutcome } from './git-actions'
+import { checkout, createBranch, type BlockedKind } from './git-branch'
+import { applyStash, dropStash, pushStash, stashLabel } from './git-stash'
+import { remote, type RemoteOp, type RemoteOutcome } from './git-remote'
+import type { Section } from './git-status'
+import { setGitPath } from './git-run'
 import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
@@ -55,7 +64,8 @@ import { loadableUrl } from './view-tools'
 import { readTextFile, writeTextFile } from './file-io'
 import { createFile, createFolder } from './file-create'
 import { deleteEntry, pasteEntry, renameEntry } from './file-ops'
-import { treeMenu, type TreeAction } from './tree-menu'
+import { gitRowMenu, treeMenu, type GitRowAction, type MenuChoice, type TreeAction } from './tree-menu'
+import { isWebPage } from './web-page'
 import { resolveInRoot } from './file-tree'
 import { watchProject, type ProjectWatch } from './project-watch'
 import type { HostEvent } from './pty-host'
@@ -65,6 +75,10 @@ import { BrowserSession } from './browser-cdp'
 import {
   click as clickElement,
   drag as dragElement,
+  dragCancel as cancelDrag,
+  dragDrop as dropDrag,
+  dragMove as moveDrag,
+  dragStart as beginDrag,
   hover as hoverElement,
   press as pressKey,
   readPage as readBrowserPage,
@@ -118,7 +132,7 @@ let views: MainWindow | undefined
  */
 const columns: Columns = {
   editor: { width: DEFAULT_EDITOR_WIDTH, open: false },
-  files: { width: DEFAULT_FILES_WIDTH, open: false },
+  files: { width: DEFAULT_FILES_WIDTH, open: false, view: 'files' },
   terminal: { width: DEFAULT_TERMINAL_WIDTH, height: DEFAULT_TERMINAL_HEIGHT, open: false },
 }
 
@@ -147,6 +161,21 @@ function setColumn(key: keyof Columns, next: { width?: number; open?: boolean })
 }
 
 /**
+ * The view the side column's rectangle is currently in.
+ *
+ * The tree and the git panel take turns in that column, and `applyLayout`
+ * gives the one that is not showing a 0x0 rectangle — so anything measuring
+ * the column has to ask the view that has it. Measuring `files` while the
+ * panel is up reads zero, and a zero committed at the end of a drag is stored
+ * as a width the user never chose.
+ * @param window - the window and its views.
+ * @returns whichever of the two is holding the column.
+ */
+function sideColumn(window: MainWindow): MainWindow['files'] {
+  return columns.files.view === 'git' ? window.git : window.files
+}
+
+/**
  * Show or hide the browser.
  *
  * The Web tab lives in the editor column, so opening the browser opens that
@@ -171,6 +200,24 @@ function toggleWeb(): void {
 function toggleColumn(key: keyof Columns): void {
   setColumn(key, { open: !columns[key].open })
   storeColumns()
+}
+
+/**
+ * Put one of the side column's two views up, or close the column.
+ *
+ * The one path the rail button and the menu item both take. 0.3.0 shipped a
+ * fix for the terminal, where they did not: the rail did work the menu item
+ * never learned about, so the shortcut opened a panel with nothing in it.
+ * @param pressed - the view whose button or menu item was used.
+ */
+function toggleSideView(pressed: SideView): void {
+  const next = nextSideView({ open: columns.files.open, view: columns.files.view }, pressed)
+  columns.files.view = next.view
+  setColumn('files', { open: next.open })
+  storeColumns()
+  // Opening the panel is one of the moments its status is stale: it has been
+  // showing whatever was true when it was last put away.
+  if (next.open && next.view === 'git') notifyGitChanged()
 }
 
 /**
@@ -307,6 +354,34 @@ function toggleTerminalPanel(): void {
 }
 
 /**
+ * Where a shell opened from the git panel should start.
+ *
+ * Through the same gate as every git write, because this is the one place a
+ * path from the renderer becomes a working directory somebody then runs
+ * commands in. A repository the project does not hold falls back to the
+ * project rather than being refused: the user asked for a terminal and a
+ * terminal is what they get, in the place every other terminal opens.
+ * @param repo - the repository the panel named.
+ * @param known - the repositories currently discovered.
+ * @param project - the open project's path, or nothing when none is open.
+ * @returns the directory to start in; empty when there is nowhere to name.
+ */
+export function terminalCwdFor(repo: string, known: () => string[], project: string | undefined): string {
+  if (refuseUnlessInProject(repo, [], known) === undefined) return repo
+  return project ?? ''
+}
+
+/**
+ * Where the next shell should start, when it is not the project root.
+ *
+ * Held here rather than passed from the page, so the terminal's preload keeps
+ * its rule: the page names only a size, and main decides what runs and where.
+ * Consumed by the next `terminal:start` and cleared, so a session opened any
+ * other way afterwards lands in the project as it always did.
+ */
+let nextTerminalCwd: string | undefined
+
+/**
  * Start a shell for the terminal panel.
  *
  * The directory is the workspace the tree is showing at the moment the panel
@@ -330,13 +405,20 @@ function startTerminal(cols: number, rows: number): { id: number; cwd: string; s
     }
   })
   if (problem !== undefined) {
+    // Cleared here too, on the failing path, not only below: left set, a
+    // repository's directory picked for the shell that would not start
+    // reaches the next shell that does — the one opened, from the rail, once
+    // the user has fixed Settings and forgotten which repo Open in Terminal
+    // last pointed at.
+    nextTerminalCwd = undefined
     return {
       error: shell.source === 'configured'
         ? `${problem} Change it under Settings → Advanced → Terminal shell.`
         : problem,
     }
   }
-  const cwd = currentProject?.path ?? app.getPath('home')
+  const cwd = nextTerminalCwd ?? currentProject?.path ?? app.getPath('home')
+  nextTerminalCwd = undefined
   const id = terminals.start({
     shell: shell.command,
     args: argsFor(shell.command),
@@ -415,6 +497,10 @@ const browserAutomation: BrowserAutomation = {
   press: (key) => pressKey(browser, key),
   selectOption: (target, value) => chooseOption(browser, target, value),
   drag: (from, to, offset) => dragElement(browser, from, to, offset),
+  dragStart: (from) => beginDrag(browser, from),
+  dragMove: (to, offset) => moveDrag(browser, to, offset),
+  dragDrop: (to, offset) => dropDrag(browser, to, offset),
+  dragCancel: () => cancelDrag(browser),
   waitFor: (target, text, gone, seconds) => awaitCondition(browser, target, text, gone, seconds),
   evaluate: (expression) => browser.evaluate(expression),
   uploadFile: (target, path) => attachFile(browser, target, [path]),
@@ -520,6 +606,25 @@ function pushWebState(): void {
 }
 
 /**
+ * The `file:` URL for a page inside an open project, if it may be shown.
+ *
+ * The only way a local file reaches the web view. `loadableUrl` still refuses
+ * `file:` for the address bar and for the agent's own `open`, so a page the
+ * user did not ask for cannot be pointed at their filesystem; this is the
+ * one path in, and it is gated on the project being open, the entry being
+ * inside it, and the name being one the view renders rather than shows as
+ * source.
+ * @param root - the project the entry is in.
+ * @param relative - the entry's path within it.
+ * @returns the URL to load, or undefined when it may not be shown.
+ */
+function webPageInProject(root: string, relative: string): string | undefined {
+  if (!knownProject(root) || !isWebPage(relative)) return undefined
+  const target = resolveInRoot(root, relative)
+  return target === undefined ? undefined : pathToFileURL(target).href
+}
+
+/**
  * Show a page in the web view, opening the editor column and its Web tab.
  * @param url - the page to load.
  */
@@ -595,6 +700,9 @@ function showProject(project?: { path: string; title: string }): void {
   if (moved) watchCurrentProject()
   if (views === undefined || views.window.isDestroyed()) return
   views.files.webContents.send('pane:project', currentProject)
+  // The panel follows the project the tree does; a moved project is a
+  // different set of repositories entirely.
+  if (moved) notifyGitChanged()
 }
 
 /**
@@ -608,12 +716,435 @@ function showProject(project?: { path: string; title: string }): void {
 function watchCurrentProject(): void {
   projectWatcher?.close()
   projectWatcher = undefined
+  closeGitWatchers()
   const root = currentProject?.path
   if (root === undefined) return
   projectWatcher = watchProject(root, (relative) => {
     if (views === undefined || views.window.isDestroyed()) return
     views.files.webContents.send('pane:project-changed', root, relative)
+    // An edit to a tracked file changes what git reports about it, so the
+    // same watch serves both — for everything outside `.git`.
+    notifyGitChanged()
   })
+  watchRepos(root)
+}
+
+/**
+ * Whether git could be run at all, once it has been asked.
+ *
+ * Cached only when the answer was yes: a no is worth asking again, since the
+ * user's remedy is to name git's directory under Settings and come back.
+ */
+let gitOnPath = false
+
+/**
+ * The `readProject` call already running, if there is one.
+ *
+ * A rebase in the terminal panel moves `.git` dozens of times a second, and
+ * every move asks for a read; without this each event would start its own
+ * git. The project it was started for is held with it, because a read is only
+ * an answer to the project it was started for.
+ */
+let gitReading: { root: string; promise: Promise<ProjectGit> } | undefined
+
+/**
+ * Whether anything has changed since the running read began.
+ *
+ * A read that started before a change cannot see it, so its answer is stale
+ * the moment this is set — a caller waiting on it takes a fresh read instead.
+ * This is what makes a refresh superseded rather than queued: the change is
+ * remembered, not the request.
+ */
+let gitDirty = false
+
+/**
+ * Read the current project's repositories.
+ *
+ * A project with none, and no project at all, are both an empty list: the
+ * panel says so in words and nothing is wrong. git missing from `PATH` is the
+ * one state that names its own remedy, since the user can fix it.
+ *
+ * A caller arriving while a read is running waits it out and then takes that
+ * read's answer only if it was for the same project and nothing changed
+ * meanwhile; otherwise it starts one more. Two callers never run git at once,
+ * and neither is handed a snapshot of something it did not ask about.
+ *
+ * **Serialised per project, not per repo.** `readProject` reads every
+ * repository in one call, so one flag covers them all — an action on a single
+ * repository (Task 9) must not assume the same, since two repositories can be
+ * acted on at once and one waiting on the other would be a stall with no
+ * cause.
+ * @returns what the panel should draw.
+ */
+async function readCurrentGit(): Promise<ProjectGit> {
+  const project = currentProject
+  if (project === undefined) return { ok: true, repos: [] }
+  if (!gitOnPath) {
+    gitOnPath = await hasGit()
+    if (!gitOnPath) {
+      return { ok: false, reason: 'git is not on your PATH. Add it under Settings → Advanced → Extra PATH entries.' }
+    }
+  }
+  for (;;) {
+    const running = gitReading
+    if (running === undefined) break
+    // Waited out rather than joined blindly: a read of the previous project,
+    // or one that began before the change that prompted this call, answers a
+    // question nobody asked.
+    await running.promise.catch(() => undefined)
+    if (running.root === project.path && !gitDirty) return await running.promise
+  }
+  gitDirty = false
+  const promise = readProject(project.path)
+  const started = { root: project.path, promise }
+  gitReading = started
+  // Cleared by a reaction registered here, before any waiter's — so a caller
+  // resuming from the loop above sees the slot free and starts the one more
+  // read the change it is carrying deserves.
+  void promise.then(
+    () => {
+      if (gitReading === started) gitReading = undefined
+    },
+    () => {
+      if (gitReading === started) gitReading = undefined
+    },
+  )
+  return await promise
+}
+
+/**
+ * The repositories the open project currently holds.
+ *
+ * The one source of truth every git channel is checked against, read fresh on
+ * each call rather than cached: the project moves, repositories are cloned and
+ * deleted while the app runs, and a stale list is either a refusal of
+ * something legitimate or — the half that matters — a permission granted for a
+ * repository the project no longer holds. `findRepos` is the same discovery
+ * the panel's own read and the `.git` watchers use, so nothing can be acted on
+ * that the panel could not have drawn.
+ * @returns the repository directories, or none when no project is open.
+ */
+function gitRepoPaths(): string[] {
+  return currentProject === undefined ? [] : findRepos(currentProject.path)
+}
+
+/**
+ * Show a row's diff in the editor column.
+ *
+ * The repository and path are checked before anything is read, since
+ * `git:open-diff` is reachable from the panel's own renderer and neither is
+ * evidence of anything — see `gitDiffFor`. A row that fails the check, or
+ * whose diff git could not produce, is silently ignored rather than shown as
+ * an error: the panel already reflects the repositories it can see, so a
+ * mismatched click here would mean the project moved between the click and
+ * the answer, not something worth interrupting the user over.
+ * @param repo - the repository the row's file belongs to, as the row named it.
+ * @param path - the file's path within that repository.
+ * @param section - which list the row was in.
+ */
+async function openGitDiffInPane(repo: string, path: string, section: Section): Promise<void> {
+  const sides = await gitDiffFor(repo, path, section, gitRepoPaths)
+  if (sides === undefined) return
+  if (views === undefined || views.window.isDestroyed()) return
+  if (!columns.editor.open) {
+    setColumn('editor', { open: true })
+    storeColumns()
+  }
+  views.pane.webContents.send('pane:diff-texts', repo, path, sides.original, sides.modified, true)
+}
+
+/**
+ * Stage paths, if the caller may act on them.
+ * @param repo - the repository.
+ * @param paths - the paths to stage.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitStageFor(repo: string, paths: string[], known: () => string[]): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, paths, known) ?? (await stage(repo, paths))
+}
+
+/**
+ * Take paths back out of the index, if the caller may act on them.
+ * @param repo - the repository.
+ * @param paths - the paths to unstage.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitUnstageFor(repo: string, paths: string[], known: () => string[]): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, paths, known) ?? (await unstage(repo, paths))
+}
+
+/**
+ * Throw away changes to paths, if the caller may act on them.
+ *
+ * Both lists go through the gate together. They are two lists because git
+ * needs two commands for them, not because one is trusted more than the
+ * other — an untracked path names a file that is about to be deleted from
+ * disk, which is the half where an escape would cost the most.
+ * @param repo - the repository.
+ * @param tracked - paths git knows about.
+ * @param untracked - paths it does not.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitDiscardFor(
+  repo: string,
+  tracked: string[],
+  untracked: string[],
+  known: () => string[],
+): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, [...tracked, ...untracked], known) ?? (await discard(repo, tracked, untracked))
+}
+
+/**
+ * Commit what is ticked, if the caller may act on it.
+ *
+ * The three lists stay three lists across the gate and across the bridge.
+ * `add` is ticked in Changes or Untracked and is staged; `keep` is ticked
+ * only in Staged Changes and must never be re-added, since `git add` would
+ * replace the recorded version with the newer working-tree one the tick meant
+ * to leave alone; `staged` is what the index holds, and anything in it that is
+ * in neither list is unstaged. Collapsing them into one selection cannot
+ * express the file that appears in both sections.
+ *
+ * All three are checked: `staged` is named by the renderer like the others,
+ * and it is the list `commit` turns into `git restore --staged`.
+ * @param repo - the repository.
+ * @param message - the commit message, as typed.
+ * @param add - paths ticked in Changes or Untracked.
+ * @param keep - paths ticked only in Staged Changes.
+ * @param staged - the paths currently in the index.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitCommitFor(
+  repo: string,
+  message: string,
+  add: string[],
+  keep: string[],
+  staged: string[],
+  known: () => string[],
+): Promise<ActionOutcome> {
+  return (
+    refuseUnlessInProject(repo, [...add, ...keep, ...staged], known) ??
+    (await commit(repo, message, add, keep, staged))
+  )
+}
+
+/**
+ * Switch branch, if the caller may act on the repository.
+ *
+ * No paths, so an empty list — the repository check still applies, since a
+ * directory the project does not hold is not one this app checks out in.
+ *
+ * `remote` crosses the bridge rather than being guessed from the name: a
+ * remote-tracking branch needs `--track` to create the local branch that
+ * follows it, and without the flag git detaches HEAD instead. The panel knows
+ * which list the row came from; a name cannot be classified, since a local
+ * `feature/thing` and a remote `origin/main` are both a name with a slash.
+ * @param repo - the repository.
+ * @param name - the branch to switch to.
+ * @param remote - whether the row was a remote-tracking branch.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported — with the files that blocked it and
+ *   which of git's two refusals it was, when git named any — or the refusal.
+ */
+export async function gitCheckoutFor(
+  repo: string,
+  name: string,
+  remote: boolean,
+  known: () => string[],
+): Promise<ActionOutcome & { blocked?: string[]; blockedKind?: BlockedKind }> {
+  return refuseUnlessInProject(repo, [], known) ?? (await checkout(repo, name, remote))
+}
+
+/**
+ * Create a branch and switch to it, if the caller may act on the repository.
+ * @param repo - the repository.
+ * @param name - the branch to create.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitCreateBranchFor(repo: string, name: string, known: () => string[]): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, [], known) ?? (await createBranch(repo, name))
+}
+
+/**
+ * Stash the working tree, if the caller may act on the repository.
+ *
+ * The sha of the entry created is part of the answer, not an extra the
+ * runtime happens to carry: the stash-and-switch chain pops by it, and a
+ * signature that omitted it would invite a refactor to pop `stash@{0}`
+ * instead — the position an agent stashing in the same repository slides out
+ * from under it, with TypeScript's approval.
+ * @param repo - the repository.
+ * @param message - what to call it; blank pushes without one.
+ * @param untracked - true to take untracked files too; see `pushStash`.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported and the sha it named, or the refusal.
+ */
+export async function gitStashPushFor(
+  repo: string,
+  message: string,
+  untracked: boolean,
+  known: () => string[],
+): Promise<ActionOutcome & { ref?: string }> {
+  return refuseUnlessInProject(repo, [], known) ?? (await pushStash(repo, message, untracked))
+}
+
+/**
+ * Put a stash back, if the caller may act on the repository.
+ * @param repo - the repository.
+ * @param ref - the stash, as `stash@{n}`.
+ * @param pop - true to remove it once applied.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitStashApplyFor(
+  repo: string,
+  ref: string,
+  pop: boolean,
+  known: () => string[],
+): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, [], known) ?? (await applyStash(repo, ref, pop))
+}
+
+/**
+ * Throw a stash away, if the caller may act on the repository.
+ * @param repo - the repository.
+ * @param ref - the stash to drop.
+ * @param known - the repositories currently discovered.
+ * @returns what the action reported, or the refusal.
+ */
+export async function gitStashDropFor(repo: string, ref: string, known: () => string[]): Promise<ActionOutcome> {
+  return refuseUnlessInProject(repo, [], known) ?? (await dropStash(repo, ref))
+}
+
+/**
+ * The remote operation running in each repository, and what stops it.
+ *
+ * Per repository rather than one at a time overall: a project holding several
+ * checkouts is the case this panel was built for, and a fetch in one has
+ * nothing to say about a fetch in another. Within one repository they are
+ * serialised, because two remote operations in the same working tree race for
+ * the same index lock and the loser reports a fault the user did not cause.
+ */
+const remoteJobs = new Map<string, AbortController>()
+
+/**
+ * Fetch, pull, push or publish, if the caller may act on the repository.
+ *
+ * No paths, so an empty list — the repository check still applies. A second
+ * operation in a repository that already has one is refused rather than
+ * queued: the panel shows the first one running, and a queue would leave a
+ * button that did nothing visible for as long as the first one took.
+ * @param repo - the repository.
+ * @param op - which operation.
+ * @param known - the repositories currently discovered.
+ * @param jobs - the running operations; injected so tests hold their own.
+ * @returns what the operation reported, or the refusal.
+ */
+export async function gitRemoteFor(
+  repo: string,
+  op: RemoteOp,
+  known: () => string[],
+  jobs: Map<string, AbortController> = remoteJobs,
+): Promise<RemoteOutcome> {
+  const refusal = refuseUnlessInProject(repo, [], known)
+  if (refusal !== undefined) return refusal
+  if (jobs.has(repo)) return { ok: false, reason: `Something is already running in ${basename(repo)}.` }
+  const stop = new AbortController()
+  jobs.set(repo, stop)
+  try {
+    return await remote(repo, op, stop.signal)
+  } finally {
+    // In a finally, and only when it is still ours: a job left behind would
+    // refuse every later operation in that repository for the life of the
+    // window, which is a panel that stops working with nothing to say why.
+    if (jobs.get(repo) === stop) jobs.delete(repo)
+  }
+}
+
+/**
+ * Stop whatever remote operation is running in a repository.
+ *
+ * Nothing when there is none: a cancel pressed as the spinner cleared is
+ * ordinary, and an error for it would be an error for doing the right thing.
+ * @param repo - the repository.
+ * @param jobs - the running operations; injected so tests hold their own.
+ */
+export function gitCancelRemote(repo: string, jobs: Map<string, AbortController> = remoteJobs): void {
+  jobs.get(repo)?.abort()
+}
+
+/**
+ * How long git changes are collected before the panel is told.
+ *
+ * A single `git commit` writes the index, HEAD, and a ref within a few
+ * milliseconds of each other; without this each one would be a separate read.
+ */
+const GIT_SETTLE_MS = 200
+
+/** The pending `git:changed`, so a burst of them arrives as one. */
+let gitNotify: ReturnType<typeof setTimeout> | undefined
+
+/** Tell the panel to read itself again, once the changes behind it have settled. */
+function notifyGitChanged(): void {
+  // Marked before the debounce, not after: a read already running started
+  // before this change and cannot report it, whenever the message goes out.
+  gitDirty = true
+  // The panel's page is loaded with the window and lives on whether or not
+  // the column shows it, so an unwatched panel would answer every project
+  // write with a `git status` of every repository and a DOM rebuild nothing
+  // can see. `toggleSideView` notifies when the column opens, so the state
+  // this skips is read as soon as anyone looks at it.
+  if (!(columns.files.open && columns.files.view === 'git')) return
+  if (gitNotify !== undefined) clearTimeout(gitNotify)
+  gitNotify = setTimeout(() => {
+    gitNotify = undefined
+    if (views === undefined || views.window.isDestroyed()) return
+    views.git.webContents.send('git:changed')
+  }, GIT_SETTLE_MS)
+  gitNotify.unref?.()
+}
+
+/**
+ * Watches over each repository's own `.git`, closed when the project moves.
+ *
+ * The project watcher cannot serve here: it drops everything under `.git` (see
+ * `IGNORED` in `file-tree.ts`), which is exactly where staging, committing,
+ * and fetching are recorded. Working-tree edits still arrive through it.
+ */
+let gitWatchers: FSWatcher[] = []
+
+/** Stop watching every repository's `.git`. */
+function closeGitWatchers(): void {
+  for (const watcher of gitWatchers) watcher.close()
+  gitWatchers = []
+}
+
+/**
+ * Watch each repository in the current project for git's own writes.
+ *
+ * Recursive over `.git`, which covers `index`, `HEAD`, and everything under
+ * `refs` in one watch rather than three per repository — and catches the
+ * files git actually writes, which are temporaries renamed into place.
+ * @param root - the project directory.
+ */
+function watchRepos(root: string): void {
+  for (const repo of findRepos(root)) {
+    try {
+      const watcher = watch(join(repo, '.git'), { recursive: true, persistent: false }, () => {
+        notifyGitChanged()
+      })
+      gitWatchers.push(watcher)
+    } catch (error) {
+      // A repository that cannot be watched still reads; the panel refreshes
+      // when the window is focused instead.
+      console.warn(`dsh-desktop: ${repo} could not be watched for git changes: ${(error as Error).message}`)
+    }
+  }
 }
 
 /**
@@ -692,6 +1223,11 @@ function pushTheme(): void {
     views.window.webContents,
     views.pane.webContents,
     views.files.webContents,
+    // The git panel is a page of this app's own like the rest: without this
+    // its body never gets `data-ds-dark-theme`, every `--dsw-alias-*` token
+    // resolves to the light value, and the panel renders white beside a dark
+    // harness — the failure 0.3.0 fixed for the Settings window.
+    views.git.webContents,
     views.terminal.webContents,
     ...(settings === undefined ? [] : [settings]),
   ]) {
@@ -719,22 +1255,24 @@ function watchTheme(): void {
 }
 
 /**
- * Show the tree's context menu and wait for a choice.
+ * Show a native context menu and wait for a choice.
  *
- * The menu's items are decided in `treeMenu`, which has no Electron in it;
- * this only turns them into a native menu and reports what was chosen.
+ * Which items a menu holds is decided by a pure function with no Electron in
+ * it; this only turns them into a native menu and reports what was chosen.
+ * Generic in the action so each caller gets its own vocabulary back rather
+ * than the union of every menu in the app.
  * @param window - the window to pop over.
- * @param target - what the menu was opened on.
+ * @param items - the entries to show, in order.
  * @returns the action chosen, or undefined when the menu was dismissed.
  */
-async function popTreeMenu(
+async function popMenu<Action extends string>(
   window: BrowserWindow,
-  target: { directory: boolean; pending: boolean },
-): Promise<TreeAction | undefined> {
-  return await new Promise<TreeAction | undefined>((resolve) => {
-    let chosen: TreeAction | undefined
+  items: (MenuChoice<Action> | { separator: true })[],
+): Promise<Action | undefined> {
+  return await new Promise<Action | undefined>((resolve) => {
+    let chosen: Action | undefined
     const menu = Menu.buildFromTemplate(
-      treeMenu(target).map((item) =>
+      items.map((item) =>
         'separator' in item
           ? { type: 'separator' as const }
           : {
@@ -750,6 +1288,21 @@ async function popTreeMenu(
     // chosen — including nothing, when the menu was dismissed.
     menu.popup({ window, callback: () => resolve(chosen) })
   })
+}
+
+/**
+ * Show the tree's context menu and wait for a choice.
+ *
+ * The menu's items are decided in `treeMenu`, which has no Electron in it.
+ * @param window - the window to pop over.
+ * @param target - what the menu was opened on.
+ * @returns the action chosen, or undefined when the menu was dismissed.
+ */
+async function popTreeMenu(
+  window: BrowserWindow,
+  target: { directory: boolean; pending: boolean; name: string },
+): Promise<TreeAction | undefined> {
+  return await popMenu(window, treeMenu({ ...target, web: !target.directory && isWebPage(target.name) }))
 }
 
 /** Refusal for a root that is not a project the harness has opened. */
@@ -1772,6 +2325,7 @@ async function shutdown(): Promise<void> {
   workspaceWatcher = undefined
   projectWatcher?.close()
   projectWatcher = undefined
+  closeGitWatchers()
   // The install child is reaped first and unconditionally: it is in neither
   // the lifecycle chain nor `child`, so nothing below would ever find it, and
   // an unreaped `npm` keeps writing into $DSH_HOME after Electron is gone.
@@ -1867,6 +2421,11 @@ if (!app.requestSingleInstanceLock()) {
   // reads the privileged scheme table once, at startup.
   registerPaneScheme()
 
+  // Every git child runs under the PATH the harness child gets, not the bare
+  // one a Finder launch inherits. Asked per call, so Extra PATH entries added
+  // in Settings take effect without a restart.
+  setGitPath(probePath)
+
   void app.whenReady().then(async () => {
     servePane(() => readWorkspaces(DSH_HOME).map((workspace) => workspace.path))
     // Scheduled before anything else and never awaited: the resolution runs
@@ -1884,7 +2443,10 @@ if (!app.requestSingleInstanceLock()) {
     alignDefaultPlugins(DSH_HOME)
     installMenu(showSettings, {
       toggleFiles: () => {
-        toggleColumn('files')
+        toggleSideView('files')
+      },
+      toggleGit: () => {
+        toggleSideView('git')
       },
       toggleWeb,
       toggleTerminal: toggleTerminalPanel,
@@ -1906,7 +2468,11 @@ if (!app.requestSingleInstanceLock()) {
         // stored `true` would put an empty editor on screen offering to be
         // closed.
         columns.editor = { width: stored.config.pane.editor.width, open: false }
-        columns.files = { ...stored.config.pane.files }
+        // `view` is absent from every config written before the git panel, and
+        // `loadConfig` fills it in — the fallback here is for a stored object
+        // that reached this build by any other route.
+        const side = stored.config.pane.files
+        columns.files = { ...side, view: side.view === 'git' ? 'git' : 'files' }
         // The panel's size is restored but never its open state, for the
         // editor's reason: a terminal exists because someone opened one, and
         // reopening it at launch would start a shell nobody asked for.
@@ -1933,7 +2499,7 @@ if (!app.requestSingleInstanceLock()) {
         if (columns.editor.open) setTerminalHeight(windowX)
         else {
           const [full] = views.window.getContentSize()
-          const outside = columns.files.open ? views.files.getBounds().width + DIVIDER_WIDTH : 0
+          const outside = columns.files.open ? sideColumn(views).getBounds().width + DIVIDER_WIDTH : 0
           setColumn('terminal', { width: full - RAIL_WIDTH - windowX - outside })
         }
         return
@@ -1942,7 +2508,9 @@ if (!app.requestSingleInstanceLock()) {
       // Each column is measured inward from the rail, past whatever columns
       // sit outside it: dragging the editor's divider must not move the tree,
       // and neither reaches the strip at the edge.
-      const outside = key === 'editor' && columns.files.open ? views.files.getBounds().width + DIVIDER_WIDTH : 0
+      const outside = key === 'editor' && columns.files.open
+        ? sideColumn(views).getBounds().width + DIVIDER_WIDTH
+        : 0
       setColumn(key, { width: width - RAIL_WIDTH - windowX - outside })
     })
     ipcMain.on('shell:nudge-column', (_event, key: keyof Columns, delta: number) => {
@@ -1958,16 +2526,167 @@ if (!app.requestSingleInstanceLock()) {
       // stored width the clamp already refused would reopen at the wrong size.
       if (views !== undefined && !views.window.isDestroyed()) {
         if (columns.editor.open) columns.editor.width = views.pane.getBounds().width
-        if (columns.files.open) columns.files.width = views.files.getBounds().width
+        if (columns.files.open) columns.files.width = sideColumn(views).getBounds().width
       }
       storeColumns()
     })
     // The rail's two buttons. The editor is not among them: it is not
     // something to open empty, and appears when a file goes into it.
     ipcMain.on('shell:toggle-files', () => {
-      toggleColumn('files')
+      toggleSideView('files')
+    })
+    ipcMain.on('shell:toggle-git', () => {
+      toggleSideView('git')
     })
     ipcMain.on('shell:toggle-web', toggleWeb)
+    // The panel's own read. Nothing about git reaches the renderer but this
+    // result: the parsing, the spawning, and the serialisation are all here.
+    ipcMain.handle('git:read', async () => await readCurrentGit())
+    // A row's diff. A send rather than an invoke: the editor column is
+    // main's to fill, and there is no answer for the panel to wait on.
+    ipcMain.on('git:open-diff', (_event, repo: string, path: string, section: Section) => {
+      void openGitDiffInPane(repo, path, section)
+    })
+    // The panel's writes. Every one of them goes through `refuseUnlessInProject`
+    // inside its helper before git is spawned: the renderer names the
+    // repository and, for most of them, the paths, and neither is evidence of
+    // anything just because this app's own page sent it. Each then tells the
+    // panel to read itself again, since the action is exactly what made the
+    // state it is showing stale.
+    ipcMain.handle('git:stage', async (_event, repo: string, paths: string[]) => {
+      const out = await gitStageFor(repo, paths, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.handle('git:unstage', async (_event, repo: string, paths: string[]) => {
+      const out = await gitUnstageFor(repo, paths, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    // Discard is the one write with no undo — `git restore --worktree` and
+    // `git clean` leave nothing in the reflog — so it asks first, and it asks
+    // here, in main, where a renderer cannot answer for itself. The check runs
+    // before the dialog as well as inside the helper: a refused repository
+    // should not raise a prompt at all, since a prompt is itself something a
+    // hostile page could use to trick a user into pressing Discard.
+    ipcMain.handle('git:discard', async (_event, repo: string, tracked: string[], untracked: string[]) => {
+      const refusal = refuseUnlessInProject(repo, [...tracked, ...untracked], gitRepoPaths)
+      if (refusal !== undefined) return refusal
+      if (views === undefined || views.window.isDestroyed()) return { ok: false, reason: '' }
+      const all = [...tracked, ...untracked]
+      const { response } = await dialog.showMessageBox(views.window, {
+        type: 'warning',
+        buttons: ['Discard', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        message: all.length === 1 ? `Discard changes to ${all[0]}?` : `Discard changes to ${all.length} files?`,
+        detail: 'The changes are thrown away. This cannot be undone, and there is nothing in the reflog to recover.',
+      })
+      // An empty reason: the user answered, so there is nothing to report back
+      // to them about it.
+      if (response !== 0) return { ok: false, reason: '' }
+      const out = await gitDiscardFor(repo, tracked, untracked, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.handle(
+      'git:commit',
+      async (_event, repo: string, message: string, add: string[], keep: string[], staged: string[]) => {
+        const out = await gitCommitFor(repo, message, add, keep, staged, gitRepoPaths)
+        notifyGitChanged()
+        return out
+      },
+    )
+    // A row's right-click menu. Native, popped from here since only main can,
+    // and carrying no path of its own: what was clicked is the renderer's to
+    // remember, and every action it leads to is validated on its own channel.
+    ipcMain.handle('git:row-menu', async (_event, section: Section) => {
+      if (views === undefined || views.window.isDestroyed()) return undefined
+      return await popMenu<GitRowAction>(views.window, gitRowMenu(section))
+    })
+    ipcMain.handle('git:checkout', async (_event, repo: string, name: string, remote: boolean) => {
+      const out = await gitCheckoutFor(repo, name, remote, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.handle('git:create-branch', async (_event, repo: string, name: string) => {
+      const out = await gitCreateBranchFor(repo, name, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.handle('git:stash-push', async (_event, repo: string, message: string, untracked: boolean) => {
+      const out = await gitStashPushFor(repo, message, untracked === true, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.handle('git:stash-apply', async (_event, repo: string, ref: string, pop: boolean) => {
+      const out = await gitStashApplyFor(repo, ref, pop, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    // Unrecoverable in the way Discard is: a dropped stash is reachable only
+    // by an unreferenced hash this panel never showed anyone. Confirmed in
+    // main for the same reason.
+    ipcMain.handle('git:stash-drop', async (_event, repo: string, ref: string) => {
+      const refusal = refuseUnlessInProject(repo, [], gitRepoPaths)
+      if (refusal !== undefined) return refusal
+      if (views === undefined || views.window.isDestroyed()) return { ok: false, reason: '' }
+      const { response } = await dialog.showMessageBox(views.window, {
+        type: 'warning',
+        buttons: ['Drop', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        // What the row named, not the raw handle it acts on: the panel passes
+        // a sha, and a forty-character hash is not something anyone can check
+        // a confirmation against.
+        message: `Drop ${stashLabel(ref)}?`,
+        detail: 'The stash is thrown away. It is reachable only by a hash this panel never showed you.',
+      })
+      if (response !== 0) return { ok: false, reason: '' }
+      const out = await gitStashDropFor(repo, ref, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    // Fetch, pull, push and publish. Serialised per repository inside the
+    // helper, and refreshed afterwards either way: a failed pull still moves
+    // the ahead and behind counts often enough that not refreshing would
+    // leave the header lying about where the branch stands.
+    ipcMain.handle('git:remote', async (_event, repo: string, op: RemoteOp) => {
+      const out = await gitRemoteFor(repo, op, gitRepoPaths)
+      notifyGitChanged()
+      return out
+    })
+    ipcMain.on('git:cancel-remote', (_event, repo: string) => {
+      // Gated like every other channel, even though a cancel can only ever
+      // stop something this app itself started: the check costs nothing and
+      // the rule that every git channel is checked is worth more than the
+      // exception.
+      if (refuseUnlessInProject(repo, [], gitRepoPaths) === undefined) gitCancelRemote(repo)
+    })
+    // The way out of a credential failure: a shell in that repository, where
+    // git's own helper can cache what it needs and the panel works from then
+    // on. A new session rather than the panel's existing one — a `cd` typed
+    // into a shell that is in the middle of something is not a courtesy.
+    ipcMain.on('git:open-terminal', (_event, repo: string) => {
+      const cwd = terminalCwdFor(repo, gitRepoPaths, currentProject?.path)
+      if (cwd === '') return
+      nextTerminalCwd = cwd
+      if (!columns.terminal.open) {
+        setColumn('terminal', { open: true })
+        storeColumns()
+      }
+      if (views === undefined || views.window.isDestroyed()) return
+      const target = views.terminal.webContents
+      // A page still loading drops what is sent to it; this is that page's
+      // first moments after boot, which is exactly when a rail press lands.
+      if (target.isLoading()) {
+        target.once('did-finish-load', () => {
+          target.send('terminal:open-new')
+        })
+        return
+      }
+      target.send('terminal:open-new')
+    })
     ipcMain.on('shell:toggle-terminal', toggleTerminalPanel)
     // The harness telling us which project it is working in — pushed by the
     // desktop plugin when the user switches session. Better than anything
@@ -1999,7 +2718,7 @@ if (!app.requestSingleInstanceLock()) {
     )
     // The tree's context menu. Native, so it looks like every other menu on
     // the machine, and popped from here since only main can.
-    ipcMain.handle('pane:tree-menu', async (_event, target: { directory: boolean; pending: boolean }) => {
+    ipcMain.handle('pane:tree-menu', async (_event, target: { directory: boolean; pending: boolean; name: string }) => {
       if (views === undefined || views.window.isDestroyed()) return undefined
       return await popTreeMenu(views.window, target)
     })
@@ -2026,6 +2745,22 @@ if (!app.requestSingleInstanceLock()) {
       })
       if (response !== 0) return { ok: false as const, reason: '' }
       return deleteEntry(root, relative)
+    })
+    // Asked for from the tree, which is its own page and cannot see what the
+    // editor is holding. The editor page saves the file if it has unsaved
+    // edits in it and asks for the load back, so what the web view shows is
+    // the file as it is rather than as it was last written.
+    ipcMain.on('pane:open-in-web', (_event, root: string, relative: string) => {
+      if (views === undefined || views.window.isDestroyed()) return
+      if (webPageInProject(root, relative) === undefined) return
+      views.pane.webContents.send('pane:save-for-web', root, relative)
+    })
+    // The load itself, asked for by the editor page once it has saved. The
+    // path is checked again rather than trusted: this channel is reachable
+    // from a renderer, and the first check was of what the tree sent.
+    ipcMain.on('pane:load-in-web', (_event, root: string, relative: string) => {
+      const url = webPageInProject(root, relative)
+      if (url !== undefined) openUrlInPane(url)
     })
     ipcMain.on('pane:reveal-entry', (_event, root: string, relative: string) => {
       if (!knownProject(root)) return
@@ -2157,6 +2892,12 @@ if (!app.requestSingleInstanceLock()) {
         revealPending = false
         revealWindow()
       }
+    })
+    // Anything at all can move a repository while this app is not the one in
+    // front — the agent's own tools, another editor, a shell. Coming back is
+    // the moment the panel is about to be read, so it is the moment to check.
+    window.on('focus', () => {
+      notifyGitChanged()
     })
     window.on('close', (event) => {
       // Closing the window leaves the app running in the tray; only a quit,

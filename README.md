@@ -35,11 +35,11 @@ This writes `release/mac-arm64/DeepSeek Harness.app`. Drag it to `/Applications`
 
 Use `npm run dist` for a distributable `.dmg` rather than a plain `.app` directory, or `npm run release` to sign and notarize it (see [`docs/notes/distribution.md`](docs/notes/distribution.md)).
 
-The build is **ad-hoc signed and not notarized** unless a Developer ID identity is available (see [`docs/notes/distribution.md`](docs/notes/distribution.md)). A copy you build yourself opens normally — a local build never receives macOS's quarantine flag, so Gatekeeper never runs on it.
+**Released builds are signed with a Developer ID, notarized, and stapled** — a `.dmg` from the [releases page](https://github.com/onetest-ai/dsh-desktop/releases) opens with no Gatekeeper detour. (The disk image itself is deliberately not notarized: notarizing the app is what makes distribution work, and the container rides along. Measured, not assumed — see [`docs/notes/distribution.md`](docs/notes/distribution.md).)
 
-A copy someone *downloads* is stopped: "Apple could not verify…". They can proceed through **System Settings → Privacy & Security → Open Anyway**, or with `xattr -dr com.apple.quarantine "/Applications/DeepSeek Harness.app"`. Control-clicking the app and choosing *Open* no longer works — Apple removed that bypass in macOS 15.
+A build you make yourself with `npm run pack` or `npm run dist` is **ad-hoc signed** unless a Developer ID identity is available. That is fine for your own machine: a local build never receives macOS's quarantine flag, so Gatekeeper never runs on it.
 
-To remove that step entirely, sign and notarize with a Developer ID: `npm run release`, with the certificate installed and notary credentials in the environment.
+It is not fine for a copy you *hand to someone else*. An ad-hoc build that has travelled is stopped with "Apple could not verify…", and the recipient needs **System Settings → Privacy & Security → Open Anyway** or `xattr -dr com.apple.quarantine "/Applications/DeepSeek Harness.app"` — Control-clicking and choosing *Open* no longer works, since Apple removed that bypass in macOS 15. Use `npm run release` to produce the signed, notarized build instead, with the certificate installed and notary credentials in the environment.
 
 ## First run
 
@@ -111,7 +111,7 @@ The **Plugins** tab has an Add field, typed the way you would type a package on 
 
 ```
 @deepseek-ai/dsh-hooks-claude-code
-@onetest/dsh-deck@0.2.1
+@onetest/dsh-deck@0.2.2
 ```
 
 - `pkg` — **floating**: resolves to the registry's current version the first time it installs, and Settings later offers an update (with its own "Use it" button on that row) without ever applying one on its own.
@@ -166,7 +166,23 @@ The **terminal** holds as many shells as you want: `+` opens another, each tab h
 
 Open the tree and the browser from the rail, or from **View** (`Cmd+Alt+B` and `Cmd+Alt+W`). The editor has no toggle of its own: it appears when a file is opened, and closes when its last tab does. Every column remembers its width.
 
+The rail's **Source Control** button, or `Cmd+Alt+G`, takes the tree's place with a git panel instead — the two share that one column, the way Explorer and Source Control take turns in one VS Code sidebar, rather than each holding permanent width of its own. It lists every repository the project holds (skipping straight to its contents when there is only one), each repository's branch and how far it is ahead or behind, and its changed, staged, and untracked files. Clicking a file shows its diff inline in the editor column, coloured, beside whatever tab you already had open for that file. This reads your local git only — there is no account, no API, and no token involved.
+
+Every row carries a tick, and **a tick is a selection, not the index**: it says only *include this in the next commit*, and nothing runs until you press Commit. Tracked changes arrive ticked and untracked files arrive unticked, since a file git has never seen is exactly the one you did not mean to commit. **Commit stages what is ticked for you** — there is no separate staging step, and it is never refused for having nothing staged. It also unstages what you have unticked, and that sticks: unticking a file that was already staged unstages it for good, not just for this commit. Stage and Unstage are still there per row and per repository for the times the index itself is what you are thinking about.
+
+**Discard and a stash's Drop are confirmed, and neither can be undone** — the changes are gone, with nothing in the reflog to bring them back, and a dropped stash is reachable only by a hash the panel never showed you. Both name what they are about to throw away before they do it.
+
+The branch name in a repository's header opens the branches — local ones, remote-tracking ones under them, and **New branch…**. **Switching is attempted rather than prevented**: git carries uncommitted changes across whenever they do not collide, which is most of the time. When it does refuse, the panel repeats the files git named as being in the way and offers **Stash and switch**, which stashes, switches, and pops on the far side — one button, never automatic, and it stops and says which step failed rather than reporting a half-done switch as a success. **Stash** takes the whole working tree with an optional message; each stash lists with the branch it was made on and carries Apply, Pop, and Drop.
+
+Fetch, pull and push are on the repository header, one command each — never a
+combined sync. The app supplies no askpass of its own, deliberately: a
+credential it never sees is one it cannot leak. So a repository whose
+credential is not already cached says which one is missing and offers a
+terminal in that repository, where git's own helper can cache it once.
+
 Right-click any row in the tree for **New File**, **New Folder**, **Rename**, **Delete**, **Copy**, **Cut**, **Paste**, **Copy Path**, **Reveal in Finder**, and **Add to Chat** — which drops the file's path into the harness's message box, and is the one thing that needs the `@onetest/dsh-desktop-pane` plugin (installed by default).
+
+An `.html` or `.htm` file gets one more: **Open in Web**, which shows it in the Web tab as a browser would — stylesheets, images, and scripts all working, rather than as source. It is saved first if you have unsaved edits in it, since the view loads from disk and would otherwise show the file as it was rather than as it is. This is the only way a local file reaches that view: the address bar and the agent's own `open` still take `http`/`https` only, and the entry has to sit inside a project the harness has open.
 
 All of it draws in the harness's own design tokens and follows the harness's own **Appearance** setting — set dark there and these columns turn dark with it, without a restart.
 
@@ -192,6 +208,7 @@ The agent drives these views through two MCP servers on `127.0.0.1`, running for
 | `type`, `press_key` | Types key by key, so pickers and autocompletes react. Replacing a value selects the old one and types over it, so the field never passes through empty — a date picker handed an empty value unmounts the form around it. `Meta+a`, `Meta+c` and the rest carry the editing command the browser acts on, so they select and copy rather than merely being pressed. |
 | `select_option` | Chooses in a native `<select>`, by value or by the label you read. |
 | `drag` | Presses, moves across in steps, releases — what a sortable list or a resize handle actually waits for. Onto an element, or by a distance in pixels, or both. |
+| `drag_start`, `drag_move`, `drag_drop`, `drag_cancel` | The same drag, held open across calls. `drag` commits to its whole path before the first move, so it cannot see what the page did in the middle of one — and a sortable reorders under the pointer, which moves the row that was aimed at and lands the item a position short. Holding it open means moving, reading the page to see where things now are, moving again, and dropping when it looks right. `drag_cancel` lets go without dropping; a drag left held swallows the user's own next click. |
 | `upload_file` | Puts a file on a file input without a chooser. The file must be inside an open project. |
 | `handle_dialogs` | Decides what happens to `alert`, `confirm`, and `prompt`. They are dismissed by default and always answered at once, since a dialog left open blocks the page; whatever appeared is reported with the action that caused it. |
 | `wait_for` | Waits for an element or some visible text to appear or go — or, naming neither, simply for the time to pass. Also how you wait out something timed: a dialog a page opens seconds after a click is reported when this returns. |
@@ -205,6 +222,8 @@ Alongside whatever it was asked to do, an action reports two things it did not: 
 The browser is driveable from the moment it opens, not from the first tool call: a page can open a dialog on its own, and one that opens while nothing is listening blocks the page until someone dismisses it by hand.
 
 Every action waits for its target to stop moving before acting on it. That is not caution about timing: a page whose adverts are still arriving moves its own controls by more than the height of one, and a click at a point measured a moment earlier lands on the button above the one that was asked for.
+
+A drop target decides where an item lands from the positions it was dragged over, and a list that reorders as the pointer crosses it moves the very row that was aimed at. `drag` therefore lands within a position of where it was sent, which is why the held-open calls exist: read the page between moves and stop when it shows what you wanted. Note that such a list swaps on *crossing* a row's midpoint, so a move that merely ends on one, with the pointer already there, does nothing — overshoot and settle back.
 
 Two limits worth knowing. `window.prompt` is replaced rather than intercepted, because Electron does not implement it — the substitute answers from the same policy, so a page calling `prompt` behaves as it would in Chrome instead of throwing. And where an item lands in a sortable can vary by a position, because the list reorders under the pointer as it moves — as it does for a person.
 
@@ -226,18 +245,18 @@ Design notes and the decisions taken while building this live in [`docs/`](docs/
 
 ## Known limitations
 
-- **A plugin that requires its own configuration can crash the whole boot, not just itself.** The app's own loadability check only confirms the entry file and its declared dependencies resolve — it cannot know a plugin also requires config this version has no way to supply (the way `@onetest/dsh-deck` requires a `base` route-mount path with no default). Such a plugin installs and passes that check, but cordis's own config resolution then rejects it at boot, and that rejection currently takes the whole harness process down rather than just omitting the one plugin. There is no per-plugin configuration yet, so a plugin with a required config field of its own cannot be listed safely.
+- **A plugin's own configuration is not validated until the harness boots.** Each entry carries a free-form `config` object, passed to the cordis overlay verbatim, so a plugin with a required field of its own can be listed and configured (`@onetest/dsh-deck` needs a `base` route-mount path, for example, and works once given one). What the app cannot do is check that object against a schema only the plugin knows: a wrong or missing field surfaces when cordis rejects it at boot, not when you save. That failure is attributed back to the one entry that caused it and shown on its Settings row rather than taking the harness down with it.
 - **MCP servers needing a browser sign-in cannot be added.** Linear, Atlassian, and any other OAuth-only server are listed but disabled. The MCP specification defines authorization generically and the SDK already implements it, so this is one generic flow rather than per-vendor work — but a desktop redirect URI has to be settled first.
 - **A local MCP server whose first run downloads its package can start with no tools.** `npx -y <package>` fetches on first use, and the MCP client waits for the server's tool list on a 60-second budget the harness does not expose. Exceed it and the server connects with zero tools and no obvious error. Pre-install the package, or give an absolute command path.
 - **`dsh://` links only focus the app.** The harness Web UI has no per-session URLs, so there is no address to deep-link to.
-- **Not notarized by default, and macOS-only.** Builds are ad-hoc signed, so a downloaded copy needs one trip through System Settings before it opens; `npm run release` removes that with a Developer ID. No Windows or Linux packaging target is configured.
+- **macOS only.** The packaging target is `mac-arm64`; no Windows or Linux target is configured. (Released builds are notarized — only a build you make yourself is ad-hoc signed. See Running it above.)
 - The tray icon, menus, and shortcut have not been verified visually by an automated test — only their behavior in code.
 
 ## Releases
 
 Released builds are on the [releases page](https://github.com/onetest-ai/dsh-desktop/releases); what has landed since the last one is in [`CHANGELOG.md`](CHANGELOG.md).
 
-Cutting one: `npm run release` (with a Developer ID certificate installed and notary credentials in the environment) produces a signed, notarized, stapled `.dmg` under `release/`. Attach it to a GitHub release — never commit it, since GitHub rejects files over 100MB and a binary in git history is permanent.
+Cutting one: `npm run release` (with a Developer ID certificate installed and notary credentials in the environment) produces a `.dmg` under `release/` holding a signed, notarized, stapled app. Attach it to a GitHub release — never commit it, since GitHub rejects files over 100MB and a binary in git history is permanent.
 
 ## Contributing
 

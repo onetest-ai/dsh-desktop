@@ -26,6 +26,9 @@
     <p class="status" id="editor-status" role="status">
       <span id="status-text"></span>
       <button type="button" id="toggle-preview" class="status-toggle" hidden>Preview</button>
+      <!-- Not a toggle: it saves the tab and hands the file to the Web tab,
+           which is a view of its own rather than anything in this column. -->
+      <button type="button" id="open-in-web" class="status-toggle" hidden>Open in Web</button>
     </p>
   </section>
   <!-- Only the chrome: the page itself is a view of its own, stacked over

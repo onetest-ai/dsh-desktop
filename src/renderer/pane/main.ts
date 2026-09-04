@@ -190,6 +190,15 @@ el('toggle-preview').addEventListener('click', () => {
   renderPreview()
 })
 
+// Asked for by main when the tree's Open in Web names a file. Saving first
+// is what makes the preview the file as it stands: the web view loads from
+// disk, and unsaved edits are invisible to it.
+window.pane.onSaveForWeb((root, relative) => {
+  void editor.saveIfDirty(root, relative).then(() => {
+    window.pane.loadInWeb(root, relative)
+  })
+})
+
 // A preview is not a browser: a link opens where the user's links open.
 el('preview').addEventListener('click', (event) => {
   const url = openMarkdownLink(event.target as Element | null)
@@ -225,6 +234,13 @@ window.pane.onFileChanged((root, relative) => {
 window.pane.onShowDiff((root, relative, proposed) => {
   selectTab('editor', view)
   void editor.showDiff({ root, relative }, proposed)
+})
+
+// Sent by main when a row in the git panel is clicked. Both sides come from
+// git, so nothing is read from disk and the file's own tab is left alone.
+window.pane.onDiffTexts((root, relative, original, modified, inline) => {
+  selectTab('editor', view)
+  editor.showTexts({ root, relative }, original, modified, inline)
 })
 
 // Read by main when a tool asks what the user has selected. A function on the

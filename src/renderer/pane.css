@@ -587,3 +587,504 @@ body {
   border-radius: 50%;
   background: var(--dsw-specific-sidebar-fill);
 }
+
+/*
+ * The source-control panel.
+ *
+ * The four status colours are the only names in this file that are not
+ * upstream's, because upstream has no notion of a changed file. Each is
+ * defined as one of its alias tokens rather than as a literal, so they follow
+ * the harness's Appearance setting exactly as every other surface here does —
+ * and they are declared on `body`, which is the element the vendored sheets
+ * define their own tokens on.
+ */
+body {
+  /* Added, staged or otherwise: the same green upstream uses for a success. */
+  --dsh-git-added: var(--dsw-alias-state-success-primary);
+  /* Modified: upstream's warn amber, which is what "changed, not yet dealt
+     with" reads as beside the other three. */
+  --dsh-git-modified: var(--dsw-alias-state-warn-primary);
+  /* Deleted: upstream's error red. */
+  --dsh-git-deleted: var(--dsw-alias-state-error-primary);
+  /* Untracked: dimmed rather than coloured — git has never seen the file, so
+     it is not a change to anything yet. */
+  --dsh-git-untracked: var(--dsw-alias-label-tertiary);
+}
+
+/* One repository. Given a header only when there is more than one, since a
+   heading naming the project you are already in tells you nothing. */
+.repo {
+  margin-bottom: 8px;
+}
+
+.repo-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 3px 4px;
+  border-radius: 6px;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
+/* The part that collapses the repository. A sibling of the header's actions
+   rather than their parent: a button inside a button is invalid, and a press
+   meant for Stage All would open and shut the section under it. */
+.repo-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.repo-head:hover,
+.repo-head:focus-within {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* The branch, and how far it is from its remote. Dimmed: it is context for
+   the name beside it, not a second heading. */
+.repo-name {
+  overflow: hidden;
+  flex: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-twisty {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* The branch is a control, not a label: it opens the list of them. Styled to
+   read as the dimmed tag it was, since what it says is still context for the
+   name beside it — the press is discovered by hovering it, the way the row
+   actions are. */
+.repo-branch {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  overflow: hidden;
+  flex: none;
+  max-width: 60%;
+  padding: 1px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.repo-branch:hover,
+.repo-branch[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.repo-branch span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The branch list. In the flow under the header rather than floating over the
+   panel: it is a short list in a narrow column, and a popup would have to be
+   positioned, dismissed on scroll, and kept out of the window's edge for no
+   gain over pushing the rows down for as long as it is open. */
+.branch-menu {
+  display: flex;
+  gap: 1px;
+  flex-direction: column;
+  margin: 2px 0 4px;
+  padding: 3px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 6px;
+  background: var(--dsw-alias-surface-primary, transparent);
+}
+
+/* The running state stands where the header's actions were, so the eye does
+   not have to find a new place to look for the answer to what it just did. */
+.sync-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sync-running-text {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.branch-item {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  overflow: hidden;
+  padding: 3px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.branch-item:hover,
+.branch-item:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* A fixed column for the tick, so the names line up whether or not the branch
+   is the one you are on. */
+.branch-mark {
+  flex: none;
+  width: 9px;
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.branch-item-name {
+  overflow: hidden;
+  flex: 0 1 auto;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-current .branch-item-name {
+  font-weight: 600;
+}
+
+/* What it tracks, dimmed: it qualifies the name rather than being one. */
+.branch-upstream {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--dsw-alias-label-tertiary);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-divider {
+  margin: 4px 0 2px;
+  padding: 0 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.branch-new {
+  margin-top: 2px;
+  border-top: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 0 0 4px 4px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The header's inline prompt, for a branch name or a stash message. Takes the
+   whole line because it takes the header's place. */
+.branch-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 5px;
+  border: 1px solid var(--dsw-alias-interactive-primary, currentColor);
+  border-radius: 4px;
+  background: var(--dsw-alias-surface-primary, transparent);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
+/* What git refused, and the one thing offered about it. Amber rather than
+   red: nothing has gone wrong yet, and the switch is still available. */
+.branch-blocked {
+  display: flex;
+  gap: 6px;
+  flex-direction: column;
+  align-items: flex-start;
+  margin: 2px 0 4px;
+  padding: 6px;
+  border: 1px solid var(--dsh-git-modified);
+  border-radius: 6px;
+}
+
+.branch-blocked-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.branch-blocked-button {
+  padding: 3px 8px;
+  border: none;
+  border-radius: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* The no-upstream note carries two buttons where the blocked-switch note
+   carries one, so they sit in a row under a sentence that keeps the width. */
+.sync-trouble {
+  flex-flow: row wrap;
+  align-items: center;
+}
+
+.sync-trouble .branch-blocked-text {
+  flex: 1 0 100%;
+}
+
+/* A stash row has no tick and no status letter: it is not a file, and the
+   selection means "include in the next commit", which a stash cannot be. */
+.stash-row {
+  padding-left: 6px;
+}
+
+.stash-message {
+  overflow: hidden;
+  flex: 0 1 auto;
+  text-overflow: ellipsis;
+}
+
+/* Staged Changes, Changes, Untracked. Upper-cased and small, the way a
+   section heading reads in a sidebar that is scanned rather than read. */
+.section-title {
+  margin: 8px 0 2px;
+  padding: 0 4px;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* How many rows are under this heading, so the size of the job is readable
+   without counting them. */
+.section-count {
+  color: var(--dsw-alias-label-tertiary);
+  font-weight: 400;
+  opacity: 0.75;
+}
+
+.git-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Tick, then the row proper, then the actions and the status letter. The row
+   is a container and not itself the button: an input and three buttons nested
+   inside a button are invalid, and every one of them would also open the diff.
+   */
+.git-rows .row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px 3px 4px;
+  cursor: default;
+}
+
+/* Icon, name, path — in that order, so the eye runs down a single column of
+   filenames and reads status as a column of its own rather than as a prefix
+   to each name. This is what opens the diff, and it takes the row's width so
+   the whole line is a target. */
+.row-open {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The selection, not the index. Sized to the icon column beside it so the
+   filenames still line up down the list. */
+.git-tick {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--dsw-alias-interactive-primary, currentColor);
+}
+
+/* Stage, Discard, and the repository's three. Out of the way until the row is
+   pointed at or tabbed into: a column of glyphs on every row would compete
+   with the filenames, which are what the list is for. Focus counts as well as
+   hover, or the keyboard could never reach them. */
+.row-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  align-items: center;
+  opacity: 0;
+}
+
+.row:hover .row-actions,
+.row:focus-within .row-actions,
+.repo-head:hover .row-actions,
+.repo-head:focus-within .row-actions {
+  opacity: 1;
+}
+
+.row-action {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.row-action:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The commit box. Two rows to start and four at most: a message that has
+   grown past four rows is one being written in the wrong place, and a box
+   that keeps growing pushes the file list off the panel. */
+.commit {
+  display: flex;
+  gap: 6px;
+  flex-direction: column;
+  margin: 0 0 8px;
+}
+
+/* Which repository the commit goes to, present only when more than one has
+   something ticked. A row rather than a bare control: the word is what makes
+   a list of checkout names mean "repository" and not "branch". */
+.commit-repo {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.commit-repo select {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 4px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 4px;
+  background: var(--dsw-alias-surface-primary, transparent);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
+.commit-message {
+  min-height: 40px;
+  max-height: 76px;
+  padding: 5px 6px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 6px;
+  background: var(--dsw-alias-surface-primary, transparent);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  resize: vertical;
+}
+
+.commit-button {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.commit-button:disabled {
+  color: var(--dsw-alias-label-tertiary);
+  cursor: default;
+}
+
+/* Why an action did not run. The repo's name and git's first line, which is
+   what main sends — never a stack trace. */
+.git-note {
+  margin: 0 0 8px;
+  padding: 0 4px;
+  color: var(--dsh-git-deleted);
+  font-size: 11px;
+}
+
+/* The filename never truncates: it is the thing being looked for, and an
+   ellipsis here would eat it before the path that only qualifies it. */
+.git-name {
+  flex: none;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+}
+
+/* A deletion is said by the strike rather than by colour, so the one signal
+   the list carries is not spent on every row at once. */
+.git-gone {
+  color: var(--dsw-alias-label-tertiary);
+  text-decoration: line-through;
+}
+
+/* The folder, or where a rename came from. Dimmed and smaller: it is there
+   only when two rows would otherwise read the same, and it gives up its
+   width first. */
+.git-dir {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Last in the row and the only thing in it that carries colour. Fixed width
+   so the letters line up under each other whatever the names beside them do. */
+.git-status {
+  display: flex;
+  flex: none;
+  justify-content: center;
+  width: 12px;
+  margin-left: auto;
+  font-family: var(--ds-font-family-code);
+  font-weight: 600;
+}
+

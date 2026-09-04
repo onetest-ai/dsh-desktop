@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('shell', {
   nudgeColumn: (column: string, delta: number) => ipcRenderer.send('shell:nudge-column', column, delta),
   commitColumns: () => ipcRenderer.send('shell:commit-columns'),
   toggleFiles: () => ipcRenderer.send('shell:toggle-files'),
+  toggleGit: () => ipcRenderer.send('shell:toggle-git'),
   toggleWeb: () => ipcRenderer.send('shell:toggle-web'),
   toggleTerminal: () => ipcRenderer.send('shell:toggle-terminal'),
   onPlaces: (listener: (places: Record<string, never>) => void) => {

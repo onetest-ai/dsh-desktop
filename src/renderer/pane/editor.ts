@@ -40,13 +40,15 @@ export interface Documents {
    */
   openMedia(url: string, name: string): Document
   /**
-   * Open a file beside the text proposed for it, read-only on both sides.
-   * @param original - the file as it is on disk.
-   * @param proposed - the text proposed for it.
+   * Open two texts beside each other, read-only on both sides.
+   * @param original - the left-hand text.
+   * @param proposed - the right-hand text.
    * @param name - the file's path, which chooses the language.
+   * @param inline - true for one pane rather than two; defaults to two, which
+   *   is what an agent's proposal has always shown.
    * @returns the document, not yet showing.
    */
-  openDiff(original: string, proposed: string, name: string): Document
+  openDiff(original: string, proposed: string, name: string, inline?: boolean): Document
 }
 
 /** What the editor needs from main and from the editor library. */
@@ -78,6 +80,16 @@ export interface Tab {
   /** The text as last read or written, which is what makes "dirty" answerable. */
   saved: string
   mode: TabMode
+  /**
+   * Which of the two callers opened a `diff` tab; meaningless otherwise.
+   *
+   * Both `showDiff` and `showTexts` produce `mode: 'diff'` tabs, but they are
+   * not the same kind of thing: one is an agent's proposal for a file that
+   * has not changed yet, the other a view of a change that already happened.
+   * The status line says which, since the wording that fits one is wrong for
+   * the other.
+   */
+  diffKind?: 'proposal' | 'git'
 }
 
 /**
@@ -128,8 +140,12 @@ export class Editor {
    * @returns resolution once it is showing, or its failure reported.
    */
   async open(file: OpenFile): Promise<void> {
-    const already = this.find(file)
-    if (already !== undefined && already.mode === 'edit') {
+    // Matched on the mode too: a diff for this file may be open beside the
+    // editable tab, and the panel's whole point is reading the change and
+    // then editing the file. Closing the diff to open the file would undo
+    // half of what the user just did.
+    const already = this.findIn(file, 'edit')
+    if (already !== undefined) {
       this.show(already)
       return
     }
@@ -138,9 +154,12 @@ export class Editor {
       this.deps.say(outcome.reason)
       return
     }
-    // A diff for this file is replaced rather than joined: two tabs for one
-    // path, one of them read-only, is a puzzle rather than a convenience.
-    if (already !== undefined) this.drop(already)
+    // An agent's proposal is a claim on the file itself, and opening the file
+    // answers it — leaving it would keep a tab showing text that is neither
+    // the file nor a change anyone made. A git diff is a second view of the
+    // same file and stays.
+    const proposal = this.findDiff(file, 'proposal')
+    if (proposal !== undefined) this.drop(proposal)
     this.add({
       file,
       document: this.deps.documents.open(outcome.text, file.relative),
@@ -183,19 +202,51 @@ export class Editor {
       this.deps.say(outcome.reason)
       return
     }
-    const already = this.find(file)
+    // Asked of the editable tab by name. Only that tab can be dirty, and a
+    // git diff of the same file may be sitting in front of it — reading the
+    // first tab by path would inspect that one instead and find it clean.
+    const editing = this.findIn(file, 'edit')
     // An unsaved edit is never taken away by an agent's proposal: the
     // proposal opens beside nothing, and the user's tab stays as it is.
-    if (already !== undefined && this.isDirty(already)) {
+    if (editing !== undefined && this.isDirty(editing)) {
       this.deps.say(`${file.relative} has unsaved edits, so the proposed change was not opened.`)
       return
     }
-    if (already !== undefined) this.drop(already)
+    if (editing !== undefined) this.drop(editing)
+    // Replaces the previous proposal for this file, and leaves a git diff of
+    // it alone: the two are different claims and only one is this one's.
+    const stale = this.findDiff(file, 'proposal')
+    if (stale !== undefined) this.drop(stale)
     this.add({
       file,
       document: this.deps.documents.openDiff(outcome.text, proposed, file.relative),
       saved: proposed,
       mode: 'diff',
+      diffKind: 'proposal',
+    })
+  }
+
+  /**
+   * Show a diff between two texts the caller already has.
+   *
+   * Unlike `showDiff`, neither side is read from disk and the file's own
+   * editor tab is left alone — a git diff is a second view of a file rather
+   * than a proposal to replace what the user is editing, so it neither
+   * closes that tab nor refuses because it has unsaved edits.
+   * @param file - which file the diff is about.
+   * @param original - the left-hand text.
+   * @param modified - the right-hand text.
+   * @param inline - true for one pane rather than two.
+   */
+  showTexts(file: OpenFile, original: string, modified: string, inline: boolean): void {
+    const already = this.findDiff(file, 'git')
+    if (already !== undefined) this.drop(already)
+    this.add({
+      file,
+      document: this.deps.documents.openDiff(original, modified, file.relative, inline),
+      saved: modified,
+      mode: 'diff',
+      diffKind: 'git',
     })
   }
 
@@ -206,7 +257,16 @@ export class Editor {
   show(tab: Tab): void {
     this.active = tab
     tab.document.activate()
-    this.deps.say(tab.mode === 'diff' ? `Proposed change to ${tab.file.relative}` : tab.file.relative)
+    // A git diff is a view of a change that already happened, not a proposal
+    // to make one — the two `diff` tabs read the same but mean opposite
+    // things, so the wording says which this is.
+    this.deps.say(
+      tab.mode !== 'diff'
+        ? tab.file.relative
+        : tab.diffKind === 'git'
+          ? `Git diff for ${tab.file.relative}`
+          : `Proposed change to ${tab.file.relative}`,
+    )
     this.deps.render()
   }
 
@@ -238,7 +298,35 @@ export class Editor {
    * @returns resolution once the write settled.
    */
   async save(): Promise<void> {
-    const tab = this.active
+    await this.saveTab(this.active)
+  }
+
+  /**
+   * Write one file back to disk, if it is open here with unsaved edits.
+   *
+   * The tree is its own page and cannot see these buffers, so anything that
+   * acts on a file as it stands — showing it in the web view, for one — has
+   * to come through here first. A file that is not open, or open and clean,
+   * is already what is on disk and needs no write.
+   * @param root - the project the file is in.
+   * @param relative - its path within the project.
+   * @returns resolution once any write settled.
+   */
+  async saveIfDirty(root: string, relative: string): Promise<void> {
+    // The editable tab specifically: a diff for the same file may be open in
+    // front of it in the strip, and only an editable tab holds text that
+    // could need writing.
+    const tab = this.findIn({ root, relative }, 'edit')
+    if (tab === undefined || !this.isDirty(tab)) return
+    await this.saveTab(tab)
+  }
+
+  /**
+   * Write one tab back to disk.
+   * @param tab - the tab to write, or undefined for nothing to do.
+   * @returns resolution once the write settled.
+   */
+  private async saveTab(tab: Tab | undefined): Promise<void> {
     if (tab === undefined) return
     if (tab.mode === 'diff') {
       // A diff is a change to look at before it happens. Saving from one
@@ -279,10 +367,13 @@ export class Editor {
    * @returns resolution once reloaded, or the conflict reported.
    */
   async reload(file: OpenFile): Promise<void> {
-    const tab = this.find(file)
     // Only an editable tab holds text that could go stale: a diff is not a
-    // view of the file as it is, and a media tab reads the file itself.
-    if (tab === undefined || tab.mode !== 'edit') return
+    // view of the file as it is, and a media tab reads the file itself. Asked
+    // for by mode rather than filtered after the fact, or a diff open for the
+    // same file would match first and the editable tab behind it would keep
+    // showing text from before the change.
+    const tab = this.findIn(file, 'edit')
+    if (tab === undefined) return
     if (this.isDirty(tab)) {
       this.deps.say(`${file.relative} changed on disk. Save to overwrite, or reopen it to discard your edits.`)
       return
@@ -315,6 +406,44 @@ export class Editor {
    */
   private find(file: OpenFile): Tab | undefined {
     return this.tabs.find((tab) => tab.file.root === file.root && tab.file.relative === file.relative)
+  }
+
+  /**
+   * The tab for one file in one mode.
+   *
+   * A file may have an editor tab and a git diff tab open at once, so the
+   * mode is part of a tab's identity: looking one up by path alone would
+   * return whichever was opened first and close the wrong one.
+   * @param file - the file to look for.
+   * @param mode - which of its tabs is wanted.
+   * @returns the tab, or undefined.
+   */
+  /**
+   * The diff tab of one kind for one file.
+   *
+   * Mode alone is not enough once both kinds can be open at once: a lookup
+   * for "the diff" finds whichever was opened first, so a proposal could
+   * replace a git diff, and — worse — `showDiff`'s refusal could inspect a
+   * git diff's buffer, which is never dirty, and let a proposal through over
+   * the unsaved edits it exists to protect.
+   * @param file - the file to look for.
+   * @param kind - which diff is wanted.
+   * @returns the tab, or undefined.
+   */
+  private findDiff(file: OpenFile, kind: 'proposal' | 'git'): Tab | undefined {
+    return this.tabs.find(
+      (tab) =>
+        tab.file.root === file.root &&
+        tab.file.relative === file.relative &&
+        tab.mode === 'diff' &&
+        tab.diffKind === kind,
+    )
+  }
+
+  private findIn(file: OpenFile, mode: Tab['mode']): Tab | undefined {
+    return this.tabs.find(
+      (tab) => tab.file.root === file.root && tab.file.relative === file.relative && tab.mode === mode,
+    )
   }
 
   /**

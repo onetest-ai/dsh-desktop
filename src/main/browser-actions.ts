@@ -97,11 +97,15 @@ async function locate(session: BrowserSession, target: Target, scroll = true): P
 }
 
 /**
- * Whether a `locate` returned a refusal rather than a position.
- * @param value - what `locate` returned.
+ * Whether a step returned a refusal rather than what was asked for.
+ *
+ * Generic over the success shape because more than `locate` reports this way:
+ * a refusal is the one branch every caller has to check, and narrowing it
+ * once here is what keeps that check to a line.
+ * @param value - what the step returned.
  * @returns true when it is a refusal.
  */
-function refused(value: Located | ActionResult): value is ActionResult {
+function refused<T extends object>(value: T | ActionResult): value is ActionResult {
   return 'ok' in value
 }
 
@@ -524,6 +528,253 @@ export async function drag(
     clickCount: 1,
   })
   return { ok: true, message: `Dragged ${start.tag} to ${describe(end, offset)}.` }
+}
+
+/**
+ * A drag the caller is holding open across calls.
+ *
+ * The one-shot `drag` decides its whole path before the first move, so it
+ * cannot see what the page did in the middle of it. On a sortable that
+ * reorders under the pointer that costs a position: the endpoint measured
+ * before the drag began sits at the boundary of the row it was aimed at
+ * rather than past its midpoint, and the item lands one short. Holding the
+ * gesture open lets the caller move, read the page, and move again — which
+ * is what a person does, and the only way to land it reliably.
+ */
+interface Gesture {
+  /** Where the pointer is now, in page points. */
+  x: number
+  y: number
+  /** What was picked up, for the messages. */
+  tag: string
+  /**
+   * The payload the page put on the drag, when it started a native one.
+   *
+   * Present means every later move has to be sent as a drag event: Chromium
+   * owns the pointer from the first move, and mouse events are swallowed.
+   */
+  data?: DragPayload
+}
+
+/**
+ * The gesture each session is holding, if any.
+ *
+ * Keyed by session rather than held on it so `browser-cdp` stays a transport:
+ * what a half-finished drag means is this module's business. Weak so a
+ * session that goes away takes its gesture with it.
+ */
+const held = new WeakMap<BrowserSession, Gesture>()
+
+/** Whether this session is part-way through a drag. */
+export function holding(session: BrowserSession): boolean {
+  return held.get(session) !== undefined
+}
+
+/**
+ * Move the pointer from one point to another in steps, as the gesture needs.
+ *
+ * A native drag takes drag events and an ordinary one takes mouse moves; both
+ * take the whole path, because a drop target registers itself on `dragenter`
+ * and a sortable decides where to land from the moves it saw, so a single
+ * jump to the destination reorders nothing.
+ * @param session - the protocol session.
+ * @param gesture - the drag being held; its position is advanced.
+ * @param to - the point to end at.
+ */
+async function sweep(session: BrowserSession, gesture: Gesture, to: { x: number; y: number }): Promise<void> {
+  const from = { x: gesture.x, y: gesture.y }
+  for (let step = 1; step <= DRAG_STEPS; step += 1) {
+    const ratio = step / DRAG_STEPS
+    const at = { x: from.x + (to.x - from.x) * ratio, y: from.y + (to.y - from.y) * ratio }
+    if (gesture.data === undefined) {
+      await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at, button: 'left', buttons: 1 })
+    } else {
+      // Both at every point: a drop target registers itself on `dragenter`
+      // and only then reads `dragover`, so a path that enters once at the
+      // start crosses every element after it without any of them listening.
+      await session.send('Input.dispatchDragEvent', { ...at, data: gesture.data, type: 'dragEnter' })
+      await session.send('Input.dispatchDragEvent', { ...at, data: gesture.data, type: 'dragOver' })
+    }
+    await pause(DRAG_FRAME_MS)
+  }
+  gesture.x = to.x
+  gesture.y = to.y
+}
+
+/**
+ * Where a move or a drop is aimed, from a target, an offset, or both.
+ * @param session - the protocol session.
+ * @param gesture - the drag being held.
+ * @param to - how the element to aim at is named, or undefined to aim at an
+ *   offset from where the pointer is now.
+ * @param offset - pixels to add to the point.
+ * @returns the point, how to describe it, and whether it names an element
+ *   (which decides the preposition), or why it could not be found.
+ */
+async function aim(
+  session: BrowserSession,
+  gesture: Gesture,
+  to: Target | undefined,
+  offset: { dx: number; dy: number },
+): Promise<{ x: number; y: number; what: string; named: boolean } | ActionResult> {
+  if (to === undefined) {
+    if (offset.dx === 0 && offset.dy === 0) return { ok: false, reason: 'Name something to aim at, or an offset.' }
+    return {
+      x: gesture.x + offset.dx,
+      y: gesture.y + offset.dy,
+      what: `by ${offset.dx} across and ${offset.dy} down`,
+      named: false,
+    }
+  }
+  // Read where it is now, not where it was: the whole point of holding the
+  // gesture open is that the page has moved since the last call.
+  const found = await locate(session, to, false)
+  if (refused(found)) return found
+  return { x: found.x + offset.dx, y: found.y + offset.dy, what: found.tag, named: true }
+}
+
+/**
+ * Press on an element and hold, without moving or releasing.
+ *
+ * The press alone starts nothing — a page using the HTML5 drag API begins its
+ * drag on the first move — so this also makes that first move, and reports
+ * which kind of drag the page took it as. The caller needs to know: a native
+ * one is steered with drag events, and the mouse is never released.
+ * @param session - the protocol session.
+ * @param from - how the element to pick up is named.
+ * @returns what is being held, or why nothing is.
+ */
+export async function dragStart(session: BrowserSession, from: Target): Promise<ActionResult> {
+  if (held.get(session) !== undefined) {
+    return { ok: false, reason: 'A drag is already being held. Drop it or cancel it first.' }
+  }
+  const start = await settle(session, from)
+  if (refused(start)) return start
+  await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x, y: start.y, buttons: 0 })
+  await session.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: start.x,
+    y: start.y,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+  })
+  // A frame between the press and the first move: a sortable binds its move
+  // handler on mousedown, and a sequence sent without pauses is missed.
+  await pause(DRAG_FRAME_MS)
+  const gesture: Gesture = { x: start.x, y: start.y, tag: start.tag }
+  held.set(session, gesture)
+  const data = await beginNativeDrag(session, { x: start.x, y: start.y })
+  if (data !== undefined) gesture.data = data
+  return {
+    ok: true,
+    message:
+      data === undefined
+        ? `Holding ${start.tag}. Move, then drop.`
+        : `Holding ${start.tag}, as an HTML5 drag. Move, then drop.`,
+  }
+}
+
+/**
+ * Move a held drag to a point, and keep holding it.
+ * @param session - the protocol session.
+ * @param to - how the element to move onto is named, or undefined to move by
+ *   an offset from where the pointer is now.
+ * @param offset - pixels to add to the point.
+ * @returns where it moved, or why it did not.
+ */
+export async function dragMove(
+  session: BrowserSession,
+  to: Target | undefined,
+  offset: { dx: number; dy: number } = { dx: 0, dy: 0 },
+): Promise<ActionResult> {
+  const gesture = held.get(session)
+  if (gesture === undefined) return { ok: false, reason: 'Nothing is being dragged. Start one first.' }
+  const at = await aim(session, gesture, to, offset)
+  if (refused(at)) return at
+  await sweep(session, gesture, at)
+  return { ok: true, message: `Moved ${at.named ? 'to ' : ''}${at.what}. Still holding.` }
+}
+
+/**
+ * Move a held drag to its destination and let go.
+ * @param session - the protocol session.
+ * @param to - how the element to drop on is named, or undefined to drop at an
+ *   offset from where the pointer is now.
+ * @param offset - pixels to add to the drop point.
+ * @returns where it was dropped, or why it was not.
+ */
+export async function dragDrop(
+  session: BrowserSession,
+  to: Target | undefined,
+  offset: { dx: number; dy: number } = { dx: 0, dy: 0 },
+): Promise<ActionResult> {
+  const gesture = held.get(session)
+  if (gesture === undefined) return { ok: false, reason: 'Nothing is being dragged. Start one first.' }
+  const at = await aim(session, gesture, to, offset)
+  if (refused(at)) return at
+  try {
+    await sweep(session, gesture, at)
+    if (gesture.data === undefined) {
+      await session.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: at.x,
+        y: at.y,
+        button: 'left',
+        buttons: 0,
+        clickCount: 1,
+      })
+    } else {
+      await session.send('Input.dispatchDragEvent', { type: 'drop', x: at.x, y: at.y, data: gesture.data })
+    }
+    const where = `${at.named ? 'on ' : ''}${at.what}`
+    return {
+      ok: true,
+      message: gesture.data === undefined ? `Dropped ${where}.` : `Dropped ${where}, as an HTML5 drag.`,
+    }
+  } finally {
+    held.delete(session)
+    // Left on, every later drag on this page would be caught and never
+    // completed — including one the user starts with their own mouse.
+    await session.send('Input.setInterceptDrags', { enabled: false }).catch(() => undefined)
+  }
+}
+
+/**
+ * Let go of a held drag without dropping it.
+ *
+ * The page is left as it was rather than mid-gesture: a button held down
+ * swallows the user's own next click, and an interception left on catches
+ * every later drag on the page, theirs included.
+ * @param session - the protocol session.
+ * @returns that it was cancelled, or that there was nothing to cancel.
+ */
+export async function dragCancel(session: BrowserSession): Promise<ActionResult> {
+  const gesture = held.get(session)
+  if (gesture === undefined) return { ok: false, reason: 'Nothing is being dragged.' }
+  try {
+    if (gesture.data === undefined) {
+      await session.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: gesture.x,
+        y: gesture.y,
+        button: 'left',
+        buttons: 0,
+        clickCount: 1,
+      })
+    } else {
+      await session.send('Input.dispatchDragEvent', {
+        type: 'dragCancel',
+        x: gesture.x,
+        y: gesture.y,
+        data: gesture.data,
+      })
+    }
+    return { ok: true, message: 'Cancelled the drag.' }
+  } finally {
+    held.delete(session)
+    await session.send('Input.setInterceptDrags', { enabled: false }).catch(() => undefined)
+  }
 }
 
 /**

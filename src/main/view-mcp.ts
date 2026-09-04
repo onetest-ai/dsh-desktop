@@ -54,6 +54,14 @@ export interface BrowserAutomation {
   selectOption(target: string, value: string): Promise<ActionResult>
   /** Drag one element onto another, by an offset, or both. */
   drag(from: string, to: string | undefined, offset: { dx: number; dy: number }): Promise<ActionResult>
+  /** Press on an element and hold, so the drag can be steered call by call. */
+  dragStart(from: string): Promise<ActionResult>
+  /** Move a held drag, and keep holding it. */
+  dragMove(to: string | undefined, offset: { dx: number; dy: number }): Promise<ActionResult>
+  /** Move a held drag to its destination and let go. */
+  dragDrop(to: string | undefined, offset: { dx: number; dy: number }): Promise<ActionResult>
+  /** Let go of a held drag without dropping it. */
+  dragCancel(): Promise<ActionResult>
   /** Run an expression in the page. */
   evaluate(expression: string): Promise<Evaluated>
   /** Put a file on a file input; the path is checked by the caller. */
@@ -341,6 +349,58 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
     },
     async ({ from, to, dx, dy }) =>
       await acted(await deps.browser.drag(from, to, { dx: dx ?? 0, dy: dy ?? 0 })),
+  )
+
+  if (browser) server.registerTool(
+    'drag_start',
+    {
+      title: 'Begin a drag in the built-in browser',
+      description:
+        "Press on an element in the desktop app's built-in browser and hold, without releasing. Use this instead of `drag` when where the item lands depends on what the page does mid-drag — a sortable list reorders under the pointer, so the row you aimed at has moved by the time you reach it, and a single path measured beforehand lands a position short. Hold it, `drag_move`, read the page to see where things now are, move again, then `drag_drop`. The reply says whether the page took it as an HTML5 drag; either way the later calls are the same. Cancel with `drag_cancel` if you change your mind — a drag left held swallows the user's own next click.",
+      inputSchema: { from: target },
+    },
+    async ({ from }) => await acted(await deps.browser.dragStart(from)),
+  )
+
+  if (browser) server.registerTool(
+    'drag_move',
+    {
+      title: 'Move a held drag in the built-in browser',
+      description:
+        "Move a drag being held in the desktop app's built-in browser, onto another element or by a distance in pixels with `dx`/`dy`, and keep holding it. The pointer sweeps across rather than jumping, which is what a sortable and an HTML5 drop target both wait for. The element is measured now, not when the drag began, so a page that has reordered is followed. Read the page between moves to see where the item has actually got to.",
+      inputSchema: {
+        to: target.optional(),
+        dx: z.number().optional().describe('Pixels to move horizontally, when no element is named.'),
+        dy: z.number().optional().describe('Pixels to move vertically, when no element is named.'),
+      },
+    },
+    async ({ to, dx, dy }) => await acted(await deps.browser.dragMove(to, { dx: dx ?? 0, dy: dy ?? 0 })),
+  )
+
+  if (browser) server.registerTool(
+    'drag_drop',
+    {
+      title: 'Drop a held drag in the built-in browser',
+      description:
+        "Move a drag being held in the desktop app's built-in browser to its destination and let go. Takes an element, a `dx`/`dy` distance, or both, the same way `drag_move` does. Nothing is being held afterwards.",
+      inputSchema: {
+        to: target.optional(),
+        dx: z.number().optional().describe('Pixels to add to the drop point horizontally.'),
+        dy: z.number().optional().describe('Pixels to add to the drop point vertically.'),
+      },
+    },
+    async ({ to, dx, dy }) => await acted(await deps.browser.dragDrop(to, { dx: dx ?? 0, dy: dy ?? 0 })),
+  )
+
+  if (browser) server.registerTool(
+    'drag_cancel',
+    {
+      title: 'Abandon a held drag in the built-in browser',
+      description:
+        "Let go of a drag being held in the desktop app's built-in browser without dropping it, leaving the page as it was. Use it when a drag cannot be finished: a button left held swallows the user's own next click, and an interception left on catches every later drag on the page, theirs included.",
+      inputSchema: {},
+    },
+    async () => await acted(await deps.browser.dragCancel()),
   )
 
   if (browser) server.registerTool(
