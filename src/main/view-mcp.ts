@@ -14,7 +14,7 @@ import {
   unlinkTest,
   updateEntity,
 } from './board/board-write'
-import { ENTITY_STATUSES, LINK_RESULTS } from './board/entity-schema'
+import { ENTITY_STATUSES, LINK_RESULTS, RUN_HISTORY } from './board/entity-schema'
 import type { ActionResult } from './browser-actions'
 import type { ConsoleEntry, DialogRecord, Evaluated, NavigationRecord } from './browser-cdp'
 import { loadableUrl, locate } from './view-tools'
@@ -198,6 +198,11 @@ function boardProject(project: string | undefined): { ok: true; project: string 
  * workitem, or none yet, so there is no single place in the workitem tree it
  * belongs — and a test with no verdict anywhere is still work that exists
  * and must still be visible, not hidden until something claims it.
+ *
+ * Each test also gets a tail of its own run history — a count and the most
+ * recent results, not the whole list — because with no UI yet the agent is
+ * the only reader who can notice a test is flaky, and it cannot notice what
+ * this never shows it.
  * @param board - the board to render.
  * @returns the text, including findings when there are any.
  */
@@ -225,7 +230,21 @@ function renderBoard(board: Board): string {
   const hadCampaigns = lines.length > 0
   const suites: string[] = []
   const walkSuite = (suite: Suite, depth: number): void => {
-    for (const test of suite.tests) suites.push(`${'  '.repeat(depth)}test ${test.name}\n${'  '.repeat(depth)}  ${test.folderPath}`)
+    for (const test of suite.tests) {
+      const indent = '  '.repeat(depth)
+      suites.push(`${indent}test ${test.name}\n${indent}  ${test.folderPath}`)
+      const runs = test.fields.runs
+      // A tail, not the whole list: the run history exists so flakiness is
+      // visible, and a handful of recent results is what shows a pattern —
+      // the count says how much history there is behind it.
+      if (runs.length > 0) {
+        const tail = runs
+          .slice(-3)
+          .map((r) => r.result)
+          .join(', ')
+        suites.push(`${indent}  runs: ${String(runs.length)} (${tail})`)
+      }
+    }
     for (const child of suite.suites) {
       suites.push(`${'  '.repeat(depth)}suite ${child.slug}`)
       walkSuite(child, depth + 1)
@@ -638,7 +657,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
     {
       title: 'Read the project board',
       description:
-        "The whole board for the open project: campaigns, their missions, the tasks and bugs under them, each with its status and folder path. The board is YAML files under `.dsh/tasks/`, committed with the code. Read this before planning work, and read it again before claiming any of it is done — someone else may have moved it. Every other board tool addresses an entity by the folder path this returns.",
+        "The whole board for the open project: campaigns, their missions, the tasks and bugs under them, each with its status and folder path — plus the tests container, its suites at any depth, and each test's own run history. A workitem's verdicts are shown inline under it, naming the test and the result from the last time it was linked. The board is YAML files under `.dsh/tasks/`, committed with the code. Read this before planning work, and read it again before claiming any of it is done — someone else may have moved it. Every other board tool addresses an entity by the folder path this returns.",
       inputSchema: {},
     },
     () => {
@@ -653,7 +672,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
     {
       title: 'Add something to the project board',
       description:
-        "Create something on the board. A campaign, mission and task are workitems at three altitudes: a campaign is an outcome, a mission an independently shippable slice of it, a task one small verifiable unit. A mission goes under a campaign, a task under a mission, and a bug under either. A test is different — it lives in the tests container rather than under any workitem, because a test is not work in flight but the instrument work is measured with; give `parent` a suite path like `tests/auth` to file it in one, and suites are created as needed. Give a task at least one acceptance criterion with board_criterion, and say what proves a workitem with board_link.",
+        "Create something on the board. A campaign, mission and task are workitems at three altitudes: a campaign is an outcome, a mission an independently shippable slice of it, a task one small verifiable unit. A mission goes under a campaign, a task under a mission, and a bug under either. A test is different — it lives in the tests container rather than under any workitem, because a test is not work in flight but the instrument work is measured with; give `parent` a suite path like `tests/auth` to file it in one, and suites are created as needed. Children are folder-derived — a mission's tasks and bugs come from what board_read finds beneath it on disk, not from a list kept anywhere, so nothing has to be told about a child besides creating it. Give a task at least one acceptance criterion with board_criterion, and say what proves a workitem with board_link.",
       inputSchema: {
         level: z
           .enum(['campaign', 'mission', 'task', 'bug', 'test'])
@@ -680,7 +699,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
     {
       title: 'Edit an entity on the board',
       description:
-        "Change an entity's name, description or notes, and its per-kind fields: `role` (task), `target` (campaign), and for a bug `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment`. Notes are free-form prose for decisions, rationale and sign-offs — appended reasoning that outlives the conversation it was decided in. This does not change status: use board_status for that.",
+        "Change an entity's name, description or notes, and its per-kind fields: `role` (task), `target` (campaign), for a bug `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment`, and for a test `steps` and `expected` — the two things that make a test repeatable by someone who did not write it. Notes are free-form prose for decisions, rationale and sign-offs — appended reasoning that outlives the conversation it was decided in. This does not change status: use board_status for that.",
       inputSchema: {
         folder: z.string().describe('The folder path from board_read.'),
         name: z.string().optional().describe('A new display name. The folder does not move.'),
@@ -690,13 +709,14 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
         target: z.string().optional().describe('What this campaign is aimed at. Campaign only.'),
         severity: z.string().optional().describe('How bad this bug is. Bug only.'),
         steps_to_reproduce: z.string().optional().describe('How to make the bug happen. Bug only.'),
-        expected: z.string().optional().describe('What should have happened. Bug only.'),
+        steps: z.string().optional().describe('What to do to run this test. Test only.'),
+        expected: z.string().optional().describe('What should have happened (bug), or what a passing run looks like (test).'),
         actual: z.string().optional().describe('What happened instead. Bug only.'),
         rca: z.string().optional().describe('Root cause, once known. Bug only.'),
         environment: z.string().optional().describe('Where the bug was seen. Bug only.'),
       },
     },
-    ({ folder, name, description, notes, role, target, severity, steps_to_reproduce, expected, actual, rca, environment }) => {
+    ({ folder, name, description, notes, role, target, severity, steps_to_reproduce, steps, expected, actual, rca, environment }) => {
       const project = boardProject(deps.project())
       if (!project.ok) return refuse(project.reason)
       const patch = {
@@ -707,6 +727,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
         ...(target !== undefined && { target }),
         ...(severity !== undefined && { severity }),
         ...(steps_to_reproduce !== undefined && { stepsToReproduce: steps_to_reproduce }),
+        ...(steps !== undefined && { steps }),
         ...(expected !== undefined && { expected }),
         ...(actual !== undefined && { actual }),
         ...(rca !== undefined && { rca }),
@@ -817,7 +838,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
     {
       title: 'Record that a test ran',
       description:
-        `Append one execution to a test's own history: when it ran, what it ran against, and what came out. This does NOT change the verdict on any workitem — a verdict is a claim somebody makes, a run is a thing that happened, and the two disagreeing is the signal that a verdict has gone stale. Use board_link to change a verdict. The history is what makes a flaky test visible, and is capped at the most recent runs.`,
+        `Append one execution to a test's own history: when it ran, what it ran against, and what came out. This does NOT change the verdict on any workitem — a verdict is a claim somebody makes, a run is a thing that happened, and the two disagreeing is the signal that a verdict has gone stale. Use board_link to change a verdict. The history is what makes a flaky test visible, and is capped at the most recent ${String(RUN_HISTORY)} runs.`,
       inputSchema: {
         test: z.string().describe("The test's folder path from board_read."),
         workitem: z.string().describe('The workitem it was run against, by folder path.'),

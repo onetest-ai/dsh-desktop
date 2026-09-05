@@ -2,8 +2,17 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync } from 'nod
 import { join, sep } from 'node:path'
 import { writeFileAtomic } from '../atomic-write'
 import { boardRoot, fileFor, folderFor, realpathAsFarAsExists, resolveInBoard, TESTS_DIR, TRASH_DIR } from './board-paths'
-import { collectTests, findEntity, readBoard } from './board-read'
-import { dumpEntity, ENTITY_STATUSES, LINK_RESULTS, loadEntity, typeOf, type EntityFields, type EntityLevel } from './entity-schema'
+import { collectTests, findEntity, findTest, readBoard } from './board-read'
+import {
+  dumpEntity,
+  ENTITY_STATUSES,
+  LINK_RESULTS,
+  loadEntity,
+  typeOf,
+  yamlFailureReason,
+  type EntityFields,
+  type EntityLevel,
+} from './entity-schema'
 import { slugify, uniqueSlug } from './slug'
 
 /** What one write reports back. */
@@ -32,6 +41,10 @@ const SIBLING_DIR: Record<EntityLevel, string> = {
 
 /**
  * Read one entity's file, for a write that is about to rewrite it.
+ *
+ * Tests live in their own container, addressed by path rather than found by
+ * `findEntity`'s campaigns-only walk — so every write here checks both trees,
+ * the same way `linkTest` already has to when it validates a test argument.
  * @param project - the project's root directory.
  * @param folderPath - the entity's path within the board.
  * @returns the level, the fields, and the resolved directory — or why not.
@@ -42,7 +55,8 @@ function open(
 ): { ok: true; level: EntityLevel; fields: EntityFields; dir: string } | { ok: false; reason: string } {
   const dir = resolveInBoard(project, folderPath)
   if (dir === undefined) return { ok: false, reason: `${folderPath} is not inside this project's board.` }
-  const entity = findEntity(readBoard(project), folderPath)
+  const board = readBoard(project)
+  const entity = findEntity(board, folderPath) ?? findTest(board.tests, folderPath)
   if (entity === undefined) return { ok: false, reason: `${folderPath} is not on the board.` }
   return { ok: true, level: entity.level, fields: entity.fields, dir }
 }
@@ -90,7 +104,11 @@ export function createEntity(project: string, level: EntityLevel, parentFolder: 
     if (resolvedSuite !== resolvedTestsRoot && !resolvedSuite.startsWith(resolvedTestsRoot + sep)) {
       return { ok: false, reason: `${parentFolder} is not inside the tests container.` }
     }
-    parts = suite === TESTS_DIR ? [] : suite.slice(TESTS_DIR.length + 1).split('/')
+    // From the RESOLVED suite, not the caller's raw string: `./tests/auth` and
+    // `tests/` are both legitimate spellings of a path this already checked,
+    // and slicing the string itself invents a suite ("s") or an empty segment
+    // for whichever spelling was not the exact one this code expected.
+    parts = resolvedSuite === resolvedTestsRoot ? [] : resolvedSuite.slice(resolvedTestsRoot.length + 1).split(sep)
   } else if (level === 'campaign') {
     parts = []
   } else {
@@ -167,6 +185,12 @@ export function setStatus(project: string, folderPath: string, status: string): 
   if (!(ENTITY_STATUSES as readonly string[]).includes(status)) {
     return { ok: false, reason: `"${status}" is not a status. Use one of: ${ENTITY_STATUSES.join(', ')}.` }
   }
+  const found = open(project, folderPath)
+  if (!found.ok) return found
+  // A test is not work in flight; it is the instrument work is measured
+  // with. Letting a status land on one would put it in a column it does not
+  // belong in, so this is refused rather than silently written.
+  if (found.level === 'test') return { ok: false, reason: `${folderPath} is a test, which has no status.` }
   return updateEntity(project, folderPath, { status })
 }
 
@@ -332,6 +356,9 @@ export function linkTest(
 export function unlinkTest(project: string, folderPath: string, test: string): WriteResult {
   const found = open(project, folderPath)
   if (!found.ok) return found
+  if (typeOf(found.level) !== 'workitem') {
+    return { ok: false, reason: `a ${found.level} does not declare what proves it.` }
+  }
   const kept = found.fields.validatedBy.filter((link) => link.test !== test)
   if (kept.length === found.fields.validatedBy.length) {
     return { ok: false, reason: `${folderPath} does not name ${test}.` }
@@ -366,7 +393,15 @@ export function recordRun(project: string, testFolder: string, workitem: string,
   } catch {
     return { ok: false, reason: `${testFolder} is not a test.` }
   }
-  const fields = loadEntity(text)
+  let fields: EntityFields
+  try {
+    fields = loadEntity(text)
+  } catch (error) {
+    // Reading never throws out of a tool handler: the agent gets a sentence
+    // naming the file, the way `readEntity` reports the same failure to
+    // `board_read` — not a YAMLException reaching the HTTP transport.
+    return { ok: false, reason: `${fileFor('test')} could not be read: ${yamlFailureReason(error)}` }
+  }
   const runs = [...fields.runs, { at: at ?? new Date().toISOString(), workitem, result }]
   save(dir, 'test', { ...fields, runs })
   return { ok: true, folderPath: testFolder }

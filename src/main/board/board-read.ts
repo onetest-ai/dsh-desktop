@@ -1,14 +1,34 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { boardRoot, fileFor, hasBoard, TESTS_DIR, TRASH_DIR } from './board-paths'
 import {
   ENTITY_STATUSES,
+  ENTITY_LEVELS,
   LINK_RESULTS,
   loadEntity,
   typeOf,
+  yamlFailureReason,
   type EntityFields,
   type EntityLevel,
 } from './entity-schema'
+
+/** Every file name an entity might be stored under, so a folder holding the wrong one can be named. */
+const ENTITY_FILES: readonly string[] = [...new Set(ENTITY_LEVELS.map(fileFor))]
+
+/**
+ * The entity file a folder holds, when it is not the one `level` expected.
+ *
+ * A folder with none of these is legitimately empty — a suite, or a child
+ * directory nobody has filled in yet. One that holds a different type's file
+ * is not empty; it is mislabeled, and that is worth a finding rather than the
+ * silent vanishing an absent `fileFor(level)` alone would produce.
+ * @param dir - the folder to look in.
+ * @param expected - the file this folder's level would hold.
+ * @returns the file actually found, or nothing when the folder holds none.
+ */
+function otherEntityFile(dir: string, expected: string): string | undefined {
+  return ENTITY_FILES.find((candidate) => candidate !== expected && existsSync(join(dir, candidate)))
+}
 
 /** One entity, with the children its folder holds. */
 export interface Entity {
@@ -117,6 +137,14 @@ function readEntity(root: string, folderPath: string, level: EntityLevel, findin
   try {
     text = readFileSync(join(dir, file), 'utf8')
   } catch {
+    // Empty is legitimate — a suite, or a child directory nobody has filled
+    // in yet — but holding a different type's file is not empty, it is
+    // mislabeled, and that is worth saying rather than letting the whole
+    // subtree under it vanish with no word.
+    const found = otherEntityFile(dir, file)
+    if (found !== undefined) {
+      findings.push({ folderPath, says: `holds ${found}, not ${file} — this folder is a ${level}.` })
+    }
     return undefined
   }
   let fields: EntityFields
@@ -125,7 +153,7 @@ function readEntity(root: string, folderPath: string, level: EntityLevel, findin
   } catch (error) {
     // Reading never repairs: the file stays exactly as it is, and the board
     // says which one it could not read.
-    findings.push({ folderPath, says: `${file} could not be read: ${(error as Error).message}` })
+    findings.push({ folderPath, says: `${file} could not be read: ${yamlFailureReason(error)}` })
     return undefined
   }
   const slug = folderPath.slice(folderPath.lastIndexOf('/') + 1)
@@ -136,11 +164,17 @@ function readEntity(root: string, folderPath: string, level: EntityLevel, findin
   if (level !== 'test' && !(ENTITY_STATUSES as readonly string[]).includes(status)) {
     findings.push({ folderPath, says: `status "${status}" is not one the board knows.` })
   }
+  if (level === 'test' && fields.status !== undefined) {
+    findings.push({ folderPath, says: `has a status field ("${fields.status}"), but a test has no status.` })
+  }
   // The path decides, because the path is what this walk followed. The key is
   // what the file claims, and a claim that disagrees is worth saying out loud
   // rather than quietly overruling.
   if (typeOf(level) === 'workitem' && fields.subtype !== undefined && fields.subtype !== level) {
     findings.push({ folderPath, says: `subtype says "${fields.subtype}" but this sits at ${level}.` })
+  }
+  if (typeOf(level) !== 'workitem' && fields.subtype !== undefined) {
+    findings.push({ folderPath, says: `has a subtype field ("${fields.subtype}"), which only a workitem uses.` })
   }
   if (level === 'task' && fields.acceptanceCriteria.length === 0) {
     findings.push({ folderPath, says: 'this task has no acceptance criterion, so nothing can gate it.' })
@@ -182,8 +216,15 @@ function readSuite(root: string, path: string, slug: string, findings: Finding[]
   for (const name of subdirectories(join(root, path))) {
     const under = `${path}/${name}`
     const test = readEntity(root, under, 'test', findings)
-    if (test !== undefined) suite.tests.push(test)
-    else suite.suites.push(readSuite(root, under, name, findings))
+    if (test !== undefined) {
+      suite.tests.push(test)
+      // Holds a test.yaml is a test, full stop — so subdirectories beside it
+      // are not walked. That rule must not also make them disappear quietly:
+      // a test is supposed to be a leaf, and one that is not deserves a word.
+      if (subdirectories(join(root, under)).length > 0) {
+        findings.push({ folderPath: under, says: 'holds test.yaml and subdirectories; a test is a leaf, so they are not walked.' })
+      }
+    } else suite.suites.push(readSuite(root, under, name, findings))
   }
   return suite
 }
@@ -279,6 +320,28 @@ export function findEntity(board: Board, folderPath: string): Entity | undefined
     const entity = stack.pop()!
     if (entity.folderPath === folderPath) return entity
     stack.push(...entity.children)
+  }
+  return undefined
+}
+
+/**
+ * One test by its folder path, walking the tests container.
+ *
+ * Kept apart from `findEntity` rather than folded into it: a workitem and a
+ * test are addressed through two different trees, and `findEntity`'s
+ * campaigns-only walk is correct on its own terms — other code depends on it
+ * staying that way. A caller that needs either kind of entity calls both.
+ * @param suite - the tests container, or a suite within it, to search.
+ * @param folderPath - the path to find.
+ * @returns the test, or nothing when the container has none there.
+ */
+export function findTest(suite: Suite, folderPath: string): Entity | undefined {
+  for (const test of suite.tests) {
+    if (test.folderPath === folderPath) return test
+  }
+  for (const child of suite.suites) {
+    const found = findTest(child, folderPath)
+    if (found !== undefined) return found
   }
   return undefined
 }

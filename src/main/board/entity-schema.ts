@@ -1,10 +1,10 @@
 /**
- * The YAML entity schema — the on-disk shape of campaign/mission/task/bug files, replacing the
- * Markdown managed-block. Each entity folder holds ONE `<kind>.yaml`; children (tasks/bugs) are
+ * The YAML entity schema — the on-disk shape of workitem/bug/test files, replacing the
+ * Markdown managed-block. Each entity folder holds ONE `<type>.yaml`; children (tasks/bugs) are
  * folder-derived, so a parent never enumerates them. On-disk keys are snake_case; this module maps
  * them to the camelCase `EntityFields` the rest of the board uses, and back.
  */
-import { load as yamlLoad, dump as yamlDump, JSON_SCHEMA } from 'js-yaml'
+import { load as yamlLoad, dump as yamlDump, JSON_SCHEMA, YAMLException } from 'js-yaml'
 
 /**
  * What an entity is, at the granularity the file name uses.
@@ -133,7 +133,7 @@ export interface TestRun {
   [extra: string]: unknown
 }
 
-/** The parsed fields of an entity file; which are present depends on the kind. */
+/** The parsed fields of an entity file; which are present depends on the level. */
 export interface EntityFields {
   name: string
   description: string
@@ -334,6 +334,22 @@ function parseRuns(v: unknown): TestRun[] {
     })
   }
   return out.slice(-RUN_HISTORY)
+}
+
+/**
+ * One line describing why a YAML parse failed.
+ *
+ * js-yaml's `message` appends a source snippet with a caret and newlines, but
+ * every caller here reports one finding per line — a multi-line body would
+ * misalign the whole block over a single bad file. `reason` is the same
+ * complaint without the snippet, which is all a `Finding.says` promises.
+ * @param error - whatever `loadEntity` threw.
+ * @returns one line, never a stack trace.
+ */
+export function yamlFailureReason(error: unknown): string {
+  if (error instanceof YAMLException) return error.reason
+  const message = error instanceof Error ? error.message : String(error)
+  return message.split('\n')[0]
 }
 
 /** Parse a `<type>.yaml` file body into typed fields. Missing keys default rather than throw. */

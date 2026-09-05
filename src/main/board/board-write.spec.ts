@@ -80,7 +80,7 @@ describe('createEntity', () => {
     })
   })
 
-  it('refuses a parent of the wrong kind', () => {
+  it('refuses a parent of the wrong level', () => {
     createEntity(project, 'campaign', '', 'Q3')
     createEntity(project, 'mission', 'campaigns/q3', 'M1')
     expect(createEntity(project, 'mission', 'campaigns/q3/missions/m1', 'M2').ok).toBe(false)
@@ -300,6 +300,63 @@ describe('creating a test', () => {
   it('accepts a genuine nested suite path', () => {
     expect(createEntity(project, 'test', 'tests/auth', 'Login')).toEqual({ ok: true, folderPath: 'tests/auth/login' })
   })
+
+  // reason: the fourth instance of the lexical-path bug — `parts` used to come
+  // from slicing the caller's raw string, so a spelling this same check had
+  // already resolved and accepted still invented the wrong folder.
+  it('derives the folder from the resolved suite, not the caller-s spelling of it', () => {
+    expect(createEntity(project, 'test', './tests/auth', 'Login')).toEqual({ ok: true, folderPath: 'tests/auth/login' })
+  })
+
+  it('derives the folder correctly from a trailing slash on the tests root', () => {
+    expect(createEntity(project, 'test', 'tests/', 'Other')).toEqual({ ok: true, folderPath: 'tests/other' })
+  })
+
+  // reason: the folder handed back must be the one board_read reports, or the
+  // agent's next board_link call for a test it just created is refused.
+  it('creates a test through a symlinked suite at the address board_read will report', () => {
+    const real = join(project, '.dsh', 'tasks', 'tests', 'real-auth')
+    mkdirSync(real, { recursive: true })
+    symlinkSync(real, join(project, '.dsh', 'tasks', 'tests', 'auth'))
+    expect(createEntity(project, 'test', 'tests/auth', 'Login')).toEqual({ ok: true, folderPath: 'tests/real-auth/login' })
+    expect(readBoard(project).tests.suites.find((s) => s.slug === 'real-auth')?.tests[0].folderPath).toBe(
+      'tests/real-auth/login',
+    )
+  })
+})
+
+// reason: `open` used to require `findEntity`, which walks campaigns only —
+// so every write path through it refused every test, even though board_read
+// had just listed one. A test has to be reachable through the same six
+// writes a workitem is.
+describe('writing a test through the other five paths', () => {
+  it('updates steps and expected, and reads them back', () => {
+    createEntity(project, 'test', '', 'Login')
+    expect(updateEntity(project, 'tests/login', { steps: 'open the login page', expected: 'the dashboard loads' }).ok).toBe(
+      true,
+    )
+    const text = read('tests/login', 'test.yaml')
+    expect(text).toContain('steps: open the login page')
+    expect(text).toContain('expected: the dashboard loads')
+    expect(readBoard(project).tests.tests[0].fields.steps).toBe('open the login page')
+  })
+
+  // reason: a test is not work in flight — the instrument work is measured
+  // with does not itself move through the columns.
+  it('refuses to set a status on a test', () => {
+    createEntity(project, 'test', '', 'Login')
+    const out = setStatus(project, 'tests/login', 'executing')
+    expect(out.ok).toBe(false)
+    expect(read('tests/login', 'test.yaml')).not.toContain('status')
+  })
+
+  it('trashes a test', () => {
+    createEntity(project, 'test', '', 'Login')
+    expect(trashEntity(project, 'tests/login').ok).toBe(true)
+    expect(existsSync(join(project, '.dsh', 'tasks', 'tests', 'login'))).toBe(false)
+    expect(readBoard(project).tests.tests).toEqual([])
+    expect(existsSync(join(project, '.dsh', 'tasks', '.trash', 'tests', 'login'))).toBe(true)
+  })
 })
 
 describe('linkTest', () => {
@@ -369,6 +426,18 @@ describe('unlinkTest', () => {
     createEntity(project, 'campaign', '', 'Q3')
     expect(unlinkTest(project, 'campaigns/q3', 'tests/never').ok).toBe(false)
   })
+
+  // reason: mirrors linkTest's own guard. Without it, a stray validated_by on
+  // a bug — preserved through extra, never through the typed field a real
+  // workitem writes it to — reported ok: true for a change that never
+  // touched the file dumpEntity actually re-emits.
+  it('refuses to unlink anything from a bug or a test', () => {
+    createEntity(project, 'campaign', '', 'Q3')
+    createEntity(project, 'bug', 'campaigns/q3', 'Crash')
+    createEntity(project, 'test', '', 'Login')
+    expect(unlinkTest(project, 'campaigns/q3/bugs/crash', 'tests/login').ok).toBe(false)
+    expect(unlinkTest(project, 'tests/login', 'tests/login').ok).toBe(false)
+  })
 })
 
 describe('recordRun', () => {
@@ -406,6 +475,17 @@ describe('recordRun', () => {
 
   it('refuses a folder that is not a test', () => {
     expect(recordRun(project, 'campaigns/q3', 'campaigns/q3', 'pass', 'a').ok).toBe(false)
+  })
+
+  // reason: `readEntity`'s own loadEntity call is guarded; this one was the
+  // single exception, and let a YAMLException reach the tool handler as a
+  // transport failure instead of a sentence naming the file.
+  it('reports a test.yaml that will not parse, rather than throwing', () => {
+    writeFileSync(join(project, '.dsh', 'tasks', 'tests', 'login', 'test.yaml'), 'name: [unclosed\n')
+    expect(() => recordRun(project, 'tests/login', 'campaigns/q3', 'pass', 'a')).not.toThrow()
+    const out = recordRun(project, 'tests/login', 'campaigns/q3', 'pass', 'a')
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.reason).toContain('test.yaml')
   })
 })
 

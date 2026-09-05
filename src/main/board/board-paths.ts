@@ -133,7 +133,12 @@ export function resolveInBoard(project: string, folderPath: string): string | un
   const target = resolve(root, folderPath)
   const real = realpathAsFarAsExists(target)
   const base = realpathAsFarAsExists(root)
-  if (real !== base && !real.startsWith(base + sep)) return undefined
+  // The board root itself is not an entity's folder — nothing legitimate ever
+  // addresses it, and `recordRun` reaches this with the agent's raw string
+  // rather than a path built through `folderFor`, so a `test` argument like
+  // `.` reaches here as a path that collapses to exactly the root.
+  if (real === base) return undefined
+  if (!real.startsWith(base + sep)) return undefined
   if (real === join(base, TRASH_DIR) || real.startsWith(join(base, TRASH_DIR) + sep)) return undefined
   return real
 }

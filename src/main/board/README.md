@@ -11,7 +11,9 @@ recorded decisions, and re-deriving that lesson here would cost the same data.
 **Not taken:** `board-model.ts` and `write.ts`. Upstream carries a Markdown
 format, a migration off it, legacy id markers and workflow parsing — 1659 lines
 of which most is what this board does not have. `board-read.ts` and
-`board-write.ts` here are written for YAML and four kinds only.
+`board-write.ts` here are written for YAML and the type/level split this board
+uses — three types (workitem, bug, test), a workitem further split into three
+levels — not the original four kinds.
 
 ## Changes made on the way in
 

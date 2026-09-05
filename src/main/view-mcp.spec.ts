@@ -855,4 +855,83 @@ describe('the board tools', () => {
     expect(text).not.toContain('[pass] tests/login')
     expect(text).not.toContain('[fail] tests/login')
   })
+
+  // reason: `board_update` had no `steps` input at all, so a test's two
+  // fields — "the two things that make a test repeatable by someone who did
+  // not write it" — could only ever be blank once created.
+  it("fills a test's steps and expected through board_update and reads them back", async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_update', {
+      folder: 'tests/login',
+      steps: 'go to /login, submit valid creds',
+      expected: 'redirected to /dashboard',
+    })
+    expect(out.isError).toBeFalsy()
+    const text = readFileSync(join(project, '.dsh', 'tasks', 'tests', 'login', 'test.yaml'), 'utf8')
+    expect(text).toContain('steps: go to /login, submit valid creds')
+    expect(text).toContain('expected: redirected to /dashboard')
+  })
+
+  // reason: `open()` used to require `findEntity`, which walks campaigns
+  // only — so board_status, board_update, board_criterion and board_delete
+  // all refused every test even though board_read had just listed it.
+  it('refuses to set a status on a test through board_status', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_status', { folder: 'tests/login', status: 'done' })
+    expect(out.isError).toBe(true)
+  })
+
+  it('trashes a test through board_delete', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_delete', { folder: 'tests/login' })
+    expect(out.isError).toBeFalsy()
+    expect(textOf(await callTool(url, 'board_read'))).not.toContain('tests/login')
+  })
+
+  // reason: the run history exists so flakiness is visible, and with no UI
+  // yet the agent is its only reader — board_read has to actually show it.
+  it("shows a test's run history as a compact tail", async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    await callTool(url, 'board_run', { test: 'tests/login', workitem: 'campaigns/q3', result: 'pass' })
+    await callTool(url, 'board_run', { test: 'tests/login', workitem: 'campaigns/q3', result: 'fail' })
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).toContain('runs: 2 (pass, fail)')
+  })
+
+  it("interpolates the run cap into board_run's description", async () => {
+    const url = await serve(deps(), 'editor')
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
+    const tools = (answer.result as { tools: { name: string; description: string }[] }).tools ?? []
+    const boardRun = tools.find((t) => t.name === 'board_run')
+    expect(boardRun?.description).toMatch(/most recent \d+ runs/)
+  })
+
+  it('mentions tests, suites and runs in board_read', async () => {
+    const url = await serve(deps(), 'editor')
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
+    const tools = (answer.result as { tools: { name: string; description: string }[] }).tools ?? []
+    const boardRead = tools.find((t) => t.name === 'board_read')
+    expect(boardRead?.description).toContain('tests')
+    expect(boardRead?.description).toContain('verdict')
+  })
+
+  it('mentions that children are folder-derived in board_create', async () => {
+    const url = await serve(deps(), 'editor')
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
+    const tools = (answer.result as { tools: { name: string; description: string }[] }).tools ?? []
+    const boardCreate = tools.find((t) => t.name === 'board_create')
+    expect(boardCreate?.description).toContain('folder-derived')
+  })
 })

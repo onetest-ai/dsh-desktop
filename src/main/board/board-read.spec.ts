@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { findEntity, readBoard } from './board-read'
+import { findEntity, findTest, readBoard } from './board-read'
 
 let project = ''
 beforeEach(() => {
@@ -74,6 +74,16 @@ describe('readBoard', () => {
     expect(board.campaigns[0].children).toEqual([])
     expect(board.findings).toHaveLength(1)
     expect(board.findings[0].folderPath).toBe('campaigns/q3/missions/m1')
+  })
+
+  // reason: `renderBoard` prints one finding per line on the assumption that
+  // `Finding.says` is one line — js-yaml's own `message` appends a source
+  // snippet with newlines and a caret, which would misalign the whole block.
+  it('keeps a parse finding to one line, even though js-yaml wants to add a snippet', () => {
+    put('campaigns/q3', 'workitem.yaml', 'name: Q3\n')
+    put('campaigns/q3/missions/m1', 'workitem.yaml', 'name: [unclosed\n')
+    const board = readBoard(project)
+    expect(board.findings[0].says).not.toContain('\n')
   })
 
   // reason: a board whose columns are whatever anyone typed is not a board.
@@ -155,6 +165,71 @@ describe('findEntity', () => {
     const board = readBoard(project)
     expect(findEntity(board, 'campaigns/q3/missions/m1/tasks/t1')?.name).toBe('T1')
     expect(findEntity(board, 'campaigns/nope')).toBeUndefined()
+  })
+})
+
+describe('a folder holding the wrong type of file', () => {
+  // reason: empty is legitimate — a candidate directory nobody has filled in
+  // yet — but holding a bug.yaml where a campaign's workitem.yaml belongs is
+  // not empty, it is mislabeled, and the spec promises a finding naming it
+  // rather than letting the whole subtree vanish.
+  it('reports a campaign folder holding a bug.yaml instead of a workitem.yaml', () => {
+    put('campaigns/q3', 'bug.yaml', 'name: Q3\n')
+    const board = readBoard(project)
+    expect(board.campaigns).toEqual([])
+    expect(board.findings.some((f) => f.folderPath === 'campaigns/q3' && f.says.includes('bug.yaml'))).toBe(true)
+  })
+
+  // reason: readSuite falls through the same readEntity check, so a directory
+  // holding a workitem.yaml under tests/ must not be silently reclassified as
+  // a suite and walked.
+  it('reports a tests folder holding a workitem.yaml instead of a test.yaml', () => {
+    put('tests/login', 'workitem.yaml', 'name: Login\n')
+    const board = readBoard(project)
+    expect(board.tests.tests).toEqual([])
+    expect(board.findings.some((f) => f.folderPath === 'tests/login' && f.says.includes('workitem.yaml'))).toBe(true)
+  })
+
+  // reason: "holds a test.yaml is a test, full stop" must not also make the
+  // subdirectories beside it disappear without a word.
+  it('reports a test directory that also holds subdirectories, and does not walk them', () => {
+    put('tests/login', 'test.yaml', 'name: Login\n')
+    mkdirSync(join(project, '.dsh', 'tasks', 'tests', 'login', 'extra'), { recursive: true })
+    const board = readBoard(project)
+    expect(board.tests.tests.map((t) => t.name)).toEqual(['Login'])
+    expect(board.tests.suites).toEqual([])
+    expect(board.findings.some((f) => f.folderPath === 'tests/login' && f.says.includes('subdirector'))).toBe(true)
+  })
+
+  // reason: preserved through extra on a round-trip, correctly — but never
+  // reported, which was not correct given "a test has no status" is called
+  // out as the one asymmetry in the model.
+  it('reports a status field on a test', () => {
+    put('tests/login', 'test.yaml', 'name: Login\nstatus: draft\n')
+    const board = readBoard(project)
+    expect(board.findings.some((f) => f.folderPath === 'tests/login' && f.says.includes('status'))).toBe(true)
+  })
+
+  it('reports a subtype field on a bug', () => {
+    put('campaigns/q3', 'workitem.yaml', 'name: Q3\n')
+    put('campaigns/q3/bugs/b1', 'bug.yaml', 'name: B1\nsubtype: task\n')
+    const board = readBoard(project)
+    expect(board.findings.some((f) => f.folderPath === 'campaigns/q3/bugs/b1' && f.says.includes('subtype'))).toBe(true)
+  })
+
+  it('reports a subtype field on a test', () => {
+    put('tests/login', 'test.yaml', 'name: Login\nsubtype: task\n')
+    const board = readBoard(project)
+    expect(board.findings.some((f) => f.folderPath === 'tests/login' && f.says.includes('subtype'))).toBe(true)
+  })
+})
+
+describe('findTest', () => {
+  it('finds a test at any depth in the tests container', () => {
+    put('tests/auth/oauth/callback', 'test.yaml', 'name: Callback\n')
+    const board = readBoard(project)
+    expect(findTest(board.tests, 'tests/auth/oauth/callback')?.name).toBe('Callback')
+    expect(findTest(board.tests, 'tests/gone')).toBeUndefined()
   })
 })
 

@@ -115,6 +115,15 @@ describe('resolveInBoard', () => {
     expect(resolveInBoard(project, '.trash/campaigns/q3')).toBeUndefined()
   })
 
+  // reason: nothing legitimate addresses the board root itself. Deferred
+  // earlier as unreachable through a path built by `folderFor`, `recordRun`
+  // made it reachable with the agent's own raw string — `test: '.'` resolves
+  // to exactly the board root, which the old check let through.
+  it('refuses a path that collapses to the board root itself', () => {
+    expect(resolveInBoard(project, '.')).toBeUndefined()
+    expect(resolveInBoard(project, 'campaigns/..')).toBeUndefined()
+  })
+
   // reason: this proves the escape is refused, which only means something
   // against a canonical root. Against the suite's un-hoisted, possibly
   // non-canonical `project`, the pre-fix code (which compared a lexical
