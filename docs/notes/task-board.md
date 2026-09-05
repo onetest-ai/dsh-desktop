@@ -19,12 +19,12 @@ Three properties follow from that and are worth stating as requirements rather t
 `.dsh/tasks/`, beside the `.dsh/mcp.json` a project may already carry. The directory is the project's, committed like any other source.
 
 ```
-.dsh/tasks/campaigns/<slug>/workitem.yaml                     subtype: campaign
-                           /bugs/<slug>/bug.yaml
-                           /missions/<slug>/workitem.yaml     subtype: mission
-                                           /tasks/<slug>/workitem.yaml   subtype: task
-                                           /bugs/<slug>/bug.yaml
-.dsh/tasks/tests/<suite>/…/<slug>/test.yaml
+.dsh/tasks/campaigns/<slug>/workitem.md                       subtype: campaign
+                           /bugs/<slug>/bug.md
+                           /missions/<slug>/workitem.md       subtype: mission
+                                           /tasks/<slug>/workitem.md     subtype: task
+                                           /bugs/<slug>/bug.md
+.dsh/tasks/tests/<suite>/…/<slug>/test.md
 ```
 
 A bug sits under exactly one parent — a campaign or a mission — whichever owns it. Tests live in their own container; everything else has one place it can be.
@@ -108,25 +108,41 @@ The cost is that **moving or renaming a folder changes the entity's id.** That i
 
 ## The schema
 
-On-disk keys are `snake_case`. Every type carries `name`, `description` and `notes`; the rest is per type, and for a workitem, per subtype.
+An entity file is **markdown with YAML frontmatter** — `workitem.md`, `bug.md`, `test.md`. Frontmatter carries what the board indexes; the body carries what a person reads.
+
+That split is the point of the format. The board needs a handful of values it can sort, count and colour by: small, closed, machine-owned. Everything else about a piece of work is prose — why it exists, how to reproduce it, what to do and what should happen — and prose inside YAML is prose behind a fence: quoted, escaped, folded onto one line, unreadable in the editor this app already ships. The same content as markdown sections opens as a document.
+
+The shape is taken from two places that already work. Octoshell's entity panels hold description, acceptance criteria and notes as plain markdown strings, and parse the criteria out of `- [ ]` lines rather than storing a structured list. The manual-QA suite at `benchmark/tests` writes each case as frontmatter plus Preconditions / Test Data / Steps / Expected Final State / Teardown. A test written our way and a case written theirs should be the same document.
+
+**Frontmatter keys** are `snake_case`, and each is either a closed vocabulary or a list of paths — nothing a person writes a paragraph into:
 
 | Key | workitem | bug | test |
 | --- | --- | --- | --- |
-| `name`, `description`, `notes` | ✓ | ✓ | ✓ |
+| `name` | ✓ | ✓ | ✓ |
 | `status` — one of the five | ✓ | ✓ | |
 | `subtype` — `campaign`, `mission` or `task` | ✓ | | |
-| `acceptance_criteria` | ✓ | | |
 | `validated_by` — test links with verdicts | ✓ | | |
 | `documents` | campaign, mission | | |
-| `target` | campaign | | |
 | `role` | task | | |
-| `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment` | | ✓ | |
-| `steps`, `expected` | | | ✓ |
+| `severity` | | ✓ | |
 | `runs` — execution history, capped at 50 | | | ✓ |
 
-A key a subtype does not own is not written for it, but a key already on disk is never destroyed — see *Unknown keys round-trip*. So a `target` on a task is malformed rather than lost, and shows up as a finding.
+**Body sections** are `##` headings in a fixed order per level. Whatever stands before the first heading is the entity's description — a lead paragraph, as both references write it.
 
-**A test carries what it proves**: `steps` and `expected`, the two things that make a test repeatable by someone who did not write it. It does not carry acceptance criteria — a test *is* a criterion, made executable, and giving it criteria of its own would ask what proves the proof.
+| Section | workitem | bug | test |
+| --- | --- | --- | --- |
+| *(lead)* — the description | ✓ | ✓ | ✓ |
+| `## Target` | campaign | | |
+| `## Acceptance Criteria` | ✓ | | |
+| `## Steps to Reproduce`, `## Expected`, `## Actual`, `## RCA`, `## Environment` | | ✓ | |
+| `## Preconditions`, `## Test Data`, `## Steps`, `## Expected Final State`, `## Teardown` | | | ✓ |
+| `## Notes` | ✓ | ✓ | ✓ |
+
+A section is opaque markdown — tables, lists, code fences, whatever the writer needs. The one exception is `## Acceptance Criteria`, parsed as a checklist of `- [ ]` and `- [x]` lines, one criterion each, because the board counts and ticks them. That is octoshell's decision and it is the right one: a criterion stays a line of markdown a person can edit by hand, and there is no second structured list to keep in sync with the prose.
+
+A key or a section a level does not own is not written for it, and neither is destroyed — see *Unknown keys round-trip*, which now covers both. A `target` on a task, or a `## Rollout` nobody modelled, is malformed rather than lost, and shows up as a finding.
+
+**A test carries what it proves**: preconditions, data, steps, the expected final state, and how to leave the machine as it was found. Not acceptance criteria — a test *is* a criterion, made executable, and giving it criteria of its own would ask what proves the proof.
 
 **A test has no status**, which is the one asymmetry in the model and is deliberate. Statuses describe work moving toward done; a test is not moving. What a test has is *results*, and a result belongs to a pairing rather than to the test — so it lives on the link. Retiring a test is therefore unlinking it, not marking it: validation *is* the link, and a test nothing points at proves nothing, which is exactly what retired means.
 
@@ -138,7 +154,7 @@ Each name says what is true of the work, not what someone intends to do about it
 
 **There is no `cancelled` either** — it and `done` are one. Work that was abandoned is still work you are finished with, and *why* belongs in the entity's notes, where it can be a sentence rather than a word that only says "not the good ending". The cost is stated rather than discovered: the board can no longer tell shipped from abandoned at a glance, and the notes are where that lives.
 
-**An acceptance criterion** is `{ text, done }`. A task with no criterion is a planning defect: a task with no checkable definition of done cannot be gated, and gating is the point. Validation says so; it does not refuse the write.
+**An acceptance criterion** is one `- [ ]` line under `## Acceptance Criteria`, and its text is the rest of the line. A task with no criterion is a planning defect: a task with no checkable definition of done cannot be gated, and gating is the point. Validation says so; it does not refuse the write.
 
 **Statuses are the same five for workitems and bugs.** Tests have none; see the schema table above. A link's `result` — `pass`, `fail`, `not_run` — is a separate fixed set and never mixes with them: a status says how far work has got, a result says whether a check held, and a column vocabulary that ran both together would be answering two questions in one row.
 
@@ -158,11 +174,17 @@ Every write rewrites the whole file from parsed fields. Without deliberate care 
 
 That behaviour is taken as-is. It is not a nicety: it is what makes it safe for an agent to add a key this schema has never heard of, and for the panel to edit the same file afterwards.
 
+### The `.yaml` files that came before
+
+The board shipped `workitem.yaml`, `bug.yaml` and `test.yaml` first. A reader **prefers `<type>.md` and falls back to `<type>.yaml`** when no `.md` is there, parsing the whole YAML document as frontmatter with an empty body — so an existing board keeps working, unchanged, with its prose still in YAML strings.
+
+A **write converts it**: the entity is rewritten as `<type>.md`, and the `<type>.yaml` is removed once the `.md` is on disk. The removal is part of an explicit write and never part of a read, because a read that repairs a file is a read nobody can trust. An entity that has both files, because something wrote the `.yaml` back, is a finding: the `.md` is what the board shows, and the reader says the other is being ignored.
+
 ## Reading
 
 `BoardModel(root)` with a single `rebuild()` that re-reads everything. Pure, synchronous, no incremental invalidation.
 
-Incremental update is the obvious optimisation and it is deliberately not taken. A board is tens to low hundreds of small YAML files; a full rebuild is milliseconds, and it cannot drift. If a board ever grows large enough for this to hurt, that is a measurement, not a prediction.
+Incremental update is the obvious optimisation and it is deliberately not taken. A board is tens to low hundreds of small markdown files; a full rebuild is milliseconds, and it cannot drift. If a board ever grows large enough for this to hurt, that is a measurement, not a prediction.
 
 Reading never writes. A malformed file yields a validation finding and an entity that is absent from the board, never a repair.
 

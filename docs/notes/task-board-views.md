@@ -17,7 +17,7 @@ Each has one job:
 
 `SideView` gains `'tasks'`, beside `'files'` and `'git'`. A third rail button, `⌘⌥T`, a `tasks.html` page with its own bundle, and `views.tasks` — the same shape the git panel added, for the same reason: three views that are rarely read at once do not each deserve permanent horizontal space.
 
-Rows nest campaign → mission → task/bug, collapsible, each carrying a status chip and — for a campaign or a mission — the progress computed on read. Beneath them, a second root: `tests`, with its suites and the tests inside them. A test row shows what it validates and how many of those verdicts pass, which is the reverse of the workitem's chip and the only place that direction is visible. **Clicking a row scrolls the board to whatever that row is on it and highlights that**, bringing the Board tab forward if the pane was showing something else — a reveal that scrolled a panel nobody could see would look like nothing happening. A campaign row reveals its heading, a mission row its lane, and a task or bug row its own card. A test row reveals nothing, because the board deliberately draws no card for a test — it opens the test's own `test.yaml` instead, which is the one thing a test row can go to and the same thing a card's click does for a workitem. That is the tree's only exception: nothing here changes anything.
+Rows nest campaign → mission → task/bug, collapsible, each carrying a status chip and — for a campaign or a mission — the progress computed on read. Beneath them, a second root: `tests`, with its suites and the tests inside them. A test row shows what it validates and how many of those verdicts pass, which is the reverse of the workitem's chip and the only place that direction is visible. **Clicking a row scrolls the board to whatever that row is on it and highlights that**, bringing the Board tab forward if the pane was showing something else — a reveal that scrolled a panel nobody could see would look like nothing happening. A campaign row reveals its heading, a mission row its lane, and a task or bug row its own card. A test row reveals nothing, because the board deliberately draws no card for a test — it opens the test's own detail instead, which is the one thing a test row can go to and the same thing a card's click does for a workitem. That is the tree's only exception: nothing here changes anything.
 
 A fold is remembered by folder path and forgotten when the project changes. `campaigns/q3` is a path two projects can both have, and reopening the next one already folded would be this state describing a board it was never about.
 
@@ -39,15 +39,39 @@ A project with no `.dsh/tasks/` is worded, not repaired, and says how a board ge
 
 **Cards are task-level workitems and bugs.** A mission is a lane label carrying its own status chip; a campaign is a heading. Containers are structure here, and their statuses are read rather than dragged — which follows from the store's rule that a status is a claim with an author. A campaign and a task are not comparable units of work, and a board that put them in the same column would stop reading as a board.
 
-**Tests are not cards.** They have no status, so there is no column they belong in, and a test is not work in flight — it is what the work is measured with. Instead a card carries a **validation chip**: `3/4 passing`, computed from that workitem's own `validated_by` verdicts. A chip with any failure in it reads as a failure, because one unproven check is the thing worth seeing from across the board. Clicking the chip opens the workitem's file, where the links and their verdicts are.
+**Tests are not cards.** They have no status, so there is no column they belong in, and a test is not work in flight — it is what the work is measured with. Instead a card carries a **validation chip**: `3/4 passing`, computed from that workitem's own `validated_by` verdicts. A chip with any failure in it reads as a failure, because one unproven check is the thing worth seeing from across the board. Clicking the chip opens the workitem's detail, where the links and their verdicts are.
 
-The tests themselves are browsed in the tree, under their own `tests` root.
+The tests themselves are browsed in the tree and on the board's own Tests destination — see *Seeing tests*.
 
 ### What a card shows
 
-Its name on its own line, wrapping to two and then ellipsing — a card that cannot show what it is called is not a card, which is the first thing the original columns got wrong by being too narrow to hold one. Beneath it, quieter: its type when it is a bug, how many acceptance criteria are ticked, and its validation chip when anything validates it. Nothing else. A card is scanned, not read; what it is *for* lives in the file, one click away.
+Its name on its own line, wrapping to two and then ellipsing — a card that cannot show what it is called is not a card, which is the first thing the original columns got wrong by being too narrow to hold one. Beneath it, quieter: its type when it is a bug, how many acceptance criteria are ticked, and its validation chip when anything validates it. Nothing else. A card is scanned, not read; what it is *for* lives in its detail, one click away.
 
 **A column heading reads as a label, not as a field name.** `validation` renders as Validation. The stored value is untouched — the display is the view's business and the file's word is the store's.
+
+## The detail view
+
+**A click on a card opens the entity's detail in the board panel itself**, replacing the columns, with a back control at the top left. The board is where you were; the detail is where you went; back is how you return. Nothing about that needs a second window.
+
+Not a modal. A modal is for a decision that must be made before anything else can happen, and reading a mission is not one — you read it, you follow a link to a test, you come back. A modal that could be stacked would be a browser with no address bar, and one that could not would make every link a dead end.
+
+Not the editor column either, which is what it was and what was wrong with it. The editor showed `workitem.yaml`, so the answer to "what is this task" was a serialised map. The file format change fixes the file; this fixes where a click lands. Both are needed: the file is now worth opening, and opening it is still a detour when all you wanted was to see the thing you clicked.
+
+**What it shows**, in octoshell's order, which is the order a reader wants: the name and its status as a heading, the parent it belongs to under that, then the description, then the level's own sections, then its children. Prose sections render as markdown — a test's Steps table is a table, not a wall of pipes.
+
+**Children are rows, not cards**: a mission lists its tasks, its bugs and the tests that validate it, each a line with a name, a status and — for a test — the verdict it last returned here. A row opens that entity's detail, so the surface navigates into itself, and back walks out the way it came.
+
+**Two things are editable here**, because both are already writes the board owns: the status, through a select, and an acceptance criterion, through its checkbox. Everything else is read, with an **Open file** control that hands the entity's `.md` to the editor column for anyone who wants to write prose. That is the same division the board already draws — the panel moves work, the editor writes it — and now the file it opens reads like a document.
+
+**Detail is per-session and not remembered.** Reopening the panel shows the board. A view that reopened on the task you were reading last Tuesday is a view that has decided something for you.
+
+### Seeing tests
+
+A test has no status, so it has no column, and until now that meant it had no way onto the board at all — you could reach one only by knowing it existed and finding it in the tree. That is the second half of the same complaint: the board's whole job is to show what is there.
+
+**The board gains a Tests destination**, reached from its own header, rendering the suite tree with its cases: suites as headings, tests as rows, each with the count of what it validates and how much of that passes. A row opens the test's detail, which is the same surface everything else opens into.
+
+**A workitem's detail lists what validates it** — one row per `validated_by` link, with the verdict, the comment, and the bug when a failure filed one. That is where a failing check is explained, and it is the reason the link lives in the workitem rather than in the test.
 
 ## Acting
 
@@ -57,13 +81,16 @@ Its name on its own line, wrapping to two and then ellipsing — a card that can
 | `+` on a mission's lane | `createEntity` at level `task`, under that mission |
 | `+` on a campaign's bug lane | `createEntity` at level `bug`, under that campaign |
 | Right-click a card → Delete | `trashEntity`, behind a confirmation naming the entity as the card does |
-| Click a card | opens its `workitem.yaml` (`bug.yaml` for a bug) in the editor column |
+| Click a card | opens its detail, in place of the columns |
+| Change the status select in a detail | `setStatus` |
+| Tick a criterion in a detail | `tickCriterion` |
+| **Open file** in a detail | opens its `workitem.md` (`bug.md`, `test.md`) in the editor column |
 
 Every one is a store call that already exists and is tested. The board adds gestures, not rules.
 
 **Drag writes on drop, not on hover.** A card that changed status while being dragged over a column would write a status nobody chose, and every hover across a board would be a commit in someone's repository.
 
-**Clicking a card opens the file.** There is no detail view. The editor already renders and edits prose well, the YAML is the truth rather than a projection of it, and an agent's edit to that file appears in a tab already open. A read-only detail panel would be a third surface showing what a file shows, kept in step by hand.
+**A detail is drawn from the same read as the board**, never from a cached copy and never from a write's answer. The store re-reads the whole board on every change and the panel redraws from that; a detail open on an entity an agent just edited redraws with the edit, and a detail open on one that was deleted falls back to the board with a line saying so. That is what keeps a third surface honest — it is the same data, drawn twice, not a copy kept in step by hand.
 
 ### Creating something opens a modal, and only its own controls close it
 
@@ -86,11 +113,11 @@ The criterion field is not required — validation reports a task without one ra
 
 ### Deliberately not editable here
 
-Prose, acceptance criteria, renames, and creating campaigns or missions. Editing prose is what the editor is for. Creating structure is a planning act — the agent does it, or you do it in the file. The `+` makes a task because a task is the thing you jot mid-thought — and a bug on the lane that holds bugs, since a lane whose `+` produced something it could not display would be a control that lies about where its result went.
+Prose, renames, and creating campaigns or missions. Editing prose is what the editor is for. Creating structure is a planning act — the agent does it, or you do it in the file. The `+` makes a task because a task is the thing you jot mid-thought — and a bug on the lane that holds bugs, since a lane whose `+` produced something it could not display would be a control that lies about where its result went.
 
 ## What the view remembers
 
-Folding is per view and per session: it is a posture, not a decision, and one that survived a restart would leave someone opening a board they had folded away a week ago and forgotten.
+Folding, and which detail is open, are per view and per session: it is a posture, not a decision, and one that survived a restart would leave someone opening a board they had folded away a week ago and forgotten.
 
 **Hiding is a decision and it persists**, stored per project. Hiding something and finding it back tomorrow is the whole point; a hidden campaign that reappeared on restart would just be a slower fold.
 
