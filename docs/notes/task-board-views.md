@@ -2,7 +2,7 @@
 
 The board from `docs/notes/task-board.md` becomes visible: a tree of the hierarchy in the side column, and a swimlane board in the content panel. Both read the same files, both listen for the same change, and neither holds a copy of the truth.
 
-This is the second half of the board. The first — the store, and the six tools an agent drives it with — is already in `src/main/board/` and `view-mcp.ts`. Nothing here changes the format on disk.
+This is the second half of the board. The first — the store, and the eight tools an agent drives it with — is already in `src/main/board/` and `view-mcp.ts`. Nothing here changes the format on disk.
 
 ## The tree navigates; the board acts
 
@@ -47,7 +47,7 @@ Its name, its type when it is a bug, how many of its acceptance criteria are tic
 | `+` on a mission's lane | `createEntity` at level `task`, under that mission |
 | `+` on a campaign's bug lane | `createEntity` at level `bug`, under that campaign |
 | Right-click a card → Delete | `trashEntity`, behind a confirmation naming it |
-| Click a card | opens its `task.yaml` in the editor column |
+| Click a card | opens its `workitem.yaml` (`bug.yaml` for a bug) in the editor column |
 
 Every one is a store call that already exists and is tested. The board adds gestures, not rules.
 
@@ -80,15 +80,17 @@ Prose, acceptance criteria, renames, and creating campaigns or missions. Editing
 
 Main answers `tasks:read` with `readBoard(currentProject.path)` — the same pure rebuild the tools use, per workspace, never cached. Both surfaces call it; both listen for `tasks:changed`.
 
-The board is re-read when either view opens, after a write it carried out, when the window regains focus, when the project changes, and when anything under `.dsh/tasks/` changes — debounced, superseded rather than queued, **waiting for git to go quiet first**, through the same mechanism the git panel already uses. An agent writing a plan through its tools moves dozens of files in a second; without that wait, each one is a redraw.
+The board is re-read after a write it carried out, when the project changes, and when anything under `.dsh/tasks/` changes — debounced, superseded rather than queued, **waiting for git to go quiet first**, through the same debounce the git panel already uses. An agent writing a plan through its tools moves dozens of files in a second; without that wait, each one is a redraw.
+
+Unlike the git panel's own notice, this one is never gated on whether a view is open: both pages are told on every change, whether or not their column is showing, so neither needs a catch-up read for opening late or for the window regaining focus — it was already being kept in step while nobody was looking.
 
 Because both surfaces read the same channel and hear the same event, they cannot disagree about what is on the board. There is no shared state between them to keep in step — only the same files, read twice.
 
 ## Failing honestly
 
-The store's findings — a file that will not parse, a status the board does not know, a task with no criterion — are already computed on read. The tree shows them against the entity they name. The board cannot — a finding's entity is by definition not on it — so the board carries a line above the columns saying how many files it could not read, which opens the tree. Neither hides an entity it could not read, and neither repairs one.
+The store's findings — a file that will not parse, a status the board does not know, a task with no criterion — are already computed on read. The tree shows them against the entity they name. The board cannot — a finding's entity is by definition not on it — so the board carries a line above the columns saying how many files it could not read and telling the reader to open the tree for which. Neither hides an entity it could not read, and neither repairs one.
 
-A write that fails reports the reason the store gave, on the surface that asked for it, in one line. A dragged card whose write failed **returns to the column it came from**: leaving it where it was dropped would show a status that is not in the file. A modal whose create failed **stays open with what was typed still in it**, and says why — closing it would throw away the work along with the error.
+A write that fails reports the reason the store gave, on the surface that asked for it, in one line. A dragged card whose write failed **returns to the column it came from**: leaving it where it was dropped would show a status that is not in the file. That refusal takes over the board's own findings line until the next read clears it — the reason for what the reader just did outranks the standing count, which comes back the moment the refusal is gone. A cancelled confirmation is not a refusal: the store answers it with no reason, the way Discard in the git panel does, and the line falls back to the findings count rather than going blank. A modal whose create failed **stays open with what was typed still in it**, and says why — closing it would throw away the work along with the error.
 
 ## Testing
 
@@ -100,7 +102,7 @@ The pure parts are the ones with the bugs in them, and they test without Electro
 - **Main's channels**, each gated against the open project, as every board channel already is.
 - Each is broken deliberately to confirm its test fails, as this project asks of a test that guards something important.
 
-The two cross-surface messages — the tree's reveal reaching the board, the card's click reaching the editor — are asserted in main, where both ends are visible.
+The two cross-surface messages — the tree's reveal reaching the board, the card's click reaching the editor — are asserted where each page sends them, against a stubbed bridge: what the message is called and what it carries. Main's own forwarding of the two, where both ends would be visible at once, is not yet covered by a test of its own.
 
 ## Deliberately not in this
 
