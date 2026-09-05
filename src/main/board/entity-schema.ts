@@ -124,6 +124,11 @@ export const RUN_HISTORY = 50
  * form cannot, because a second structured list to keep in sync with the prose
  * is the thing this format exists to remove. An annotation that must persist
  * belongs in `## Notes`, or in a frontmatter key of its own.
+ *
+ * For the same reason a criterion is one line: its text has no line breaks on
+ * disk. A legacy criterion written as a multi-line block scalar is folded onto
+ * one line by `oneLine` on the way in — keeping the words, and keeping one
+ * criterion one criterion.
  */
 export interface AcceptanceCriterion {
   text: string
@@ -301,8 +306,18 @@ const SECTION_FIELDS: readonly (readonly [string, ProseField])[] = [
   ['Notes', 'notes'],
 ]
 
-/** Every heading this schema models, in the order `dumpEntity` carries the unowned ones. */
-const ALL_HEADINGS: readonly string[] = ['Acceptance Criteria', ...SECTION_FIELDS.map(([h]) => h)]
+/**
+ * Every heading this schema models, in the order `dumpEntity` carries the unowned ones.
+ *
+ * Derived from `LEVEL_SECTIONS` rather than from `SECTION_FIELDS`, because
+ * `LEVEL_SECTIONS` is what a level actually writes and so is the definition of
+ * "modelled" — the same reason `KNOWN_KEYS` is derived from `LEVEL_KEYS`. The
+ * two tables agree today, and if they ever stopped agreeing, deriving from the
+ * wrong one would emit a heading twice on every write: once as the level's own
+ * blank section and once again out of `extraSections`, growing the file each
+ * time. Duplicates across levels are collapsed, first appearance wins.
+ */
+const ALL_HEADINGS: readonly string[] = [...new Set(Object.values(LEVEL_SECTIONS).flat())]
 
 /** The same set, lower-cased, for the case-insensitive match `sectionOf` also makes. */
 const MODELLED_HEADINGS = new Set(ALL_HEADINGS.map((h) => h.toLowerCase()))
@@ -326,6 +341,64 @@ const LEGACY_PROSE_KEYS = new Set([
   'steps',
   'notes',
 ])
+
+/**
+ * Whether a legacy key's value can become prose without losing anything.
+ *
+ * The old format let a prose key hold whatever YAML allows: `steps:` as a list
+ * of strings, `environment:` as a map of `{os, build}`. A section body is text,
+ * so pushing those through `String()` would write `open it,click it` and
+ * `[object Object]` — and since the key was subtracted from the frontmatter,
+ * `extra` could not save the original either. This conversion runs once per
+ * file on a real board and can never be re-run, so that loss is permanent.
+ *
+ * So a prose key is prose only when it holds a string (or nothing at all, which
+ * carries nothing to lose). Anything else stays a key, rides out through
+ * `extra` untouched, and is re-emitted in the frontmatter of the converted
+ * document — malformed and visible, which is what the reader reports on, rather
+ * than flattened and gone. That is what the all-YAML loader did before, where it
+ * read these keys through `optString`.
+ *
+ * `acceptance_criteria` is the one key that is legitimately not a string: it is
+ * a list of `{text, done}` maps. It converts only when it is exactly that, and
+ * a list of anything else is carried rather than silently parsed down to
+ * nothing.
+ * @param key - the legacy key.
+ * @param v - its raw value.
+ * @returns true when the translation below can carry it into the document.
+ */
+function isLegacyProse(key: string, v: unknown): boolean {
+  if (v === null || v === undefined) return true
+  if (key === 'acceptance_criteria') {
+    return Array.isArray(v) && v.every((i) => i !== null && typeof i === 'object' && 'text' in i)
+  }
+  return typeof v === 'string'
+}
+
+/**
+ * Flatten a legacy criterion's text onto the one line the new format gives it.
+ *
+ * A criterion is now a line of markdown: `dumpChecklist` writes one line per
+ * item and `parseChecklist` reads one item per line. A legacy criterion whose
+ * `text` was a YAML block scalar spanning two lines would therefore come back as
+ * two criteria, the second one unticked — one ticked criterion silently becoming
+ * a ticked one plus an open one, which is a false statement about the work and
+ * is not undoable.
+ *
+ * **The stated loss:** the line breaks inside a criterion's text do not survive
+ * the conversion. Every word does, joined by a single space. A criterion that
+ * genuinely needs a paragraph was never a checkbox; that prose belongs in
+ * `## Notes`, where it is read rather than counted.
+ * @param text - the criterion's legacy text.
+ * @returns the same words on one line.
+ */
+function oneLine(text: string): string {
+  return text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .join(' ')
+}
 
 function asString(v: unknown): string {
   return typeof v === 'string' ? v : v == null ? '' : String(v)
@@ -489,12 +562,25 @@ export function yamlFailureReason(error: unknown): string {
  * No level is passed, and none is needed — the headings in the document
  * already say which sections it has, and a field whose section is absent
  * simply stays `undefined`.
+ *
+ * A heading that appears twice fills its field from the first one — the same
+ * answer `sectionOf` gives — and every later repeat is carried in
+ * `extraSections`. A field holds one body and cannot hold two, so the choice is
+ * between carrying the repeat as an extra and deleting it on the next write;
+ * a document is never repaired by reading it, and content is never destroyed by
+ * writing it, so the repeat is kept and stays visible to whoever pasted it.
  * @param doc - the document, from a file or translated from a legacy one.
  * @returns the typed fields.
  */
 function fieldsFrom(doc: EntityDoc): EntityFields {
   const front = doc.front
-  const unmodelled = doc.sections.filter((s) => !MODELLED_HEADINGS.has(s.heading.trim().toLowerCase()))
+  const seen = new Set<string>()
+  const unmodelled = doc.sections.filter((s) => {
+    const heading = s.heading.trim().toLowerCase()
+    const carry = !MODELLED_HEADINGS.has(heading) || seen.has(heading)
+    seen.add(heading)
+    return carry
+  })
   const fields: EntityFields = {
     name: asString(front.name),
     // The lead — whatever stands before the first heading — is the description
@@ -536,6 +622,10 @@ export function loadEntity(text: string): EntityFields {
  * key: the old format spelled both a bug's expectation and a test's end state
  * `expected`, and the new one calls them `## Expected` and `## Expected Final
  * State`. A document says which it has; a legacy map does not.
+ *
+ * This runs once per file and can never be re-run, so what it cannot represent
+ * it keeps rather than flattens: see `isLegacyProse` for a prose key holding a
+ * list or a map, and `oneLine` for a criterion that spanned several lines.
  * @param text - the whole `<type>.yaml` body.
  * @param level - the level the path says this file is, which disambiguates `expected`.
  * @returns the typed fields, identical to what the converted document reads as.
@@ -549,22 +639,30 @@ export function loadLegacyEntity(text: string, level: EntityLevel): EntityFields
   const raw = (yamlLoad(text, { schema: JSON_SCHEMA }) ?? {}) as Record<string, unknown>
   const front: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(raw)) {
-    if (!LEGACY_PROSE_KEYS.has(k)) front[k] = v
+    // A prose key whose value the document cannot hold is not subtracted: it
+    // stays a key, and `carryForward` hands it to `extra` intact rather than
+    // letting `String()` flatten a list or a map into the section body.
+    if (!LEGACY_PROSE_KEYS.has(k) || !isLegacyProse(k, v)) front[k] = v
   }
+  /** One prose key's text — `''` for a value left behind in `front` as unconvertible. */
+  const prose = (key: string): string => (isLegacyProse(key, raw[key]) ? asString(raw[key]) : '')
   const sections: { heading: string; body: string }[] = []
   const add = (heading: string, body: string): void => {
     if (body.trim()) sections.push({ heading, body: body.trim() })
   }
-  add('Target', asString(raw.target))
-  add('Acceptance Criteria', dumpChecklist(parseCriteria(raw.acceptance_criteria)))
-  add('Steps to Reproduce', asString(raw.steps_to_reproduce))
-  add(level === 'test' ? 'Expected Final State' : 'Expected', asString(raw.expected))
-  add('Actual', asString(raw.actual))
-  add('RCA', asString(raw.rca))
-  add('Environment', asString(raw.environment))
-  add('Steps', asString(raw.steps))
-  add('Notes', asString(raw.notes))
-  return fieldsFrom({ front, lead: asString(raw.description).trim(), sections })
+  const criteria = isLegacyProse('acceptance_criteria', raw.acceptance_criteria)
+    ? parseCriteria(raw.acceptance_criteria).map((c) => ({ ...c, text: oneLine(c.text) }))
+    : []
+  add('Target', prose('target'))
+  add('Acceptance Criteria', dumpChecklist(criteria))
+  add('Steps to Reproduce', prose('steps_to_reproduce'))
+  add(level === 'test' ? 'Expected Final State' : 'Expected', prose('expected'))
+  add('Actual', prose('actual'))
+  add('RCA', prose('rca'))
+  add('Environment', prose('environment'))
+  add('Steps', prose('steps'))
+  add('Notes', prose('notes'))
+  return fieldsFrom({ front, lead: prose('description').trim(), sections })
 }
 
 /**

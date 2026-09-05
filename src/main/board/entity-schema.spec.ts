@@ -11,6 +11,7 @@ import {
   typeOf,
   WORKITEM_SUBTYPES,
   type EntityFields,
+  type EntityLevel,
 } from './entity-schema'
 import { slugify, uniqueSlug } from './slug'
 
@@ -174,6 +175,25 @@ describe('dumpEntity', () => {
     expect(loadEntity(text).extraSections).toEqual([{ heading: 'Rollout', body: 'Staged.' }])
   })
 
+  // reason: `sectionOf` answers with the first match and every modelled heading
+  // is filtered out of `extraSections`, so a person who pasted `## Notes` twice
+  // used to have the second body deleted by the next write — not in the field,
+  // not in the extras, gone. A repeat is malformed; malformed is reported by the
+  // reader, never destroyed by the writer.
+  it('carries the body of a repeated heading instead of dropping it', () => {
+    const fields = loadEntity(doc('name: C1\n', 'd\n\n## Notes\n\nfirst\n\n## Notes\n\nsecond\n'))
+    expect(fields.notes).toBe('first')
+    expect(fields.extraSections).toEqual([{ heading: 'Notes', body: 'second' }])
+    const text = dumpEntity('campaign', fields)
+    expect(text).toContain('## Notes\n\nsecond\n')
+    // And it settles there rather than multiplying: the second read sees the
+    // same one field and the same one extra, so the file stops growing.
+    const again = loadEntity(text)
+    expect(again.notes).toBe('first')
+    expect(again.extraSections).toEqual([{ heading: 'Notes', body: 'second' }])
+    expect(dumpEntity('campaign', again)).toBe(text)
+  })
+
   // reason: the typed model must win for a key the kind owns, or clearing a
   // field would silently revert to whatever was last on disk.
   it('lets the kind clear a field it owns rather than carrying the old value back', () => {
@@ -257,6 +277,23 @@ describe('the vocabularies', () => {
 
   it('has exactly the three workitem subtypes', () => {
     expect([...WORKITEM_SUBTYPES]).toEqual(['campaign', 'mission', 'task'])
+  })
+
+  // reason: `LEVEL_SECTIONS` is what a level writes, so it is the definition of
+  // a modelled heading — but a heading listed there with no field behind it
+  // would be written blank as the level's own section AND appended again out of
+  // `extraSections`, duplicating the heading and growing the file on every
+  // write. `FULL` populates every field, so a heading with nowhere to read from
+  // shows up here as a blank or a repeat.
+  it('backs every section a level writes with a field, exactly once', () => {
+    for (const level of ENTITY_LEVELS) {
+      const text = dumpEntity(level, FULL)
+      for (const heading of LEVEL_SECTIONS[level]) {
+        const parts = text.split(`\n## ${heading}\n`)
+        expect(parts, `${level}.${heading}`).toHaveLength(2)
+        expect(parts[1].split('\n## ')[0].trim(), `${level}.${heading}`).not.toBe('')
+      }
+    }
   })
 })
 
@@ -444,6 +481,42 @@ describe('loadLegacyEntity', () => {
   const LEGACY_CAMPAIGN =
     'name: C1\nsubtype: campaign\nstatus: idea\ntarget: ship it\ndescription: d\n' +
     'documents:\n  - label: Spec\n    target: docs/spec.md\n'
+  const LEGACY_MISSION =
+    'name: M1\nsubtype: mission\nstatus: validation\ndescription: the middle one\n' +
+    'acceptance_criteria:\n  - text: it ships\n    done: false\n' +
+    'validated_by:\n  - test: tests/a\n    result: pass\n    comment: green\n' +
+    'documents:\n  - label: Plan\n    target: docs/plan.md\nnotes: n\n'
+  // reason: neither key was ever required in the old format. A task nobody has
+  // filed a status on, and a bug nobody has graded, are both ordinary files on
+  // a real board — and they are exactly the files the conversion must not be
+  // tested without, because they are the ones that pick up a default.
+  const LEGACY_UNFILED_TASK = 'name: T2\nsubtype: task\ndescription: d\nnotes: n\n'
+  const LEGACY_UNFILED_BUG = 'name: B2\ndescription: it breaks\nsteps_to_reproduce: click it\n'
+
+  /**
+   * What the converted document must read back as.
+   *
+   * Every field of the legacy entity, plus the two values `dumpEntity` fills in
+   * for a level that has them: a status of `idea`, and `major` on a bug with no
+   * severity. A legacy file carrying neither gains both on conversion — in the
+   * field, and in the `extra` net that records what the frontmatter held — so
+   * the guarantee is not "byte-identical fields" but "nothing lost, and the
+   * default the writer would have applied anyway made explicit". Naming the one
+   * tolerated difference here is what keeps every other difference a failure.
+   */
+  function afterConversion(level: EntityLevel, legacy: EntityFields): EntityFields {
+    const extra: Record<string, unknown> = { ...legacy.extra }
+    const expected: EntityFields = { ...legacy, extra }
+    if (typeOf(level) !== 'test') {
+      expected.status = legacy.status ?? 'idea'
+      extra.status = expected.status
+    }
+    if (level === 'bug') {
+      expected.severity = legacy.severity ?? 'major'
+      extra.severity = expected.severity
+    }
+    return expected
+  }
 
   it('reads an empty legacy file as an empty entity rather than throwing', () => {
     for (const text of ['', '   ', '\n\n', '# just a comment\n']) {
@@ -501,19 +574,65 @@ describe('loadLegacyEntity', () => {
     expect(loadLegacyEntity(LEGACY_BUG, 'bug').extra?.owner).toBe('alice')
   })
 
+  // reason: this conversion runs once per file on a real board and can never be
+  // re-run, so a value it cannot represent must be kept rather than flattened.
+  // A hand-written `steps:` list stringified to `open it,click it`, or an
+  // `environment:` map to `[object Object]`, is destroyed for good. The prose
+  // keys are prose only when they hold a string; anything else stays a key and
+  // rides out through `extra`, exactly as the all-YAML loader left it.
+  it('carries a non-string legacy prose value through extra rather than stringifying it', () => {
+    const list = loadLegacyEntity('name: T\nsteps:\n  - open it\n  - click it\n', 'test')
+    expect(list.steps).toBeUndefined()
+    expect(list.extra?.steps).toEqual(['open it', 'click it'])
+    const map = loadLegacyEntity('name: B\nenvironment:\n  os: mac\n  build: 412\n', 'bug')
+    expect(map.environment).toBeUndefined()
+    expect(map.extra?.environment).toEqual({ os: 'mac', build: 412 })
+  })
+
+  it('converts a non-string prose value with its structure intact', () => {
+    const list = loadLegacyEntity('name: T\nsteps:\n  - open it\n  - click it\n', 'test')
+    expect(loadEntity(dumpEntity('test', list)).extra?.steps).toEqual(['open it', 'click it'])
+    const map = loadLegacyEntity('name: B\nenvironment:\n  os: mac\n', 'bug')
+    expect(loadEntity(dumpEntity('bug', map)).extra?.environment).toEqual({ os: 'mac' })
+  })
+
+  // reason: `dumpChecklist` writes one line per criterion and `parseChecklist`
+  // reads one criterion per line, so a legacy criterion whose text was a block
+  // scalar used to come back as two — the second one unticked. Gaining an open
+  // criterion on a task that was fully ticked is a false statement about the
+  // work. The line breaks inside the text are the acceptable loss; the criterion
+  // and its tick are not.
+  it('keeps a multi-line legacy criterion as one criterion', () => {
+    const fields = loadLegacyEntity(
+      'name: T\nacceptance_criteria:\n  - text: |-\n      line one\n      line two\n    done: true\n',
+      'task',
+    )
+    expect(fields.acceptanceCriteria).toEqual([{ text: 'line one line two', done: true }])
+  })
+
   // reason: this is the conversion. A write rewrites the `.yaml` as a `.md`,
   // and the only guarantee worth having is that nothing on disk is lost on the
   // way — the converted document must read back as exactly the same entity.
   it('converts to a document that reads back as the same entity', () => {
-    const cases: [Parameters<typeof loadLegacyEntity>[1], string][] = [
+    const cases: [EntityLevel, string][] = [
       ['task', LEGACY_TASK],
       ['bug', LEGACY_BUG],
       ['test', LEGACY_TEST],
       ['campaign', LEGACY_CAMPAIGN],
+      ['mission', LEGACY_MISSION],
+      ['task', LEGACY_UNFILED_TASK],
+      ['bug', LEGACY_UNFILED_BUG],
     ]
     for (const [level, yaml] of cases) {
       const legacy = loadLegacyEntity(yaml, level)
-      expect(loadEntity(dumpEntity(level, legacy)), level).toEqual(legacy)
+      expect(loadEntity(dumpEntity(level, legacy)), `${level}: ${yaml}`).toEqual(afterConversion(level, legacy))
     }
+    // The two defaults are the only thing `afterConversion` forgives, and it
+    // forgives them only where they are actually written: a file that filed a
+    // status keeps the one it filed, and a test gains none at all.
+    expect(loadEntity(dumpEntity('task', loadLegacyEntity(LEGACY_UNFILED_TASK, 'task'))).status).toBe('idea')
+    expect(loadEntity(dumpEntity('bug', loadLegacyEntity(LEGACY_UNFILED_BUG, 'bug'))).severity).toBe('major')
+    expect(loadEntity(dumpEntity('task', loadLegacyEntity(LEGACY_TASK, 'task'))).status).toBe('executing')
+    expect(loadEntity(dumpEntity('test', loadLegacyEntity(LEGACY_TEST, 'test'))).status).toBeUndefined()
   })
 })
