@@ -113,7 +113,7 @@ On-disk keys are `snake_case`. Every type carries `name`, `description` and `not
 | Key | workitem | bug | test |
 | --- | --- | --- | --- |
 | `name`, `description`, `notes` | ✓ | ✓ | ✓ |
-| `status` — one of the six | ✓ | ✓ | |
+| `status` — one of the five | ✓ | ✓ | |
 | `subtype` — `campaign`, `mission` or `task` | ✓ | | |
 | `acceptance_criteria` | ✓ | | |
 | `validated_by` — test links with verdicts | ✓ | | |
@@ -130,11 +130,17 @@ A key a subtype does not own is not written for it, but a key already on disk is
 
 **A test has no status**, which is the one asymmetry in the model and is deliberate. Statuses describe work moving toward done; a test is not moving. What a test has is *results*, and a result belongs to a pairing rather than to the test — so it lives on the link. Retiring a test is therefore unlinking it, not marking it: validation *is* the link, and a test nothing points at proves nothing, which is exactly what retired means.
 
-**Status** is one of `draft`, `executing`, `awaitingApproval`, `done`, `failed`, `cancelled`. These are the board's columns. The set is fixed — a status the schema does not know is a validation finding, not a new column, because a board whose columns are whatever anyone typed is not a board.
+**Status** is one of `idea`, `backlog`, `executing`, `validation`, `done`. These are the board's columns, in that order — work moves left to right and there is nowhere else for it to go. The set is fixed: a status the schema does not know is a validation finding, not a new column, because a board whose columns are whatever anyone typed is not a board.
+
+Each name says what is true of the work, not what someone intends to do about it. **`idea`** is a thing worth writing down that nobody has committed to; **`backlog`** is committed but not started; **`executing`** is being done; **`validation`** is done being done and not yet believed; **`done`** is finished with.
+
+**There is no `failed`.** Failure is not a resting place — work that fails goes back to `executing`, or to `backlog` if it needs rethinking, and what actually went wrong is already recorded where it can say something useful: a bug filed against the entity, or a `fail` verdict on the test that caught it. A status meaning "this went wrong once" is stale the day the work resumes, and nobody clears it.
+
+**There is no `cancelled` either** — it and `done` are one. Work that was abandoned is still work you are finished with, and *why* belongs in the entity's notes, where it can be a sentence rather than a word that only says "not the good ending". The cost is stated rather than discovered: the board can no longer tell shipped from abandoned at a glance, and the notes are where that lives.
 
 **An acceptance criterion** is `{ text, done }`. A task with no criterion is a planning defect: a task with no checkable definition of done cannot be gated, and gating is the point. Validation says so; it does not refuse the write.
 
-**Statuses are the same six for workitems and bugs.** Tests have none; see the schema table above. A link's `result` — `pass`, `fail`, `not_run` — is a separate fixed set and never mixes with them: a status says how far work has got, a result says whether a check held, and a column vocabulary that ran both together would be answering two questions in one row.
+**Statuses are the same five for workitems and bugs.** Tests have none; see the schema table above. A link's `result` — `pass`, `fail`, `not_run` — is a separate fixed set and never mixes with them: a status says how far work has got, a result says whether a check held, and a column vocabulary that ran both together would be answering two questions in one row.
 
 ### Status is set, never inferred
 

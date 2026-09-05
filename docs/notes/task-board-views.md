@@ -27,9 +27,15 @@ A project with no `.dsh/tasks/` is worded, not repaired, and says how a board ge
 
 `PaneTab` gains `'board'`, a third panel in `pane.html` beside Editor and Web.
 
-**Columns are the six statuses, always, whether or not anything is in them.** An empty column is information: it names a place work can go. The set never changes shape under the reader, and when the panel is too narrow the board scrolls sideways rather than dropping a column. The *board* scrolls, not each lane on its own: six columns at fixed widths are the same six positions in every lane, and lanes that drifted out of alignment would stop the rows meaning anything by being under each other.
+**Columns are the five statuses, always** — `idea`, `backlog`, `executing`, `validation`, `done` — whether or not anything is in them. An empty column is information: it names a place work can go to. The set never changes shape under the reader, and when the panel is too narrow the board scrolls sideways rather than dropping a column.
 
-**Lanes are missions**, grouped under a campaign heading — including a mission with no work in it yet, which is a lane waiting to be filled rather than a mission that has gone missing. Bugs filed against a campaign rather than a mission get one lane of their own beneath it, so a bug is never homeless and never silently absent.
+**Lanes are missions**, grouped under a campaign, and **both fold**. A mission's header is its own toggle; a folded lane still says what it holds, so folding is a way of putting something down rather than losing it. A campaign folds the same way, because a real project has more campaigns than fit on a screen and most of them are not today's.
+
+**A campaign can also be hidden**, which is different from folded: hidden is off the board entirely. A `N hidden` control at the top is the way back, and it lists everything hidden however it got there. **A `done` campaign hides itself** — finished work does not need a decision — but it is not special, because it appears in that same list. Nothing disappears without somewhere to look for it.
+
+**Campaigns sort by status, then by name**: executing, then validation, then backlog, then idea. What needs you above what is waiting. Alphabetical within each, because a board that reorders under you as statuses change is one you cannot build a habit around.
+
+**The nesting is drawn, not implied.** A campaign's lanes are indented beneath it with a rule running down the group, so a folded mission and a folded campaign — which are otherwise the same shape — cannot be mistaken for siblings, and an open campaign has a visible extent.
 
 **Cards are task-level workitems and bugs.** A mission is a lane label carrying its own status chip; a campaign is a heading. Containers are structure here, and their statuses are read rather than dragged — which follows from the store's rule that a status is a claim with an author. A campaign and a task are not comparable units of work, and a board that put them in the same column would stop reading as a board.
 
@@ -39,7 +45,9 @@ The tests themselves are browsed in the tree, under their own `tests` root.
 
 ### What a card shows
 
-Its name, its type when it is a bug, how many of its acceptance criteria are ticked, and its validation chip when anything validates it. Nothing else. A card is scanned, not read; what it is *for* lives in the file, one click away.
+Its name on its own line, wrapping to two and then ellipsing — a card that cannot show what it is called is not a card, which is the first thing the original columns got wrong by being too narrow to hold one. Beneath it, quieter: its type when it is a bug, how many acceptance criteria are ticked, and its validation chip when anything validates it. Nothing else. A card is scanned, not read; what it is *for* lives in the file, one click away.
+
+**A column heading reads as a label, not as a field name.** `validation` renders as Validation. The stored value is untouched — the display is the view's business and the file's word is the store's.
 
 ## Acting
 
@@ -79,6 +87,14 @@ The criterion field is not required — validation reports a task without one ra
 ### Deliberately not editable here
 
 Prose, acceptance criteria, renames, and creating campaigns or missions. Editing prose is what the editor is for. Creating structure is a planning act — the agent does it, or you do it in the file. The `+` makes a task because a task is the thing you jot mid-thought — and a bug on the lane that holds bugs, since a lane whose `+` produced something it could not display would be a control that lies about where its result went.
+
+## What the view remembers
+
+Folding is per view and per session: it is a posture, not a decision, and one that survived a restart would leave someone opening a board they had folded away a week ago and forgotten.
+
+**Hiding is a decision and it persists**, stored per project. Hiding something and finding it back tomorrow is the whole point; a hidden campaign that reappeared on restart would just be a slower fold.
+
+Both are keyed by folder path, and both are cleared when the project changes — the same path names different work in a different repository, and a lane highlighted in one project because another had the same slug is a small madness.
 
 ## One read, one change event
 
