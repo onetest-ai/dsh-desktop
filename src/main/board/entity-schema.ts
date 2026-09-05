@@ -6,7 +6,48 @@
  */
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 
-export type EntityKind = 'campaign' | 'mission' | 'task' | 'bug'
+/**
+ * What an entity is, at the granularity the file name uses.
+ *
+ * Three rather than five, because a campaign, a mission and a task differ in
+ * altitude and not in nature: they carry the same fields, move through the
+ * same statuses, and every tool that acts on one acts on all three. A bug
+ * carries a reproduction and a test carries what it proves, so those are
+ * genuinely different things and earn files of their own.
+ */
+export type EntityType = 'workitem' | 'bug' | 'test'
+
+/** Which altitude a workitem sits at. */
+export type WorkitemSubtype = 'campaign' | 'mission' | 'task'
+
+/** The three subtypes, in the order they nest. */
+export const WORKITEM_SUBTYPES: readonly WorkitemSubtype[] = ['campaign', 'mission', 'task']
+
+/**
+ * What an entity is, at the granularity paths and schemas care about.
+ *
+ * The type alone is too coarse — a campaign and a task are both workitems but
+ * live in different directories and write different keys — and the subtype
+ * alone does not cover bugs and tests. The level is the union that every
+ * path and every key set is actually indexed by.
+ */
+export type EntityLevel = WorkitemSubtype | 'bug' | 'test'
+
+/** Every level, so a caller can iterate them without rebuilding the union. */
+export const ENTITY_LEVELS: readonly EntityLevel[] = [...WORKITEM_SUBTYPES, 'bug', 'test']
+
+/**
+ * The type a level belongs to, which is the file it is stored in.
+ *
+ * The one function that crosses between the two vocabularies: the directory
+ * an entity sits in says its level, and the file inside is named for its
+ * type. Every path and every filename in the store goes through here.
+ * @param level - the level.
+ * @returns the type whose `<type>.yaml` holds it.
+ */
+export function typeOf(level: EntityLevel): EntityType {
+  return level === 'bug' || level === 'test' ? level : 'workitem'
+}
 
 /** The set an entity's `status` field is drawn from. */
 export type EntityStatus = 'draft' | 'executing' | 'awaitingApproval' | 'done' | 'failed' | 'cancelled'
@@ -40,6 +81,10 @@ export interface EntityFields {
   description: string
   acceptanceCriteria: AcceptanceCriterion[] // campaign/mission/task
   documents: DocumentLink[] // campaign/mission
+  /** A workitem's altitude, as its own file records it. Absent on a bug or a test. */
+  subtype?: string
+  /** What a test says to do. */
+  steps?: string
   status?: string // campaign (settable) / task / bug
   role?: string // task
   target?: string // campaign
@@ -59,11 +104,14 @@ export interface EntityFields {
   extra?: Record<string, unknown>
 }
 
-/** Which top-level keys each kind emits. A known key outside its kind's list is misplaced. */
-export const KIND_KEYS: Record<EntityKind, readonly string[]> = {
-  campaign: ['name', 'status', 'target', 'description', 'acceptance_criteria', 'documents', 'notes'],
-  mission: ['name', 'status', 'description', 'acceptance_criteria', 'documents', 'notes'],
-  task: ['name', 'status', 'role', 'description', 'acceptance_criteria', 'notes'],
+/**
+ * Which top-level keys each level emits. A known key outside its level's list
+ * is misplaced — carried through `extra` rather than destroyed, and reported.
+ */
+export const LEVEL_KEYS: Record<EntityLevel, readonly string[]> = {
+  campaign: ['name', 'subtype', 'status', 'target', 'description', 'acceptance_criteria', 'validated_by', 'documents', 'notes'],
+  mission: ['name', 'subtype', 'status', 'description', 'acceptance_criteria', 'validated_by', 'documents', 'notes'],
+  task: ['name', 'subtype', 'status', 'role', 'description', 'acceptance_criteria', 'validated_by', 'notes'],
   bug: [
     'name',
     'status',
@@ -76,13 +124,16 @@ export const KIND_KEYS: Record<EntityKind, readonly string[]> = {
     'environment',
     'notes',
   ],
+  test: ['name', 'description', 'steps', 'expected', 'runs', 'notes'],
 }
 
 /** The top-level keys this schema owns; anything else round-trips through `extra`. */
 export const KNOWN_KEYS = new Set([
   'name',
+  'subtype',
   'description',
   'acceptance_criteria',
+  'validated_by',
   'documents',
   'status',
   'role',
@@ -93,6 +144,8 @@ export const KNOWN_KEYS = new Set([
   'actual',
   'rca',
   'environment',
+  'steps',
+  'runs',
   'notes',
 ])
 
@@ -166,7 +219,7 @@ function parseDocuments(v: unknown): DocumentLink[] {
   return out
 }
 
-/** Parse a `<kind>.yaml` file body into typed fields. Missing keys default rather than throw. */
+/** Parse a `<type>.yaml` file body into typed fields. Missing keys default rather than throw. */
 export function loadEntity(text: string): EntityFields {
   const raw = (yamlLoad(text) ?? {}) as Record<string, unknown>
   return {
@@ -174,6 +227,8 @@ export function loadEntity(text: string): EntityFields {
     description: asString(raw.description),
     acceptanceCriteria: parseCriteria(raw.acceptance_criteria),
     documents: parseDocuments(raw.documents),
+    subtype: optString(raw.subtype),
+    steps: optString(raw.steps),
     status: optString(raw.status),
     role: optString(raw.role),
     target: optString(raw.target),
@@ -188,41 +243,58 @@ export function loadEntity(text: string): EntityFields {
   }
 }
 
-/** Serialize typed fields to a `<kind>.yaml` body, emitting only the keys that kind uses, in a stable order. */
-export function dumpEntity(kind: EntityKind, f: EntityFields): string {
+/**
+ * Serialize typed fields to a `<type>.yaml` body, emitting only the keys that level uses, in a
+ * stable order.
+ * @param level - the level to dump at. Wins over whatever `f.subtype` says, since the caller got
+ *   its level from the path and the path is what the reader walks.
+ * @param f - the entity's typed fields.
+ * @returns the YAML body to write for that level.
+ */
+export function dumpEntity(level: EntityLevel, f: EntityFields): string {
+  const type = typeOf(level)
   const o: Record<string, unknown> = { name: f.name }
-  // Every entity persists its own status in its own file — no parent projection carries it.
-  o.status = f.status ?? 'draft'
-  if (kind === 'campaign') o.target = f.target ?? ''
-  if (kind === 'task' && f.role) o.role = f.role
-  if (kind === 'bug') o.severity = f.severity ?? 'major'
+  // The level the caller named wins over whatever the file said, because the
+  // caller got its level from the path and the path is what the reader walks.
+  // A file that disagreed is reported by the reader, not silently kept.
+  if (type === 'workitem') o.subtype = level
+  // A test has no status: it is not work in flight, it is the instrument the
+  // work is measured with, and a status would put it in a column it does not
+  // belong in.
+  if (type !== 'test') o.status = f.status ?? 'draft'
+  if (level === 'campaign') o.target = f.target ?? ''
+  if (level === 'task' && f.role) o.role = f.role
+  if (type === 'bug') o.severity = f.severity ?? 'major'
   o.description = f.description ?? ''
-  if (kind === 'bug') {
+  if (type === 'bug') {
     o.steps_to_reproduce = f.stepsToReproduce ?? ''
     o.expected = f.expected ?? ''
     o.actual = f.actual ?? ''
     o.rca = f.rca ?? ''
     o.environment = f.environment ?? ''
+  } else if (type === 'test') {
+    o.steps = f.steps ?? ''
+    o.expected = f.expected ?? ''
   } else {
-    // Spread the item's other keys back out — an agent may annotate a criterion (evidence, who
-    // verified it) and a rewrite must not strip that.
+    // Spread the item's other keys back out — an agent may annotate a criterion
+    // (evidence, who verified it) and a rewrite must not strip that.
     o.acceptance_criteria = f.acceptanceCriteria.map((c) => ({
       text: c.text,
       done: c.done,
       ...restOf(c, ['text', 'done']),
     }))
   }
-  if (kind === 'campaign' || kind === 'mission') {
+  if (level === 'campaign' || level === 'mission') {
     o.documents = f.documents.map((d) => ({ label: d.label, target: d.target, ...restOf(d, ['label', 'target']) }))
   }
-  // Free-form appended prose (decisions/rationale/sign-offs) — emitted for every kind when present.
+  // Free-form appended prose (decisions/rationale/sign-offs), for any level.
   if (f.notes && f.notes.trim()) o.notes = f.notes
-  // Keys this schema does not model are re-emitted last, so a write never destroys content it did
-  // not understand. The typed model always wins for a key this KIND owns — including when it chose
-  // to omit one, which is how a field gets cleared. Carrying those back would make `notes: ""`
-  // (or a cleared role) silently revert to whatever was last on disk.
+  // Keys this schema does not model are re-emitted last, so a write never
+  // destroys content it did not understand. The typed model always wins for a
+  // key this LEVEL owns — including when it chose to omit one, which is how a
+  // field gets cleared.
   for (const [k, v] of Object.entries(f.extra ?? {})) {
-    if (k in o || KIND_KEYS[kind].includes(k)) continue
+    if (k in o || LEVEL_KEYS[level].includes(k)) continue
     o[k] = v
   }
   return yamlDump(o, { lineWidth: -1, noRefs: true })

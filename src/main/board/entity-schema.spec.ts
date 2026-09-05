@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dumpEntity, ENTITY_STATUSES, loadEntity } from './entity-schema'
+import { dumpEntity, ENTITY_STATUSES, loadEntity, typeOf, WORKITEM_SUBTYPES } from './entity-schema'
 import { slugify, uniqueSlug } from './slug'
 
 describe('loadEntity', () => {
@@ -80,9 +80,88 @@ describe('dumpEntity', () => {
   })
 })
 
-describe('the status set', () => {
-  it('is exactly the six the board draws', () => {
+describe('the vocabularies', () => {
+  it('has exactly the six statuses the board draws', () => {
     expect([...ENTITY_STATUSES]).toEqual(['draft', 'executing', 'awaitingApproval', 'done', 'failed', 'cancelled'])
+  })
+
+  it('has exactly the three workitem subtypes', () => {
+    expect([...WORKITEM_SUBTYPES]).toEqual(['campaign', 'mission', 'task'])
+  })
+})
+
+describe('typeOf', () => {
+  // reason: the file on disk is named for the TYPE, while the directory it
+  // sits in says the LEVEL. This is the one function that crosses between
+  // them, so every path and every filename in the store depends on it.
+  it('calls every workitem subtype a workitem', () => {
+    expect(typeOf('campaign')).toBe('workitem')
+    expect(typeOf('mission')).toBe('workitem')
+    expect(typeOf('task')).toBe('workitem')
+  })
+
+  it('leaves a bug and a test as themselves', () => {
+    expect(typeOf('bug')).toBe('bug')
+    expect(typeOf('test')).toBe('test')
+  })
+})
+
+describe('subtype', () => {
+  it('reads a workitem subtype off the file', () => {
+    expect(loadEntity('name: Q3\nsubtype: campaign\n').subtype).toBe('campaign')
+  })
+
+  // reason: every workitem file says what it is, so a file read on its own —
+  // by a person, by a tool that did not walk the tree — is self-describing.
+  it('writes the subtype for every workitem level', () => {
+    for (const level of ['campaign', 'mission', 'task'] as const) {
+      expect(dumpEntity(level, loadEntity('name: X\n'))).toContain(`subtype: ${level}`)
+    }
+  })
+
+  it('writes no subtype for a bug or a test', () => {
+    expect(dumpEntity('bug', loadEntity('name: B\n'))).not.toContain('subtype')
+    expect(dumpEntity('test', loadEntity('name: T\n'))).not.toContain('subtype')
+  })
+
+  // reason: the level the caller names wins over whatever the file said. The
+  // caller got its level from the path, and the path is what the reader walks.
+  it('rewrites a subtype that disagrees with the level it is dumped at', () => {
+    const fields = loadEntity('name: M\nsubtype: campaign\n')
+    expect(dumpEntity('mission', fields)).toContain('subtype: mission')
+  })
+})
+
+describe('what each level writes', () => {
+  it('gives a campaign a target and documents, and a task neither', () => {
+    const campaign = dumpEntity('campaign', loadEntity('name: C\n'))
+    expect(campaign).toContain('target')
+    expect(campaign).toContain('documents')
+    const task = dumpEntity('task', loadEntity('name: T\n'))
+    expect(task).not.toContain('target')
+    expect(task).not.toContain('documents')
+  })
+
+  it('gives a bug its reproduction and no acceptance criteria', () => {
+    const bug = dumpEntity('bug', loadEntity('name: B\n'))
+    expect(bug).toContain('steps_to_reproduce')
+    expect(bug).toContain('severity')
+    expect(bug).not.toContain('acceptance_criteria')
+  })
+
+  // reason: a test is not work in flight, so it has nothing to move through.
+  // A status on it would put it in a column it does not belong in.
+  it('gives a test steps and expected, and no status', () => {
+    const test = dumpEntity('test', loadEntity('name: T\nsteps: click it\nexpected: it works\n'))
+    expect(test).toContain('steps: click it')
+    expect(test).toContain('expected: it works')
+    expect(test).not.toContain('status')
+    expect(test).not.toContain('acceptance_criteria')
+  })
+
+  it('still gives a workitem and a bug a status, defaulting to draft', () => {
+    expect(dumpEntity('task', loadEntity('name: T\n'))).toContain('status: draft')
+    expect(dumpEntity('bug', loadEntity('name: B\n'))).toContain('status: draft')
   })
 })
 
