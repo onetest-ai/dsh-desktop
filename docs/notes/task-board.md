@@ -19,20 +19,23 @@ Three properties follow from that and are worth stating as requirements rather t
 `.dsh/tasks/`, beside the `.dsh/mcp.json` a project may already carry. The directory is the project's, committed like any other source.
 
 ```
-.dsh/tasks/campaigns/<slug>/campaign.yaml
+.dsh/tasks/campaigns/<slug>/workitem.yaml                     subtype: campaign
                            /bugs/<slug>/bug.yaml
-                           /missions/<slug>/mission.yaml
-                                           /tasks/<slug>/task.yaml
+                           /missions/<slug>/workitem.yaml     subtype: mission
+                                           /tasks/<slug>/workitem.yaml   subtype: task
                                            /bugs/<slug>/bug.yaml
+.dsh/tasks/tests/<suite>/…/<slug>/test.yaml
 ```
 
-A bug sits under exactly one parent — a campaign or a mission — whichever owns it. Everything else has one place it can be.
+A bug sits under exactly one parent — a campaign or a mission — whichever owns it. Tests live in their own container; everything else has one place it can be.
 
 A project with no `.dsh/tasks/` has no board. That is a state the panel words, not one it repairs: creating a directory in someone's repository because they opened a view is not a thing to do unasked.
 
-## Four kinds, and children are folder-derived
+## Three types, and children are folder-derived
 
-**Campaign** — an outcome. **Mission** — an independently shippable slice of it. **Task** — one small verifiable unit. **Bug** — a defect, filed against whichever parent owns it.
+**Workitem** — the work itself, at one of three levels named by its `subtype`: a **campaign** is an outcome, a **mission** an independently shippable slice of it, a **task** one small verifiable unit. **Bug** — a defect, filed against whichever workitem owns it. **Test** — something that proves a workitem is done.
+
+Three types rather than five kinds because a campaign, a mission and a task differ in altitude, not in nature: they carry the same fields, move through the same statuses, and every tool that acts on one acts on all three. A bug and a test are genuinely different things — a bug carries a reproduction, a test carries what it proves — and they earn their own files.
 
 **A parent never lists its children.** A campaign's file says nothing about its missions; the missions are the subdirectories. This is the load-bearing decision of the whole design, and it buys three things at once:
 
@@ -42,6 +45,61 @@ A project with no `.dsh/tasks/` has no board. That is a state the panel words, n
 
 **Status lives in the child's own file**, for the same reason. A mission does not track which of its tasks are done; it is computed by reading them.
 
+### The path and the subtype say the same thing, and the path wins
+
+A task lives under `missions/<m>/tasks/<t>/` *and* its file says `subtype: task`. That is deliberate redundancy, not an accident: the directory names are how the reader finds children without opening every file, and the key is what the entity claims to be. The reader trusts the path — it has to, to walk at all — and **a disagreement between them is a finding, never a repair.**
+
+### Tests are a container, and the link carries the verdict
+
+Tests live under `tests/`, in nested suites of any depth. **A suite is a directory, not a fourth type**: it has a slug and nothing else, because grouping is all it does, and a type that exists only to hold other things is a type whose file nobody would ever fill in.
+
+**A test is a static asset.** It says what to do and what should happen, and that is all. It does not move through statuses, because a test is not work in flight — it is the instrument the work is measured with. The same test can be run a hundred times against a dozen workitems, and none of those runs is a property of the test.
+
+**A workitem declares what proves it**, in a `validated_by` list — beside the acceptance criteria, because it is the same kind of statement. A criterion says what must be true; a `validated_by` entry says what demonstrates it, and what happened when it was last demonstrated:
+
+```yaml
+validated_by:
+  - test: tests/auth/login-happy-path
+    result: pass
+    comment: ''
+  - test: tests/auth/login-locked-account
+    result: fail
+    comment: 'returns 500 rather than 423'
+    bug: campaigns/q3/bugs/locked-account-500
+```
+
+**`result` is one of `pass`, `fail`, `not_run`** — a fixed set, for the same reason statuses are fixed. `bug` names the defect a failure produced, when one was filed; a failing test with no bug is a failure nobody has written down yet, and the panel says so rather than assuming it is fine.
+
+The verdict lives on the **link**, not on the test, because a verdict is about a pairing. One test can pass for the mission it was written for and fail for the one that reused it, and both are true at once. A result stored on the test could only ever record the last of them.
+
+### The link lives in the workitem, and why that is not the conflict we closed
+
+Creating a test touches only the test's own file. Only *linking* touches a workitem, and linking is a deliberate act on that workitem's contract — exactly as adding a criterion is. The rule folder-derived children protect is *creating a child forcing an edit to the parent*, and nothing here does that.
+
+The cost is real and is stated rather than discovered: **a test that is deleted or moved leaves a dangling path behind in whatever named it.** That is a finding against the workitem holding it, never a silent drop — a `validated_by` entry that quietly vanished would turn "this is proven" into "this was proven once" with nothing to say so.
+
+### The test records its own runs, so flakiness is visible
+
+A verdict on a link answers "does this pass here, now". It cannot answer "does this test give the same answer twice", and that question is the difference between a real failure and a flaky one.
+
+So the test file keeps its own `runs` list — when it ran, against what, and what came out:
+
+```yaml
+runs:
+  - at: 2026-09-05T09:12:00Z
+    workitem: campaigns/q3/missions/m1
+    result: pass
+  - at: 2026-09-05T09:47:00Z
+    workitem: campaigns/q3/missions/m1
+    result: fail
+```
+
+The same run therefore lands in two places — the verdict on the workitem's link, the record on the test — and **they can disagree**, because a link is updated deliberately and a run is appended automatically. That is not a bug to design away; it is the shape of the thing. Reconciling them is how a stale verdict gets noticed.
+
+**The list is capped at the most recent 50 runs**, oldest dropped. Flakiness is visible in a window, git holds everything older, and an uncapped list makes every run a write to a file that only grows. The cap is a number in one place, so raising it is a decision rather than a refactor.
+
+Trend analysis, quarantining a flaky test, and reconciling a link's verdict against the runs behind it are all deliberately out of scope — the data is recorded so those become possible, not because they are being built now.
+
 ### Identity
 
 An entity's id is derived from its folder path — `folder:campaigns/x/missions/y`. There is no id file and no generated identifier, because the folder already is one and a second source of identity is a second thing that can disagree.
@@ -50,20 +108,33 @@ The cost is that **moving or renaming a folder changes the entity's id.** That i
 
 ## The schema
 
-On-disk keys are `snake_case`. Every kind carries `name`, `status`, `description` and `notes`; the rest is per kind.
+On-disk keys are `snake_case`. Every type carries `name`, `description` and `notes`; the rest is per type, and for a workitem, per subtype.
 
-| Key | campaign | mission | task | bug |
-| --- | --- | --- | --- | --- |
-| `name`, `status`, `description`, `notes` | ✓ | ✓ | ✓ | ✓ |
-| `acceptance_criteria` | ✓ | ✓ | ✓ | |
-| `documents` | ✓ | ✓ | | |
-| `target` | ✓ | | | |
-| `role` | | | ✓ | |
-| `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment` | | | | ✓ |
+| Key | workitem | bug | test |
+| --- | --- | --- | --- |
+| `name`, `description`, `notes` | ✓ | ✓ | ✓ |
+| `status` — one of the six | ✓ | ✓ | |
+| `subtype` — `campaign`, `mission` or `task` | ✓ | | |
+| `acceptance_criteria` | ✓ | | |
+| `validated_by` — test links with verdicts | ✓ | | |
+| `documents` | campaign, mission | | |
+| `target` | campaign | | |
+| `role` | task | | |
+| `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment` | | ✓ | |
+| `steps`, `expected` | | | ✓ |
+| `runs` — execution history, capped at 50 | | | ✓ |
+
+A key a subtype does not own is not written for it, but a key already on disk is never destroyed — see *Unknown keys round-trip*. So a `target` on a task is malformed rather than lost, and shows up as a finding.
+
+**A test carries what it proves**: `steps` and `expected`, the two things that make a test repeatable by someone who did not write it. It does not carry acceptance criteria — a test *is* a criterion, made executable, and giving it criteria of its own would ask what proves the proof.
+
+**A test has no status**, which is the one asymmetry in the model and is deliberate. Statuses describe work moving toward done; a test is not moving. What a test has is *results*, and a result belongs to a pairing rather than to the test — so it lives on the link. Retiring a test is therefore unlinking it, not marking it: validation *is* the link, and a test nothing points at proves nothing, which is exactly what retired means.
 
 **Status** is one of `draft`, `executing`, `awaitingApproval`, `done`, `failed`, `cancelled`. These are the board's columns. The set is fixed — a status the schema does not know is a validation finding, not a new column, because a board whose columns are whatever anyone typed is not a board.
 
 **An acceptance criterion** is `{ text, done }`. A task with no criterion is a planning defect: a task with no checkable definition of done cannot be gated, and gating is the point. Validation says so; it does not refuse the write.
+
+**Statuses are the same six for workitems and bugs.** Tests have none; see the schema table above. A link's `result` — `pass`, `fail`, `not_run` — is a separate fixed set and never mixes with them: a status says how far work has got, a result says whether a check held, and a column vocabulary that ran both together would be answering two questions in one row.
 
 ### Status is set, never inferred
 
@@ -110,19 +181,21 @@ The tools go in `src/main/view-mcp.ts`, beside the ones that open a file and dri
 | Tool | |
 | --- | --- |
 | `board_read` | The whole board, as structure |
-| `board_create` | A campaign, mission, task or bug under a named parent |
-| `board_update` | Name, description, notes, and the per-kind fields |
+| `board_create` | A workitem of a given subtype, a bug, or a test |
+| `board_update` | Name, description, notes, and the per-type fields |
 | `board_status` | Move an entity to a status |
 | `board_criterion` | Add a criterion, or tick one |
+| `board_link` | Link a test to a workitem, record a verdict, or unlink it |
+| `board_run` | Append a run to a test's history |
 | `board_delete` | To the trash |
 
 **Every path argument is checked against the project roots**, exactly as `view-mcp.ts` already does for every file it opens. An agent naming a directory is not evidence the project holds it.
 
-Tool descriptions carry the rules the schema enforces — a task needs a criterion, statuses are closed, children are folder-derived — because the tool description is where an agent learns how to use a board, and a rule discovered through a rejection is a rule learned expensively.
+Tool descriptions carry the rules the schema enforces — a task needs a criterion, the status set is fixed, children are folder-derived, a workitem declares what validates it — because the tool description is where an agent learns how to use a board, and a rule discovered through a rejection is a rule learned expensively.
 
 ## Failing honestly
 
-A file that will not parse, a status that is not in the set, a task with no criteria, an entity whose folder does not match its kind: each is a **finding** naming the file and what is wrong, surfaced rather than repaired. The board reports the entities it could read and says how many it could not.
+A file that will not parse, a status that is not in the set, a task with no criteria, an entity whose folder does not match its type, a `subtype` that disagrees with the path it sits on, a `validated_by` naming a test that is not there, a link whose `result` is not one of the three, a failing link with no bug against it: each is a **finding** naming the file and what is wrong, surfaced rather than repaired. The board reports the entities it could read and says how many it could not.
 
 The rule is the one the rest of this app follows: say what was observed, never a stack trace, and never invent structure where the input did not carry it.
 
@@ -132,7 +205,7 @@ Taken from `@octoshell/board` into `src/main/board/`, with a README recording th
 
 **Taken nearly verbatim:** `entity-schema.ts` — the YAML round-trip, including the `extra` passthrough — and `slug.ts`, with their tests. This is the subtle part, the part with the scars on it, and the part that is genuinely self-contained: its only import is `js-yaml`.
 
-**Written fresh:** the reader, the writer and the validator. Upstream's are 744 and 915 lines, and most of that is what this board does not have — reading Markdown as well as YAML, the `isYaml` branch through every path, legacy id markers, workflow parsing, and the migrations off the old format. Taking them would mean vendoring the legacy handling in order to delete it. A YAML-only reader over four kinds is a small fraction of that, and the behaviour worth keeping is in the schema, which we do take.
+**Written fresh:** the reader, the writer and the validator. Upstream's are 744 and 915 lines, and most of that is what this board does not have — reading Markdown as well as YAML, the `isYaml` branch through every path, legacy id markers, workflow parsing, and the migrations off the old format. Taking them would mean vendoring the legacy handling in order to delete it. A YAML-only reader over three types is a small fraction of that, and the behaviour worth keeping is in the schema, which we do take.
 
 **Left behind, with reasons:**
 

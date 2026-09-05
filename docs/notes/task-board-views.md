@@ -17,7 +17,7 @@ Each has one job:
 
 `SideView` gains `'tasks'`, beside `'files'` and `'git'`. A third rail button, `⌘⌥T`, a `tasks.html` page with its own bundle, and `views.tasks` — the same shape the git panel added, for the same reason: three views that are rarely read at once do not each deserve permanent horizontal space.
 
-Rows nest campaign → mission → task/bug, collapsible, each carrying a status chip and — for a campaign or a mission — the progress computed on read. **Clicking a row scrolls the board to that lane and highlights it**, bringing the Board tab forward if the pane was showing something else — a reveal that scrolled a panel nobody could see would look like nothing happening. A campaign row reveals its heading, a mission row its lane, and a task or bug row its own card. The tree does not open files and does not change anything.
+Rows nest campaign → mission → task/bug, collapsible, each carrying a status chip and — for a campaign or a mission — the progress computed on read. Beneath them, a second root: `tests`, with its suites and the tests inside them. A test row shows what it validates and how many of those verdicts pass, which is the reverse of the workitem's chip and the only place that direction is visible. **Clicking a row scrolls the board to that lane and highlights it**, bringing the Board tab forward if the pane was showing something else — a reveal that scrolled a panel nobody could see would look like nothing happening. A campaign row reveals its heading, a mission row its lane, and a task or bug row its own card. The tree does not open files and does not change anything.
 
 A project with no `.dsh/tasks/` is worded, not repaired, and says how a board gets started. The same three-states rule the git panel follows.
 
@@ -31,9 +31,13 @@ A project with no `.dsh/tasks/` is worded, not repaired, and says how a board ge
 
 **Cards are tasks and bugs.** A mission is a lane label carrying its own status chip; a campaign is a heading. Containers are structure here, and their statuses are read rather than dragged — which follows from the store's rule that a status is a claim with an author. A campaign and a task are not comparable units of work, and a board that put them in the same column would stop reading as a board.
 
+**Tests are not cards.** They have no status, so there is no column they belong in, and a test is not work in flight — it is what the work is measured with. Instead a card carries a **validation chip**: `3/4 passing`, computed from that workitem's own `validated_by` verdicts. A chip with any failure in it reads as a failure, because one unproven check is the thing worth seeing from across the board. Clicking the chip opens the workitem's file, where the links and their verdicts are.
+
+The tests themselves are browsed in the tree, under their own `tests` root.
+
 ### What a card shows
 
-Its name, its kind when it is a bug, and how many of its acceptance criteria are ticked. Nothing else. A card is scanned, not read; what it is *for* lives in the file, one click away.
+Its name, its kind when it is a bug, how many of its acceptance criteria are ticked, and its validation chip when anything validates it. Nothing else. A card is scanned, not read; what it is *for* lives in the file, one click away.
 
 ## Acting
 
