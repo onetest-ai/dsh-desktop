@@ -47,6 +47,12 @@
   <section id="panel-board" role="tabpanel" aria-labelledby="tab-board" class="panel">
     <p class="empty" id="board-empty" hidden></p>
     <p class="git-note" id="board-note" role="status" hidden></p>
+    <!-- The board's own chrome, and the only way to a test that does not
+         require knowing the test exists. Hidden while a destination is open,
+         because each of those carries its own back. -->
+    <div class="board-head" id="board-head" hidden>
+      <button type="button" id="board-tests" class="board-head-button">Tests</button>
+    </div>
     <div id="board-groups"></div>
     <!-- Closed by its own controls and by nothing else; see the spec's
          "Creating something opens a modal". -->

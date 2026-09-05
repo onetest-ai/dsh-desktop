@@ -1305,11 +1305,18 @@ body {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+/* Two lines and then an ellipsis, not one: at this column width one line cut
+   most real names off after three words — `Define First Deliver…` — and a
+   card that cannot say what it is called is the thing the original columns
+   got wrong. The clamp is what still bounds a card's height, so a lane of
+   long names does not become a lane of paragraphs. */
 .board-card-name {
+  display: -webkit-box;
   overflow: hidden;
   flex: 1 1 100%;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 /* A bug says so on its face: it sits in the same columns as the work around
@@ -1366,6 +1373,88 @@ body {
   font-size: 10px;
   line-height: 1;
   cursor: pointer;
+}
+
+/*
+ * The board's own header.
+ *
+ * One control, right-aligned, above the columns: it is chrome rather than
+ * content, and putting it on the left would give the board two things
+ * competing to be the first thing read — the campaign heading is the board.
+ */
+.board-head {
+  position: sticky;
+  left: 0;
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+/* Quiet, like the detail's Open file: a door out of this surface rather than
+   the point of it. Bordered where that one is not, because this one sits over
+   empty panel with nothing beside it to read as a control. */
+.board-head-button {
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.board-head-button:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/*
+ * The Tests destination.
+ *
+ * Capped at the detail's measure and left where the columns started, for the
+ * detail's reason: it is the same panel one level in, not a different page.
+ */
+.board-tests {
+  max-width: 68ch;
+}
+
+/* Indented under its parent with a rule down the group, as a campaign's lanes
+   are: a nested suite and a sibling one are otherwise the same shape. */
+.board-tests-suite-box .board-tests-suite-box {
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--dsw-alias-border-primary, currentColor);
+}
+
+.board-tests-suite {
+  margin: 10px 0 2px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* A whole line, as a detail's child row is — this list is read down the page
+   and the name is what the eye runs along. */
+.board-tests-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-tests-row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 /*

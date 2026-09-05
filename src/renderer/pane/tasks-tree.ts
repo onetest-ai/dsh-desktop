@@ -119,7 +119,7 @@ function statusChip(status: string): HTMLElement {
  * Every row is a button so it is reachable by tab, and the arrow keys fold it
  * the way a tree is expected to. What the press does is the caller's, because
  * that is the whole difference between this view and the board: an entity
- * reveals, a container folds, a test opens its own file, and nothing here
+ * reveals, a container folds, a test opens its detail, and nothing here
  * writes.
  * @param name - what the row is called.
  * @param path - the row's folder path, which keys its fold.
@@ -195,11 +195,12 @@ function drawEntity(entity: EntityView): HTMLElement {
 function drawTest(test: TestView): HTMLElement {
   const item = document.createElement('li')
   const row = rowFor(test.name, test.folderPath, false, () => {
-    // Not a reveal: the board draws no card for a test, deliberately, so a
-    // reveal would bring the Board tab forward and point at nothing. The file
-    // is the only thing a test row can go to, and it is the same thing a
-    // card's click goes to for a workitem.
-    window.pane.openTaskFile(test.folderPath, 'test.yaml')
+    // The same message every other row sends, because this page has one job
+    // and naming a folder is it. What a test means over there is the board's
+    // to decide: it draws no card for one, so it puts the test's own detail
+    // up instead of a highlight — the same surface a card's click opens, and
+    // the one thing that made `test.yaml` here the wrong answer.
+    window.pane.revealOnBoard(test.folderPath)
   })
   if (test.validates.total > 0) row.append(countTag(test.validates.pass, test.validates.total))
   item.append(row)

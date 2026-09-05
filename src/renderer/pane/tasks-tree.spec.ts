@@ -32,7 +32,6 @@ interface Stub {
   readTasks: () => Promise<unknown>
   onTasksChanged: (listener: () => void) => void
   revealOnBoard: (folderPath: string) => void
-  openTaskFile: (folderPath: string, file: string) => void
   askTheme: () => void
   onTheme: () => void
   calls: unknown[][]
@@ -55,7 +54,6 @@ function bridge(data: Record<string, unknown>): Stub {
     },
     fire: () => changed?.(),
     revealOnBoard: (folderPath) => calls.push(['reveal', folderPath]),
-    openTaskFile: (folderPath, file) => calls.push(['open', folderPath, file]),
     askTheme: () => {},
     onTheme: () => {},
   }
@@ -144,10 +142,12 @@ describe('the tasks tree', () => {
     expect(text).toContain('1/2')
   })
 
-  // reason: the board draws no card for a test, deliberately — so a reveal
-  // would bring the Board tab forward, clear the last highlight and point at
-  // nothing. The file is the one thing a test row can go to.
-  it('opens a test’s own file rather than revealing it on the board', async () => {
+  // reason: `test.yaml` was the answer to "what is this test" for the same
+  // reason `workitem.yaml` was the answer for a task, and it was the same
+  // wrong answer: a serialised map. The board draws no card for a test, so
+  // this is not a highlight — the panel reads the name it is handed and puts
+  // the test's own detail up, which is where a card's click goes too.
+  it('sends a test to the board, which opens its detail rather than a file', async () => {
     const stub = bridge(
       board({
         tests: {
@@ -161,7 +161,7 @@ describe('the tasks tree', () => {
     await load(stub)
     const rows = [...document.querySelectorAll<HTMLElement>('.tree-row')]
     rows[rows.length - 1].click()
-    expect(stub.calls).toEqual([['open', 'tests/login', 'test.yaml']])
+    expect(stub.calls).toEqual([['reveal', 'tests/login']])
   })
 
   // reason: a fold is keyed on a board-relative path, and `campaigns/q3` is a

@@ -13,6 +13,9 @@ function page(): void {
   document.body.innerHTML =
     '<p class="empty" id="board-empty" hidden></p>' +
     '<p class="git-note" id="board-note" role="status" hidden></p>' +
+    '<div class="board-head" id="board-head" hidden>' +
+    '<button type="button" id="board-tests">Tests</button>' +
+    '</div>' +
     '<div id="board-groups"></div>' +
     '<div id="board-modal" class="board-modal" hidden><form id="board-modal-form">' +
     '<p id="board-modal-title"></p>' +
@@ -239,10 +242,15 @@ function drop(folderPath: string, status: string): void {
 beforeEach(page)
 
 describe('the board', () => {
+  // The headings read as labels rather than as field names — `validation` is
+  // the stored value and Validation is what a column is called — while the
+  // class the drop and the stylesheet address the column by keeps the word
+  // the file uses.
   it('draws a column for every status, empty ones included', async () => {
     await load(bridge(oneMission()))
     const headings = [...document.querySelectorAll('.board-column-title')].map((node) => node.textContent)
-    expect(headings).toEqual(['idea', 'backlog', 'executing', 'validation', 'done'])
+    expect(headings).toEqual(['Idea', 'Backlog', 'Executing', 'Validation', 'Done'])
+    expect(document.querySelectorAll('.board-column-validation').length).toBe(1)
   })
 
   it('puts a card in the column its status names', async () => {
@@ -656,5 +664,115 @@ describe('the create modal', () => {
     expect(document.getElementById('board-modal')?.hidden).toBe(false)
     expect((document.getElementById('board-modal-name') as HTMLInputElement).value).toBe('Half typed')
     expect(document.getElementById('board-modal-error')?.textContent).toContain('name it first')
+  })
+})
+
+/**
+ * The Tests destination: the third thing the panel can put in its container.
+ *
+ * A test has no status and so no column, which until now meant the board had
+ * no way to show one at all — these are about the way in that does not
+ * require already knowing the test is there.
+ */
+describe('the Tests destination', () => {
+  /**
+   * A board whose suite tree has one sub-suite with one test in it.
+   * @param over - what this case is about, passed through to `oneMission`.
+   * @returns the board, as `readTasks` answers it.
+   */
+  function withTests(over: Parameters<typeof oneMission>[0] = {}): Record<string, unknown> {
+    return {
+      ...oneMission(over),
+      tests: {
+        path: 'tests',
+        slug: 'tests',
+        suites: [
+          {
+            path: 'tests/auth',
+            slug: 'auth',
+            suites: [],
+            tests: [{ folderPath: 'tests/auth/login', name: 'Login holds', validates: { pass: 1, total: 2 } }],
+          },
+        ],
+        tests: [],
+      },
+    }
+  }
+
+  // reason: this is the second half of the complaint the change is about —
+  // a test was reachable only by knowing it existed, and the board's whole
+  // job is to show what is there.
+  it('draws the suite tree from the header’s Tests control', async () => {
+    await load(bridge(withTests()))
+    document.getElementById('board-tests')?.click()
+    expect([...document.querySelectorAll('.board-tests-suite')].map((node) => node.textContent)).toEqual(['auth'])
+    const row = document.querySelector('.board-tests-row')
+    expect(row?.textContent).toContain('Login holds')
+    // The reverse of a card's chip: what the test proves, and how much holds.
+    expect(row?.textContent).toContain('1/2')
+    // It is a destination, not an overlay: the columns are gone while it is up.
+    expect(document.querySelector('.board-column')).toBeNull()
+  })
+
+  // reason: a row that only listed tests would be a dead end — the detail is
+  // the surface everything else on this board opens into, tests included.
+  it('opens a test’s detail from a row', async () => {
+    const stub = bridge(withTests(), { detail: detail({ level: 'test', status: '', name: 'Login holds' }) })
+    await load(stub)
+    document.getElementById('board-tests')?.click()
+    document.querySelector<HTMLElement>('.board-tests-row')?.click()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(stub.calls).toContainEqual(['detail', 'tests/auth/login'])
+    expect(document.querySelector('.board-detail-title')?.textContent).toBe('Login holds')
+  })
+
+  // reason: back walks out the way it came in. A test opened from Tests
+  // returns to Tests, and only the second back reaches the columns — a
+  // detail that dropped the reader on the board would undo the navigation
+  // rather than reverse it.
+  it('walks back out through Tests, then to the columns', async () => {
+    const stub = bridge(withTests(), { detail: detail({ level: 'test', status: '' }) })
+    await load(stub)
+    document.getElementById('board-tests')?.click()
+    document.querySelector<HTMLElement>('.board-tests-row')?.click()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    document.querySelector<HTMLElement>('.board-detail-back')?.click()
+    expect(document.querySelector('.board-tests-row')).not.toBeNull()
+    document.querySelector<HTMLElement>('.board-tests-back')?.click()
+    expect(document.querySelector('.board-column')).not.toBeNull()
+  })
+
+  // reason: the tree's test row names a folder the board draws no card for.
+  // Marking the columns would point at nothing; the detail is what a test
+  // row goes to, and the board is the surface that knows which paths are
+  // tests.
+  it('opens the detail when the tree names a test', async () => {
+    const stub = bridge(withTests(), { detail: detail({ level: 'test', status: '', name: 'Login holds' }) })
+    await load(stub)
+    stub.reveal('tests/auth/login')
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(stub.calls).toContainEqual(['detail', 'tests/auth/login'])
+    expect(document.querySelector('.board-detail-title')?.textContent).toBe('Login holds')
+    expect(document.querySelector('.board-card-revealed')).toBeNull()
+  })
+
+  // reason: a control that vanished with the last test would make the
+  // destination something you have to already know about, which is the thing
+  // it exists to fix — so it stays, and the destination words its own empty.
+  it('keeps the control on a board with no tests, and words the empty', async () => {
+    await load(bridge(oneMission()))
+    expect(document.getElementById('board-head')?.hidden).toBe(false)
+    document.getElementById('board-tests')?.click()
+    expect(document.querySelector('.board-tests')?.textContent).toContain('No tests yet')
+  })
+
+  // reason: the header is the columns' own chrome. Left up behind a detail it
+  // would offer a second way out beside the one that surface already carries.
+  it('hides the header while a destination is open', async () => {
+    const stub = bridge(withTests(), { detail: detail() })
+    await load(stub)
+    document.querySelector<HTMLElement>('.board-card')?.click()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.getElementById('board-head')?.hidden).toBe(true)
   })
 })

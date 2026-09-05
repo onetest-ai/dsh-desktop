@@ -1,7 +1,7 @@
 import { type DetailActions, renderDetail } from './board-detail.ts'
-import { BOARD_STATUSES, chipOf, groupBoard, type EntityView, type LaneView } from './board-rows.ts'
+import { BOARD_STATUSES, chipOf, groupBoard, statusLabel, type EntityView, type LaneView } from './board-rows.ts'
 import './bridge.ts'
-import type { BoardViewData, EntityDetailView } from './bridge.ts'
+import type { BoardViewData, EntityDetailView, SuiteView, TestView } from './bridge.ts'
 import { followHarnessTheme } from './theme.ts'
 
 // Applies the harness's dark-mode attribute to this page; every colour here
@@ -68,6 +68,20 @@ let revealed: string | undefined
  * for you.
  */
 let detail: EntityDetailView | undefined
+
+/**
+ * Whether the Tests destination is the surface behind whatever is on screen.
+ *
+ * A second flag rather than a third value of one, because the two stack: a
+ * test opened from here puts its detail over this, and back walks out the way
+ * it came — to the list, and only then to the columns. One enum would make
+ * that history a thing to remember somewhere else.
+ *
+ * Not cleared when the project changes, unlike `detail` and `revealed`: those
+ * name a path, and a path means something else in the next repository. This
+ * names a destination every board has.
+ */
+let tests = false
 
 /** What the modal is about to create, or undefined when it is closed. */
 let pending: { level: 'task' | 'bug'; parent: string } | undefined
@@ -203,7 +217,10 @@ function columnFor(status: string, cards: EntityView[]): HTMLElement {
   column.className = `board-column board-column-${status}`
   const title = document.createElement('p')
   title.className = 'board-column-title'
-  title.textContent = status
+  // The label, not the stored value: `validation` is the file's word and
+  // Validation is the reader's. The class beside it keeps the raw one, which
+  // is what the stylesheet and the drop both address the column by.
+  title.textContent = statusLabel(status)
   column.append(title)
   for (const card of cards) column.append(cardFor(card))
   column.addEventListener('dragover', (event) => {
@@ -303,8 +320,9 @@ function drawNote(): void {
  * the two below, not a rewrite of either.
  * @returns the surface `draw` should put in the container.
  */
-function surface(): 'columns' | 'detail' {
-  return detail === undefined ? 'columns' : 'detail'
+function surface(): 'columns' | 'detail' | 'tests' {
+  if (detail !== undefined) return 'detail'
+  return tests ? 'tests' : 'columns'
 }
 
 /**
@@ -316,6 +334,9 @@ function surface(): 'columns' | 'detail' {
  */
 const detailActions: DetailActions = {
   back: () => {
+    // One level, not all the way out: a test opened from the Tests list
+    // lands back on the list it was picked from, and a card's detail lands
+    // on the columns because that is where its card was.
     detail = undefined
     draw()
   },
@@ -342,6 +363,122 @@ function drawDetail(into: HTMLElement, empty: HTMLElement): void {
   if (detail === undefined) return
   empty.hidden = true
   into.append(renderDetail(detail, detailActions))
+}
+
+/**
+ * Whether a suite holds a test anywhere beneath it.
+ *
+ * The same predicate the tree applies to the same tree, for the same reason:
+ * a heading with nothing under it is a section the reader has to look into to
+ * find out it is empty. Written here rather than shared because the two pages
+ * share only pure modules, and a one-line predicate is a poor reason to make
+ * `board-rows.ts` know what a suite is.
+ * @param suite - the suite to look through.
+ * @returns whether there is a test anywhere beneath it.
+ */
+function suiteHolds(suite: SuiteView): boolean {
+  return suite.tests.length > 0 || suite.suites.some(suiteHolds)
+}
+
+/**
+ * One test, as a row of the Tests list.
+ *
+ * The count is the reverse of a card's chip — what this test proves, rather
+ * than what proves that card — and it reads as failing on the same rule: one
+ * unproven check is the thing worth seeing.
+ * @param test - the test to draw.
+ * @returns the row, ready to append.
+ */
+function testRow(test: TestView): HTMLElement {
+  const row = document.createElement('button')
+  row.type = 'button'
+  row.className = 'board-tests-row'
+  const name = document.createElement('span')
+  name.className = 'board-detail-row-name'
+  name.textContent = test.name
+  row.append(name)
+  const { pass, total } = test.validates
+  if (total > 0) {
+    const chip = tag('board-chip', `${String(pass)}/${String(total)}`)
+    if (pass < total) chip.classList.add('board-chip-failing')
+    row.append(chip)
+  }
+  row.addEventListener('click', () => {
+    // The detail, which is the surface everything else on this board opens
+    // into: a list that could only be looked at would be a dead end, and the
+    // test's own steps and verdicts are what somebody came here for.
+    void openDetail(test.folderPath)
+  })
+  return row
+}
+
+/**
+ * One suite and everything beneath it, headings first.
+ *
+ * Depth is drawn as indentation rather than as a fold: the list is read at a
+ * glance and a suite tree is shallow, so a twisty here would be a control
+ * whose only use is putting back what it just took away.
+ * @param suite - the suite to draw.
+ * @param depth - how far in it sits, the root being zero.
+ * @returns the suite's block, ready to append.
+ */
+function suiteBlock(suite: SuiteView, depth: number): HTMLElement {
+  const box = document.createElement('div')
+  box.className = 'board-tests-suite-box'
+  if (depth > 0) {
+    const heading = document.createElement('h3')
+    heading.className = 'board-tests-suite'
+    heading.textContent = suite.slug
+    box.append(heading)
+  }
+  for (const test of suite.tests) box.append(testRow(test))
+  // Sub-suites after the tests directly in this one, so a suite's own cases
+  // are not pushed below the whole depth of everything nested under it.
+  for (const child of suite.suites) {
+    if (suiteHolds(child)) box.append(suiteBlock(child, depth + 1))
+  }
+  return box
+}
+
+/**
+ * Draw the suite tree in place of the columns.
+ *
+ * A test has no status and so no column, which is exactly why this exists: it
+ * is the only way to a test that does not require already knowing the test is
+ * there. Its own back, drawn as the detail's is, because the two are the same
+ * gesture on the same panel and a reader should not have to learn it twice.
+ * @param into - the panel's one container.
+ * @param empty - the line that words an absent board, which this surface has none of.
+ */
+function drawTests(into: HTMLElement, empty: HTMLElement): void {
+  empty.hidden = true
+  const box = document.createElement('section')
+  box.className = 'board-tests'
+  const head = document.createElement('div')
+  head.className = 'board-detail-head'
+  const back = document.createElement('button')
+  back.type = 'button'
+  back.className = 'board-detail-back board-tests-back'
+  back.textContent = '← Board'
+  back.addEventListener('click', () => {
+    tests = false
+    draw()
+  })
+  const title = document.createElement('h2')
+  title.className = 'board-detail-title'
+  title.textContent = 'Tests'
+  head.append(back, title)
+  box.append(head)
+  const root = latest?.tests
+  if (root === undefined || !suiteHolds(root)) {
+    const line = document.createElement('p')
+    line.className = 'board-detail-blank'
+    line.textContent = 'No tests yet.'
+    box.append(line)
+  } else {
+    box.append(suiteBlock(root, 0))
+  }
+  into.append(box)
 }
 
 /**
@@ -425,7 +562,12 @@ async function flip(folderPath: string, index: number, done: boolean): Promise<v
 function draw(): void {
   const into = el('board-groups')
   const empty = el('board-empty')
+  const head = el('board-head')
   into.textContent = ''
+  // The columns' own chrome, and only theirs: a destination carries its own
+  // back, and a Tests control left up behind one would be a second way out
+  // beside it, going somewhere the reader did not come from.
+  head.hidden = true
   if (trouble !== undefined) {
     empty.textContent = trouble
     empty.hidden = false
@@ -452,7 +594,15 @@ function draw(): void {
     case 'detail':
       drawDetail(into, empty)
       return
+    case 'tests':
+      drawTests(into, empty)
+      return
     case 'columns':
+      // Shown whether or not this board has a test in it. A control that came
+      // and went with the suite tree would make the destination something you
+      // have to already know about, which is the thing it exists to fix — the
+      // list words its own emptiness instead.
+      head.hidden = false
       drawColumns(into, empty)
       return
   }
@@ -522,6 +672,11 @@ async function create(): Promise<void> {
   error.hidden = false
 }
 
+el('board-tests').addEventListener('click', () => {
+  tests = true
+  draw()
+})
+
 el('board-modal-form').addEventListener('submit', (event) => {
   event.preventDefault()
   void create()
@@ -577,9 +732,38 @@ async function refresh(): Promise<void> {
   draw()
 }
 
+/**
+ * Whether a folder path names a test on the board that was last read.
+ *
+ * Asked of the read rather than of the string: `tests/` is a convention and a
+ * path that merely starts with it is not proof of anything, while the suite
+ * tree is the board's own answer to which tests exist.
+ * @param suite - the suite to look through, or undefined before the first read.
+ * @param folderPath - the path the tree named.
+ * @returns whether a test in that tree carries it.
+ */
+function isTest(suite: SuiteView | undefined, folderPath: string): boolean {
+  if (suite === undefined) return false
+  return (
+    suite.tests.some((test) => test.folderPath === folderPath) ||
+    suite.suites.some((child) => isTest(child, folderPath))
+  )
+}
+
 // Sent by main when the tree names a folder. The tab comes forward with it: a
 // lane scrolled to inside a panel nobody can see looks like nothing happened.
 window.pane.onReveal((folderPath) => {
+  // A test is the one thing the tree can name that this board draws no card
+  // for, so a highlight would point at nothing. The panel is the side that
+  // knows which paths are tests — the tree sends the same message for every
+  // row — and the answer for one is the detail, the same surface a card's
+  // click opens.
+  if (isTest(latest?.tests, folderPath)) {
+    tests = false
+    void openDetail(folderPath)
+    document.getElementById('tab-board')?.click()
+    return
+  }
   revealed = folderPath
   // A reveal always lands on the board: it names a card, a lane or a heading,
   // and all three are on the columns. Marking one behind an open detail would
