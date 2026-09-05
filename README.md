@@ -166,13 +166,13 @@ The **terminal** holds as many shells as you want: `+` opens another, each tab h
 
 Open the tree and the browser from the rail, or from **View** (`Cmd+Alt+B`, `Cmd+Alt+W`, and `Cmd+Alt+T`). The editor has no toggle of its own: it appears when a file is opened, and closes when its last tab does. Every column remembers its width.
 
-The rail's **Source Control** button, or `Cmd+Alt+G`, takes the tree's place with a git panel instead — the two share that one column, the way Explorer and Source Control take turns in one VS Code sidebar, rather than each holding permanent width of its own. It lists every repository the project holds (skipping straight to its contents when there is only one), each repository's branch and how far it is ahead or behind, and its changed, staged, and untracked files. Clicking a file shows its diff inline in the editor column, coloured, beside whatever tab you already had open for that file. This reads your local git only — there is no account, no API, and no token involved.
-
 The board has two surfaces. `⌘⌥T` opens its tree in the side column — campaigns,
 missions, tasks and bugs, with the tests that prove them under their own root.
 The Board tab in the content column shows the same work as a swimlane board:
 one lane per mission, one column per status, and a card dragged between them
 sets that entity's status and nothing else's.
+
+The rail's **Source Control** button, or `Cmd+Alt+G`, takes the tree's place with a git panel instead — the two share that one column, the way Explorer and Source Control take turns in one VS Code sidebar, rather than each holding permanent width of its own. It lists every repository the project holds (skipping straight to its contents when there is only one), each repository's branch and how far it is ahead or behind, and its changed, staged, and untracked files. Clicking a file shows its diff inline in the editor column, coloured, beside whatever tab you already had open for that file. This reads your local git only — there is no account, no API, and no token involved.
 
 Every row carries a tick, and **a tick is a selection, not the index**: it says only *include this in the next commit*, and nothing runs until you press Commit. Tracked changes arrive ticked and untracked files arrive unticked, since a file git has never seen is exactly the one you did not mean to commit. **Commit stages what is ticked for you** — there is no separate staging step, and it is never refused for having nothing staged. It also unstages what you have unticked, and that sticks: unticking a file that was already staged unstages it for good, not just for this commit. Stage and Unstage are still there per row and per repository for the times the index itself is what you are thinking about.
 
