@@ -19,9 +19,13 @@ const fake = vi.hoisted(() => {
 
   /** One view's `webContents`, recording what `createWindow` does to it. */
   const contents = (): Record<string, unknown> => ({
-    on: (event: string, handler: () => void) => {
+    // Per view rather than in one list, unlike the two above: which view was
+    // pinned to its page is the whole question, and a shared list cannot say.
+    navigations: [] as unknown[],
+    on(this: { navigations: unknown[] }, event: string, handler: () => void) {
       if (event === 'dom-ready') domReadyHandlers.push(handler)
       if (event === 'did-finish-load') loadHandlers.push(handler)
+      if (event === 'will-navigate') this.navigations.push(handler)
     },
     insertCSS: vi.fn(async (css: string) => {
       insertedCss.push(css)
@@ -148,6 +152,22 @@ describe('the window\'s views', () => {
     expect(fake.views[5].preload).toMatch(/terminal\.js$/)
     // Whatever the Web tab loads is foreign: it gets nothing.
     expect(fake.views[6].preload).toBeUndefined()
+  })
+
+  // reason: the pane view holds the preload that reaches the filesystem, and
+  // it renders markdown that agents write — a link that got past the click
+  // handler in the renderer would otherwise put a remote page where that
+  // preload is, with no chrome on the view to get back from.
+  it('pins the pane view to its own page, whatever tries to navigate it', async () => {
+    const { createWindow } = await import('./window')
+    const views = createWindow(CLOSED)
+    const pane = views.pane.webContents as unknown as {
+      navigations: ((event: { preventDefault: () => void }, url: string) => void)[]
+    }
+    expect(pane.navigations).toHaveLength(1)
+    const preventDefault = vi.fn()
+    pane.navigations[0]({ preventDefault }, 'https://example.com/rfc')
+    expect(preventDefault).toHaveBeenCalled()
   })
 
   it('starts with both columns hidden and the harness filling what the rail leaves', async () => {

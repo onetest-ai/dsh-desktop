@@ -47,6 +47,7 @@ function actions(): DetailActions & { calls: unknown[][] } {
     openFile: (folderPath, file) => calls.push(['file', folderPath, file]),
     setStatus: (folderPath, status) => calls.push(['status', folderPath, status]),
     tick: (folderPath, index, done) => calls.push(['tick', folderPath, index, done]),
+    openLink: (url) => calls.push(['link', url]),
   }
 }
 
@@ -241,5 +242,61 @@ describe('the detail view', () => {
     expect(prose?.querySelector('img')?.getAttribute('onerror')).toBeNull()
     expect(prose?.querySelector('script')).toBeNull()
     expect(prose?.innerHTML).not.toContain('onerror')
+  })
+
+  // reason: the sanitiser keeps an `<a href>` — it has to, a link is content —
+  // so the click is the other half of what makes this insertion safe. This
+  // page holds the preload that reaches the filesystem, and following a link
+  // in place would put a page an agent's markdown named where that preload
+  // is, with no back control on the view to undo it.
+  it('hands an http link to the browser rather than following it in place', () => {
+    const on = actions()
+    show(detail({ sections: [{ heading: 'Notes', body: '[the RFC](https://example.com/rfc)' }] }), on)
+    const link = [...document.querySelectorAll<HTMLElement>('.board-detail-prose a')].pop()
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true })
+    link?.dispatchEvent(click)
+    expect(on.calls).toContainEqual(['link', 'https://example.com/rfc'])
+    expect(click.defaultPrevented).toBe(true)
+  })
+
+  // reason: a relative link names a place inside the project, which this
+  // surface cannot resolve — and the failure to resolve it must be nothing
+  // happening, not the renderer navigating to a path it guessed at.
+  it('takes a relative link nowhere at all', () => {
+    const on = actions()
+    show(detail({ description: 'See [the plan](../plan.md).' }), on)
+    const link = document.querySelector<HTMLElement>('.board-detail-prose a')
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true })
+    link?.dispatchEvent(click)
+    expect(on.calls).toEqual([])
+    expect(click.defaultPrevented).toBe(true)
+  })
+
+  // reason: `LEVEL_SECTIONS` gives Acceptance Criteria to a campaign, a
+  // mission and a task only, so a bug carrying criteria has none of its
+  // sections to draw them in — and the spec's rule for a field a level does
+  // not own is that it is a finding, reported rather than hidden.
+  it('reports criteria on a level whose document has no section for them', () => {
+    show(
+      detail({
+        level: 'bug',
+        sections: [{ heading: 'What Happened', body: 'It broke.' }],
+        criteria: [{ text: 'It holds', done: false }],
+      }),
+      actions(),
+    )
+    const stray = document.querySelector('.board-detail-stray')
+    expect(stray?.textContent).toContain('It holds')
+    expect(stray?.querySelector('.board-detail-finding')?.textContent).toContain('bug')
+    // Read-only: the store refuses a tick on a level that owns no criteria,
+    // so a checkbox here would offer a write that always comes back refused.
+    expect(document.querySelector('.board-detail-tick')).toBeNull()
+  })
+
+  // reason: the level that does own the section draws them there and only
+  // there — a second copy under the finding would read as two lists.
+  it('draws no stray block when the level owns the section', () => {
+    show(detail(), actions())
+    expect(document.querySelector('.board-detail-stray')).toBeNull()
   })
 })

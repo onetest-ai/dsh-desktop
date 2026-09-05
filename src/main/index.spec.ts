@@ -3023,6 +3023,37 @@ describe('the board channels', () => {
     expect((fake.sendIpc('tasks:tick', second?.folderPath, 4, true) as { ok: boolean }).ok).toBe(false)
   })
 
+  // reason: a write channel is reachable by whatever is in the renderer, and
+  // this one names a path. Its neighbours `tasks:open-file` and `tasks:trash`
+  // are both pinned against a path outside the board; this one is the newest
+  // of the three and had no such case at all.
+  it('ticks nothing for a path outside the board', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:tick', '../../etc', 0, true)).toEqual({
+      ok: false,
+      reason: "../../etc is not inside this project's board.",
+    })
+  })
+
+  // reason: the index is checked and `done` was not, inside one signature.
+  // Nothing is corrupted today only because the dump coerces on the way out,
+  // which makes the file's answer depend on a coercion rather than on what
+  // the channel accepted.
+  it('refuses a tick whose done is not a boolean', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:create', 'task', mission, 'Third thing', 'It works')).toEqual({ ok: true })
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: { name: string; folderPath: string }[] }[] }[]
+    }
+    const third = board.campaigns[0].children[0].children.find((one) => one.name === 'Third thing')
+    expect(fake.sendIpc('tasks:tick', third?.folderPath, 0, 'yes')).toEqual({
+      ok: false,
+      reason: 'A criterion is ticked or it is not, so done must be true or false.',
+    })
+    const detail = (await fake.sendIpc('tasks:detail', third?.folderPath)) as { criteria: { done: boolean }[] }
+    expect(detail.criteria).toEqual([{ text: 'It works', done: false }])
+  })
+
   // reason: the prompt is itself something a hostile page could use — a dialog
   // naming a plausible entity with Delete under the pointer. A path the board
   // does not hold must not raise one at all.

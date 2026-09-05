@@ -2755,6 +2755,13 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('tasks:tick', (_event, folderPath: string, index: number, done: boolean) => {
       const project = currentProject?.path
       if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      // The store checks the index and cannot check this: anything at all
+      // dumps as a value of the key. Refused here rather than coerced, so
+      // what the file ends up saying is what the channel accepted rather
+      // than what the writer made of it.
+      if (typeof done !== 'boolean') {
+        return { ok: false, reason: 'A criterion is ticked or it is not, so done must be true or false.' }
+      }
       const out = tickCriterion(project, folderPath, index, done)
       notifyTasksChanged()
       return out.ok ? { ok: true } : out

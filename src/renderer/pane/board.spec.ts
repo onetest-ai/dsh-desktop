@@ -113,6 +113,7 @@ interface Stub {
   onReveal: (listener: (folderPath: string) => void) => void
   revealOnBoard: (folderPath: string) => void
   openTaskFile: (folderPath: string, file: string) => void
+  openExternal: (url: string) => void
   readTaskDetail: (folderPath: string) => Promise<Record<string, unknown> | undefined>
   createBoardEntity: (level: string, parent: string, name: string, second: string) => Promise<StubResult>
   setBoardStatus: (folderPath: string, status: string) => Promise<StubResult>
@@ -159,6 +160,7 @@ function bridge(
     reveal: (folderPath) => revealed?.(folderPath),
     revealOnBoard: (folderPath) => calls.push(['reveal', folderPath]),
     openTaskFile: (folderPath, file) => calls.push(['open', folderPath, file]),
+    openExternal: (url) => calls.push(['external', url]),
     readTaskDetail: async (folderPath) => {
       calls.push(['detail', folderPath])
       return answers.detail === undefined ? undefined : { ...answers.detail, folderPath }
@@ -459,10 +461,12 @@ describe('a reveal from the tree', () => {
 describe('a detail in the panel', () => {
   /**
    * Open the first card's detail and settle.
-   * @param stub - the bridge the board talks to.
+   *
+   * Takes nothing: the click goes through the document, and the bridge the
+   * detail then reads through is the one `load` already installed.
    * @returns resolution once the detail has been drawn.
    */
-  async function openFirstCard(stub: Stub): Promise<void> {
+  async function openFirstCard(): Promise<void> {
     document.querySelector<HTMLElement>('.board-card')?.click()
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
   }
@@ -470,7 +474,7 @@ describe('a detail in the panel', () => {
   it('draws the detail in place of the columns', async () => {
     const stub = bridge(oneMission(), { detail: detail() })
     await load(stub)
-    await openFirstCard(stub)
+    await openFirstCard()
     expect(document.querySelector('.board-detail-title')?.textContent).toBe('T1')
     expect(document.querySelector('.board-column')).toBeNull()
   })
@@ -480,7 +484,7 @@ describe('a detail in the panel', () => {
   it('puts the columns back when back is pressed', async () => {
     const stub = bridge(oneMission(), { detail: detail() })
     await load(stub)
-    await openFirstCard(stub)
+    await openFirstCard()
     document.querySelector<HTMLElement>('.board-detail-back')?.click()
     expect(document.querySelector('.board-detail')).toBeNull()
     expect(document.querySelector('.board-column')).not.toBeNull()
@@ -492,7 +496,7 @@ describe('a detail in the panel', () => {
   it('redraws the detail, not the board, when the board changes underneath', async () => {
     const stub = bridge(oneMission(), { detail: detail() })
     await load(stub)
-    await openFirstCard(stub)
+    await openFirstCard()
     stub.fire()
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
     expect(document.querySelector('.board-detail-title')).not.toBeNull()
@@ -507,7 +511,7 @@ describe('a detail in the panel', () => {
   it('falls back to the columns, with a note, when the entity is gone', async () => {
     const stub = bridge(oneMission(), { detail: detail() })
     await load(stub)
-    await openFirstCard(stub)
+    await openFirstCard()
     stub.readTaskDetail = async () => undefined
     stub.fire()
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
@@ -522,7 +526,7 @@ describe('a detail in the panel', () => {
   it('lands on the board when the tree reveals something', async () => {
     const stub = bridge(oneMission(), { detail: detail() })
     await load(stub)
-    await openFirstCard(stub)
+    await openFirstCard()
     stub.reveal('campaigns/q3/missions/m1')
     expect(document.querySelector('.board-detail')).toBeNull()
     expect(document.querySelector('.board-lane-revealed')).not.toBeNull()
@@ -533,7 +537,7 @@ describe('a detail in the panel', () => {
   it('closes when the project changes', async () => {
     const stub = bridge(oneMission(), { detail: detail() })
     await load(stub)
-    await openFirstCard(stub)
+    await openFirstCard()
     stub.readTasks = async () => oneMission({ project: '/p/other' })
     stub.fire()
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
@@ -546,25 +550,47 @@ describe('a detail in the panel', () => {
   // second path could disagree with the card about what happened.
   it('writes a status and a tick through the board’s own bridge', async () => {
     const stub = bridge(oneMission(), {
-      // The checkboxes go where the section says, so a detail with criteria
-      // and no section for them draws none — as the file would have neither.
+      // The checkboxes go where the section says, and a task's document owns
+      // that section — a level whose document does not is the finding
+      // `board-detail.spec.ts` covers, not a case for this one.
       detail: detail({
         sections: [{ heading: 'Acceptance Criteria', body: '- [ ] It holds' }],
         criteria: [{ text: 'It holds', done: false }],
       }),
     })
     await load(stub)
-    await openFirstCard(stub)
+    await openFirstCard()
     const select = document.querySelector<HTMLSelectElement>('.board-detail-select')
     if (select !== null) select.value = 'done'
     select?.dispatchEvent(new Event('change'))
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
     // Queried again: the write above redrew the surface, so the checkbox from
-    // before it is no longer the one on screen.
-    document.querySelector<HTMLInputElement>('.board-detail-tick')?.dispatchEvent(new Event('change'))
+    // before it is no longer the one on screen. Checked first, because that is
+    // what a pointer does before the browser fires `change` — a bare event on
+    // an unticked box asks for an untick, which is the one value that would
+    // also come back from a handler that read nothing.
+    const box = document.querySelector<HTMLInputElement>('.board-detail-tick')
+    if (box !== null) box.checked = true
+    box?.dispatchEvent(new Event('change'))
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
     expect(stub.calls).toContainEqual(['status', 'campaigns/q3/missions/m1/tasks/t1', 'done'])
-    expect(stub.calls).toContainEqual(['tick', 'campaigns/q3/missions/m1/tasks/t1', 0, false])
+    expect(stub.calls).toContainEqual(['tick', 'campaigns/q3/missions/m1/tasks/t1', 0, true])
+  })
+
+  // reason: a detail's prose is markdown an agent wrote, inserted into the
+  // page that holds the preload. The pure surface decides that an http link
+  // is not followed; this is the half that decides where it goes instead, and
+  // the two only meet here.
+  it('opens a link in a detail through the browser rather than in the pane', async () => {
+    const stub = bridge(oneMission(), {
+      detail: detail({ sections: [{ heading: 'Notes', body: '[the RFC](https://example.com/rfc)' }] }),
+    })
+    await load(stub)
+    await openFirstCard()
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true })
+    document.querySelector<HTMLElement>('.board-detail-prose a')?.dispatchEvent(click)
+    expect(stub.calls).toContainEqual(['external', 'https://example.com/rfc'])
+    expect(click.defaultPrevented).toBe(true)
   })
 
   // reason: Open file is the detour into the editor, and the file comes from
@@ -573,7 +599,7 @@ describe('a detail in the panel', () => {
   it('hands the editor the file the read named', async () => {
     const stub = bridge(oneMission(), { detail: detail({ file: 'workitem.yaml' }) })
     await load(stub)
-    await openFirstCard(stub)
+    await openFirstCard()
     document.querySelector<HTMLElement>('.board-detail-file')?.click()
     expect(stub.calls).toContainEqual(['open', 'campaigns/q3/missions/m1/tasks/t1', 'workitem.yaml'])
   })

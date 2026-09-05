@@ -1611,6 +1611,27 @@ body {
   cursor: pointer;
 }
 
+/* Criteria on a level whose document has no section for them. Dimmed and
+   read-only, because the store refuses a tick here: this block is a finding
+   about the file, not a control. */
+.board-detail-finding {
+  margin: 0 0 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.board-detail-stray-mark {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.board-detail-stray .board-detail-criteria li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
 /* A row is a whole line, unlike a card: a detail is read down the page, and
    the name is what the eye is running along. */
 .board-detail-row {

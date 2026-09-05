@@ -1,4 +1,4 @@
-import { type DetailActions, renderDetail } from './board-detail.ts'
+import { type DetailActions, renderDetail, tag } from './board-detail.ts'
 import { BOARD_STATUSES, chipOf, groupBoard, statusLabel, type EntityView, type LaneView } from './board-rows.ts'
 import './bridge.ts'
 import type { BoardViewData, EntityDetailView, SuiteView, TestView } from './bridge.ts'
@@ -85,19 +85,6 @@ let tests = false
 
 /** What the modal is about to create, or undefined when it is closed. */
 let pending: { level: 'task' | 'bug'; parent: string } | undefined
-
-/**
- * A small dimmed tag on a card.
- * @param className - what kind of tag it is, for the stylesheet.
- * @param text - what it says.
- * @returns the tag, ready to append.
- */
-function tag(className: string, text: string): HTMLElement {
-  const node = document.createElement('span')
-  node.className = className
-  node.textContent = text
-  return node
-}
 
 /**
  * Move one card to a status, and say so when the store would not.
@@ -352,6 +339,12 @@ const detailActions: DetailActions = {
   tick: (folderPath: string, index: number, done: boolean) => {
     void flip(folderPath, index, done)
   },
+  openLink: (url: string) => {
+    // Where the user's links open, which is the same answer the editor's
+    // preview gives: this page is not a browser, and it is the page that
+    // holds the preload.
+    window.pane.openExternal(url)
+  },
 }
 
 /**
@@ -360,6 +353,9 @@ const detailActions: DetailActions = {
  * @param empty - the line that words an absent board, which this surface has none of.
  */
 function drawDetail(into: HTMLElement, empty: HTMLElement): void {
+  // Narrowing, not a case: `surface()` answered `detail` because this is set,
+  // and a module-level `let` does not stay narrowed across a call. Nothing
+  // reaches here with it unset, so there is no state for this line to word.
   if (detail === undefined) return
   empty.hidden = true
   into.append(renderDetail(detail, detailActions))
@@ -535,6 +531,13 @@ async function openDetail(folderPath: string): Promise<void> {
  * `move`'s shape, for `move`'s reason: the box is not flipped before the
  * answer comes back, so a refusal needs no undo — the redraw that follows
  * puts the checkbox back where the file says it is.
+ *
+ * Clearing the standing refusal on success is `move`'s line too, and the
+ * rule it belongs to is "a write this view made that worked", not "a drag or
+ * a delete": a line explaining why a card would not move, still up over a
+ * detail whose criterion just ticked, is about a gesture the surface no
+ * longer shows. The spec's sentence names the writes that existed when it
+ * was written and has been widened to say the rule instead.
  * @param folderPath - the entity the criterion belongs to.
  * @param index - the criterion's position in the list.
  * @param done - what the box was just set to.

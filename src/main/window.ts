@@ -259,6 +259,18 @@ export function createWindow(columns: Columns): MainWindow {
   // is opened, not here.
   void terminal.webContents.loadURL(`${PANE_ORIGIN}/terminal.html`)
 
+  // The pane is pinned to `pane.html` for the life of the window. It holds
+  // the preload that reaches the filesystem, and it renders markdown that
+  // agents write — a link the renderer's own handlers missed would otherwise
+  // replace this page, its editor, its board and every listener on it with
+  // whatever a `.md` named, on a view that carries no chrome to come back
+  // from. The renderer decides where a link it recognises goes; this decides
+  // that nothing goes here, which is the half that holds when the other one
+  // has a gap in it.
+  pane.webContents.on('will-navigate', (event) => {
+    event.preventDefault()
+  })
+
   // A page that opens a new window gets the system browser, exactly as the
   // harness view does: this app has one place to put a page, and it is here.
   web.webContents.setWindowOpenHandler(({ url }) => {
