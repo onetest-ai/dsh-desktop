@@ -308,7 +308,26 @@ describe('a folder holding the wrong type of file', () => {
     const board = readBoard(project)
     expect(board.tests.tests.map((t) => t.name)).toEqual(['Login'])
     expect(board.tests.suites).toEqual([])
-    expect(board.findings.some((f) => f.folderPath === 'tests/login' && f.says.includes('subdirector'))).toBe(true)
+    const says = board.findings.find((f) => f.folderPath === 'tests/login')?.says ?? ''
+    expect(says).toContain('subdirector')
+    // A person reads this and goes looking for the file it names, so it names
+    // the one the board actually read — and `Finding.says` is one line.
+    expect(says).toContain('test.md')
+    expect(says).not.toContain('test.yaml')
+    expect(says).not.toContain('\n')
+  })
+
+  // reason: either format makes the folder a test, so the same finding is
+  // reached on a board nobody has converted — where the file it must name is
+  // the only one on disk.
+  it('names the yaml in that finding when the test is still a legacy one', () => {
+    put('tests/login', 'test.yaml', 'name: Login\n')
+    mkdirSync(join(project, '.dsh', 'tasks', 'tests', 'login', 'extra'), { recursive: true })
+    const board = readBoard(project)
+    expect(board.tests.tests.map((t) => t.name)).toEqual(['Login'])
+    const says = board.findings.find((f) => f.folderPath === 'tests/login')?.says ?? ''
+    expect(says).toContain('holds test.yaml and subdirectories')
+    expect(says).not.toContain('\n')
   })
 
   // reason: preserved through extra on a round-trip, correctly — but never

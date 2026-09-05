@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { writeFileAtomic } from '../atomic-write'
 import {
@@ -11,7 +11,7 @@ import {
   TESTS_DIR,
   TRASH_DIR,
 } from './board-paths'
-import { collectTests, findEntity, findTest, readBoard } from './board-read'
+import { collectTests, entitySource, findEntity, findTest, readBoard } from './board-read'
 import {
   dumpEntity,
   ENTITY_STATUSES,
@@ -54,18 +54,17 @@ const SIBLING_DIR: Record<EntityLevel, string> = {
  * Whether a folder's entity was read from the `<type>.yaml` the board shipped
  * before, rather than from its `<type>.md`.
  *
- * Asked of the directory rather than of the reader, because that is the same
- * question `readEntity` answers and the same way it answers it: `.md` wins,
- * and the legacy file is only the source when there is no `.md` at all. Both
- * present is not a conversion — the reader already reports the `.yaml` as
- * ignored, and a writer that deleted it there would be deleting a file the
- * person who edited it has not yet been told about.
+ * Asked of `entitySource` rather than answered here, because that is the
+ * reader's own precedence and the two must not be able to disagree: an unlink
+ * is only safe when it removes the file the reader has already stopped reading
+ * from, and a second copy of the rule is a second rule the day the first one
+ * changes.
  * @param dir - the entity's directory.
  * @param level - the entity's level, which names both files.
- * @returns true when only the legacy file is there.
+ * @returns true when the legacy file is the one the board reads there.
  */
 function openedFromLegacy(dir: string, level: EntityLevel): boolean {
-  return !existsSync(join(dir, fileFor(level))) && existsSync(join(dir, legacyFileFor(level)))
+  return entitySource(dir, level)?.legacy ?? false
 }
 
 /**
@@ -473,12 +472,15 @@ export function recordRun(project: string, testFolder: string, workitem: string,
   }
   const dir = resolveInBoard(project, testFolder)
   if (dir === undefined) return { ok: false, reason: `${testFolder} is not inside this project's board.` }
-  // The same preference `readEntity` walks, for the same reason: this is the
-  // one write that does not go through `open`, and a board nobody has
-  // converted holds only `test.yaml` — refusing it as "not a test" would make
-  // the run history the one thing a legacy board could not record.
-  const legacy = openedFromLegacy(dir, 'test')
-  const file = legacy ? legacyFileFor('test') : fileFor('test')
+  // The same preference `readEntity` walks, from the same function, for the
+  // same reason: this is the one write that does not go through `open`, and a
+  // board nobody has converted holds only `test.yaml` — refusing it as "not a
+  // test" would make the run history the one thing a legacy board could not
+  // record. The file it names is also the file the reason names, so a person
+  // sent to look at a parse failure is sent to the one that is there.
+  const source = entitySource(dir, 'test')
+  if (source === undefined) return { ok: false, reason: `${testFolder} is not a test.` }
+  const { file, legacy } = source
   let text: string
   try {
     text = readFileSync(join(dir, file), 'utf8')

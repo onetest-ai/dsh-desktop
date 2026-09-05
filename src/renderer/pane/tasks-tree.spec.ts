@@ -19,7 +19,7 @@ function node(level: string, name: string, folderPath: string, over: Record<stri
     level,
     name,
     folderPath,
-    status: 'draft',
+    status: 'idea',
     children: [],
     progress: { done: 0, total: 0 },
     criteria: { done: 0, total: 0 },

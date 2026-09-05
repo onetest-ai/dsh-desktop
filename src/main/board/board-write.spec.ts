@@ -96,7 +96,11 @@ describe('createEntity', () => {
     createEntity(project, 'test', '', 'Login')
     expect(has('campaigns/q3', 'workitem.md')).toBe(true)
     expect(has('campaigns/q3', 'workitem.yaml')).toBe(false)
+    // The positive beside each negative: absent `.yaml` is also what a create
+    // that wrote nothing at all for these two levels would look like.
+    expect(has('campaigns/q3/bugs/crash', 'bug.md')).toBe(true)
     expect(has('campaigns/q3/bugs/crash', 'bug.yaml')).toBe(false)
+    expect(has('tests/login', 'test.md')).toBe(true)
     expect(has('tests/login', 'test.yaml')).toBe(false)
   })
 
@@ -303,6 +307,29 @@ describe('criteria', () => {
     createEntity(project, 'bug', 'campaigns/q3', 'Crash')
     expect(tickCriterion(project, 'campaigns/q3/bugs/crash', 0, true).ok).toBe(false)
   })
+
+  // reason: the two cases above never reach the guard — an entity the board
+  // wrote has no criteria at all, so the index-range check refuses first. A
+  // legacy `bug.yaml` carrying an `acceptance_criteria` list is the one shape
+  // where the guard is the only thing standing between that list and a write
+  // `dumpEntity` silently discards, converting the file on the way out.
+  it('refuses to tick a criterion a legacy bug carries, where only the guard can refuse', () => {
+    putLegacy(
+      'campaigns/q3/bugs/crash',
+      'bug.yaml',
+      'name: Crash\nstatus: idea\nseverity: major\nacceptance_criteria:\n  - text: it works\n    done: false\n',
+    )
+    const bug = readBoard(project).campaigns[0].children.find((child) => child.level === 'bug')
+    // The guard is only reached when the range check passes, so the fixture
+    // has to be one the reader really does hand a criterion back for.
+    expect(bug?.fields.acceptanceCriteria).toEqual([{ text: 'it works', done: false }])
+    const before = read('campaigns/q3/bugs/crash', 'bug.yaml')
+    const out = tickCriterion(project, 'campaigns/q3/bugs/crash', 0, true)
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.reason).toContain('defect report')
+    expect(read('campaigns/q3/bugs/crash', 'bug.yaml')).toBe(before)
+    expect(has('campaigns/q3/bugs/crash', 'bug.md')).toBe(false)
+  })
 })
 
 describe('trashEntity', () => {
@@ -474,7 +501,11 @@ describe('writing a test through the other five paths', () => {
     )
     const text = read('tests/login', 'test.md')
     expect(text).toContain('## Steps\n\nopen the login page\n')
-    expect(text).toContain('the dashboard loads')
+    // Where it lands, not merely that it is somewhere in the file: `expected`
+    // is not one of `LEVEL_SECTIONS.test`, so `dumpEntity` carries it through
+    // the unowned-heading fallback — and a regression that dropped it into the
+    // lead or the frontmatter instead would satisfy a bare `toContain`.
+    expect(text).toContain('## Expected\n\nthe dashboard loads\n')
     expect(readBoard(project).tests.tests[0].fields.steps).toBe('open the login page')
   })
 
@@ -659,6 +690,21 @@ describe('recordRun', () => {
     expect(out.ok).toBe(false)
     if (!out.ok) expect(out.reason).toContain('test.md')
   })
+
+  // reason: a board nobody has converted holds only `test.yaml`, and the file
+  // this branch names is the one a person has to go and open. Naming `test.md`
+  // there would send them to a file that is not on disk at all.
+  it('names the yaml, not the markdown, when a legacy test will not parse', () => {
+    putLegacy('tests/legacy', 'test.yaml', 'name: [unclosed\n')
+    const out = recordRun(project, 'tests/legacy', 'campaigns/q3', 'pass', 'a')
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.reason).toContain('test.yaml')
+    if (!out.ok) expect(out.reason).not.toContain('test.md')
+    // Nothing written, and nothing removed: a file that will not parse is not
+    // an entity this can convert.
+    expect(has('tests/legacy', 'test.md')).toBe(false)
+    expect(has('tests/legacy', 'test.yaml')).toBe(true)
+  })
 })
 
 // reason: the board shipped `<type>.yaml` first, and a board nobody has
@@ -712,6 +758,68 @@ describe('converting a legacy entity', () => {
     expect(addCriterion(project, 'campaigns/q3', 'it works').ok).toBe(true)
     expect(read('campaigns/q3', 'workitem.md')).toContain('## Acceptance Criteria\n\n- [ ] it works\n')
     yamlIsGone()
+  })
+
+  // reason: a bug is the conversion with the most translation in it — three
+  // YAML strings become three headings, and `severity` is the one frontmatter
+  // key no other level carries. A conversion runs once per file on somebody's
+  // repository and can never be re-run, so a heading it dropped is gone.
+  it('converts a legacy bug, with its severity and every section it carried', () => {
+    legacyBoard()
+    putLegacy(
+      'campaigns/q3/bugs/crash',
+      'bug.yaml',
+      'name: Crash\nstatus: backlog\nseverity: critical\ndescription: it crashes on launch\n' +
+        'steps_to_reproduce: open the app\nexpected: it opens\nactual: it dies\n' +
+        'rca: a null map\nenvironment: macOS 15\n',
+    )
+    expect(updateEntity(project, 'campaigns/q3/bugs/crash', { notes: 'seen twice' }).ok).toBe(true)
+    const text = read('campaigns/q3/bugs/crash', 'bug.md')
+    expect(text).toContain('severity: critical')
+    expect(text).toContain('status: backlog')
+    expect(text).toContain('\nit crashes on launch\n')
+    expect(text).toContain('## Steps to Reproduce\n\nopen the app\n')
+    expect(text).toContain('## Expected\n\nit opens\n')
+    expect(text).toContain('## Actual\n\nit dies\n')
+    expect(text).toContain('## RCA\n\na null map\n')
+    expect(text).toContain('## Environment\n\nmacOS 15\n')
+    expect(text).toContain('## Notes\n\nseen twice\n')
+    const back = readBoard(project).campaigns[0].children.find((child) => child.level === 'bug')
+    expect(back?.fields.severity).toBe('critical')
+    expect(back?.fields.stepsToReproduce).toBe('open the app')
+    expect(back?.fields.rca).toBe('a null map')
+    expect(has('campaigns/q3/bugs/crash', 'bug.md')).toBe(true)
+    expect(has('campaigns/q3/bugs/crash', 'bug.yaml')).toBe(false)
+  })
+
+  // reason: a task is the level whose criteria the board gates on, and it is
+  // the one level no legacy conversion covered — its `acceptance_criteria`
+  // list has to survive being ticked on the way through.
+  it('converts a legacy task, keeping the criteria it is gated on', () => {
+    legacyBoard()
+    putLegacy('campaigns/q3/missions/m1', 'workitem.yaml', 'name: M1\nsubtype: mission\nstatus: executing\n')
+    putLegacy(
+      'campaigns/q3/missions/m1/tasks/t1',
+      'workitem.yaml',
+      'name: T1\nsubtype: task\nstatus: executing\ndescription: do the thing\n' +
+        'acceptance_criteria:\n  - text: the first\n    done: false\n  - text: the second\n    done: false\n',
+    )
+    const task = 'campaigns/q3/missions/m1/tasks/t1'
+    expect(tickCriterion(project, task, 1, true).ok).toBe(true)
+    const text = read(task, 'workitem.md')
+    expect(text).toContain('subtype: task')
+    expect(text).toContain('## Acceptance Criteria\n\n- [ ] the first\n- [x] the second\n')
+    expect(text).toContain('\ndo the thing\n')
+    expect(has(task, 'workitem.yaml')).toBe(false)
+    // The mission above it is untouched: a write converts the entity it wrote,
+    // and nothing else.
+    expect(has('campaigns/q3/missions/m1', 'workitem.yaml')).toBe(true)
+    expect(has('campaigns/q3/missions/m1', 'workitem.md')).toBe(false)
+    const back = readBoard(project).campaigns[0].children[0].children[0]
+    expect(back.fields.acceptanceCriteria).toEqual([
+      { text: 'the first', done: false },
+      { text: 'the second', done: true },
+    ])
   })
 
   it('converts a test through recordRun, the one write that opens its own file', () => {

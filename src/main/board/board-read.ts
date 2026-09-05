@@ -52,6 +52,33 @@ function otherEntityFile(dir: string, expected: readonly string[]): string | und
   return ENTITY_FILES.find((candidate) => !expected.includes(candidate) && existsSync(join(dir, candidate)))
 }
 
+/**
+ * Which of a folder's two possible files the board reads, and whether that is
+ * the format that came before.
+ *
+ * The one place the `.md`-over-`.yaml` precedence is decided. `readEntity`
+ * asks it to know what to parse; the writer asks it to know whether a write is
+ * a conversion, and so whether it may retire a `.yaml` afterwards. Those two
+ * answers have to be the same answer: a writer that decided on its own would,
+ * the day this rule changes, delete a file the reader is still reading from —
+ * which is the one outcome the conversion's whole ordering exists to prevent.
+ *
+ * Both present is not a conversion. The `.md` wins, the `.yaml` stays, and the
+ * reader says so in a finding rather than letting the writer remove a file
+ * whose editor has not been told it is being ignored.
+ * @param dir - the entity's directory.
+ * @param level - the entity's level, which names both files.
+ * @returns the file to read and whether it is the legacy one, or nothing when
+ *   the folder holds neither.
+ */
+export function entitySource(dir: string, level: EntityLevel): { file: string; legacy: boolean } | undefined {
+  const file = fileFor(level)
+  if (existsSync(join(dir, file))) return { file, legacy: false }
+  const legacyFile = legacyFileFor(level)
+  if (existsSync(join(dir, legacyFile))) return { file: legacyFile, legacy: true }
+  return undefined
+}
+
 /** One entity, with the children its folder holds. */
 export interface Entity {
   level: EntityLevel
@@ -156,19 +183,20 @@ function readEntity(root: string, folderPath: string, level: EntityLevel, findin
   const dir = join(root, folderPath)
   const file = fileFor(level)
   const legacyFile = legacyFileFor(level)
-  const mdExists = existsSync(join(dir, file))
-  const legacyExists = existsSync(join(dir, legacyFile))
+  // The precedence itself lives in `entitySource`, which the writer asks too,
+  // so the file this reads and the file that write is allowed to retire can
+  // never be decided differently.
+  const source = entitySource(dir, level)
   let text: string
-  let legacy = false
-  if (mdExists) {
-    text = readFileSync(join(dir, file), 'utf8')
+  const legacy = source?.legacy ?? false
+  if (source !== undefined) {
+    text = readFileSync(join(dir, source.file), 'utf8')
     // Both formats present is not an error — a conversion in progress, or one
     // that stalled — but the board reads only one of them, and a person who
     // edited the wrong file deserves to be told which one won.
-    if (legacyExists) findings.push({ folderPath, says: `${legacyFile} is ignored; ${file} is what the board reads` })
-  } else if (legacyExists) {
-    text = readFileSync(join(dir, legacyFile), 'utf8')
-    legacy = true
+    if (!legacy && existsSync(join(dir, legacyFile))) {
+      findings.push({ folderPath, says: `${legacyFile} is ignored; ${file} is what the board reads` })
+    }
   } else {
     // Empty is legitimate — a suite, or a child directory nobody has filled
     // in yet — but holding a different type's file is not empty, it is
@@ -259,11 +287,15 @@ function readSuite(root: string, path: string, slug: string, findings: Finding[]
     const test = readEntity(root, under, 'test', findings)
     if (test !== undefined) {
       suite.tests.push(test)
-      // Holds a test.yaml is a test, full stop — so subdirectories beside it
-      // are not walked. That rule must not also make them disappear quietly:
-      // a test is supposed to be a leaf, and one that is not deserves a word.
+      // Holding a test file is being a test, full stop — so subdirectories
+      // beside it are not walked. That rule must not also make them disappear
+      // quietly: a test is supposed to be a leaf, and one that is not deserves
+      // a word. The file is named as the reader found it, since either format
+      // makes this folder a test and a person told the wrong name goes looking
+      // for a file that is not there.
       if (subdirectories(join(root, under)).length > 0) {
-        findings.push({ folderPath: under, says: 'holds test.yaml and subdirectories; a test is a leaf, so they are not walked.' })
+        const held = entitySource(join(root, under), 'test')?.file ?? fileFor('test')
+        findings.push({ folderPath: under, says: `holds ${held} and subdirectories; a test is a leaf, so they are not walked.` })
       }
     } else suite.suites.push(readSuite(root, under, name, findings))
   }
