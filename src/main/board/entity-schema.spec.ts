@@ -221,12 +221,15 @@ describe('validated_by', () => {
     expect(loadEntity(once).validatedBy[0]).toEqual({ test: 'tests/a', result: 'pass', comment: '' })
   })
 
-  // reason: a bug and a test do not declare what proves them — a test IS the
-  // proof, and giving it links would ask what proves the proof.
-  it('writes no validated_by for a bug or a test', () => {
+  // reason: a validated_by loaded from one kind's text rides along as a
+  // safety net when dumped as another kind, the same mechanism that keeps
+  // `documents:` alive on a task. A known key sitting on the wrong entity is
+  // malformed, but it is never silently destroyed — the reader reports it,
+  // the writer does not get to guess and drop it.
+  it('carries a validated_by loaded from text into a bug or a test dump', () => {
     const fields = loadEntity('name: X\nvalidated_by:\n  - test: tests/a\n')
-    expect(dumpEntity('bug', fields)).not.toContain('validated_by')
-    expect(dumpEntity('test', fields)).not.toContain('validated_by')
+    expect(dumpEntity('bug', fields)).toContain('validated_by')
+    expect(dumpEntity('test', fields)).toContain('validated_by')
   })
 })
 
@@ -256,9 +259,14 @@ describe('runs', () => {
     expect(kept[RUN_HISTORY - 1].at).toBe(`run-${String(RUN_HISTORY + 9)}`)
   })
 
-  it('writes no runs for a workitem or a bug', () => {
+  // reason: a runs loaded from one kind's text rides along as a safety net
+  // when dumped as another kind, the same mechanism that keeps `documents:`
+  // alive on a task. A known key sitting on the wrong entity is malformed,
+  // but it is never silently destroyed — the reader reports it, the writer
+  // does not get to guess and drop it.
+  it('carries a runs loaded from text into a workitem or a bug dump', () => {
     const fields = loadEntity('name: X\nruns:\n  - at: t\n    workitem: w\n    result: pass\n')
-    expect(dumpEntity('task', fields)).not.toContain('runs')
-    expect(dumpEntity('bug', fields)).not.toContain('runs')
+    expect(dumpEntity('task', fields)).toContain('runs')
+    expect(dumpEntity('bug', fields)).toContain('runs')
   })
 })

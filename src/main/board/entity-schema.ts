@@ -429,11 +429,7 @@ export function dumpEntity(level: EntityLevel, f: EntityFields): string {
   // key this LEVEL owns — including when it chose to omit one, which is how a
   // field gets cleared.
   for (const [k, v] of Object.entries(f.extra ?? {})) {
-    // validated_by and runs are excluded from the generic safety net, unlike
-    // documents or steps_to_reproduce: those are misplaced data worth keeping,
-    // but a verdict on a bug/test or a run history on a workitem/bug is not a
-    // misplaced fact, it is a claim that does not even parse for that kind.
-    if (k in o || LEVEL_KEYS[level].includes(k) || k === 'validated_by' || k === 'runs') continue
+    if (k in o || LEVEL_KEYS[level].includes(k)) continue
     o[k] = v
   }
   return yamlDump(o, { lineWidth: -1, noRefs: true })
