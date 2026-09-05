@@ -137,7 +137,7 @@ contextBridge.exposeInMainWorld('pane', {
   createBoardEntity: (level: string, parent: string, name: string, second: string) =>
     ipcRenderer.invoke('tasks:create', level, parent, name, second),
   setBoardStatus: (folderPath: string, status: string) => ipcRenderer.invoke('tasks:set-status', folderPath, status),
-  trashBoardEntity: (folderPath: string) => ipcRenderer.invoke('tasks:trash', folderPath),
+  trashBoardEntity: (folderPath: string, name: string) => ipcRenderer.invoke('tasks:trash', folderPath, name),
   onShowDiff: (listener: (root: string, relative: string, proposed: string) => void) => {
     ipcRenderer.on('pane:diff', (_event, root: string, relative: string, proposed: string) =>
       listener(root, relative, proposed),

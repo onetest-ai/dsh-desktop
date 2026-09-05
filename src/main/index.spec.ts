@@ -6,6 +6,7 @@ import type { ConfigResult, DesktopConfig } from './config'
 import type { OpenConfigFileResult } from './open-config-file'
 import type { PluginStatus } from './plugin-entries'
 import type { StartOptions } from './server'
+import { createEntity } from './board/board-write'
 
 /** The stored config used by tests that need a configured first run. */
 const STORED: DesktopConfig = {
@@ -414,7 +415,13 @@ vi.mock('./workspaces', () => ({
 }))
 
 const readDirectoryMock = vi.fn(() => [] as unknown[])
-vi.mock('./file-tree', () => ({ readDirectory: (...args: unknown[]) => readDirectoryMock(...(args as [])) }))
+// Partial, like `./git-model` below: the project watcher reads `IGNORED` on
+// every filesystem event, so a mock without it turns any test that opens a
+// real directory into an uncaught throw from inside a watcher callback.
+vi.mock('./file-tree', async () => ({
+  ...(await vi.importActual<typeof import('./file-tree')>('./file-tree')),
+  readDirectory: (...args: unknown[]) => readDirectoryMock(...(args as [])),
+}))
 
 /** The panel's read, so a test can hold one open and watch what a second does. */
 const readProjectMock = vi.fn(async (root: string) => ({ ok: true as const, repos: [{ path: root }] }))
@@ -2832,5 +2839,199 @@ describe('the git write channels', () => {
       await bootInRepo()
       expect(() => fake.sendIpc('git:cancel-remote', '/elsewhere')).not.toThrow()
     })
+  })
+})
+
+/**
+ * The board's six channels, over the bridge rather than through their helpers.
+ *
+ * The store beneath them is real here — nothing under `src/main/board/` is
+ * faked — because what these tests are about is the gate in front of it: every
+ * one of them is refused when no project is open, and the one that destroys
+ * work resolves its path and asks the user before the store is touched. The
+ * shape is `git:discard`'s above, for the same reason it was written that way.
+ */
+describe('the board channels', () => {
+  /** A real project directory, with a real board inside it. */
+  let project = ''
+  let campaign = ''
+  let mission = ''
+  let task = ''
+
+  /**
+   * The folder path a create answered with, or a failure naming what it said.
+   * @param out - what the store answered.
+   * @returns the new entity's folder path.
+   */
+  function made(out: ReturnType<typeof createEntity>): string {
+    if (!out.ok) throw new Error(`the fixture could not be built: ${out.reason}`)
+    return out.folderPath
+  }
+
+  /** Boot with the project above open, the way the harness announces one. */
+  async function bootWithBoard(): Promise<void> {
+    readWorkspacesMock.mockReturnValue([
+      { path: project, title: 'board', file: join(project, '.dsh', 'mcp.json'), declared: false, servers: [] },
+    ])
+    await bootReady()
+    fake.sendIpc('harness:workspace', project)
+    await settle()
+  }
+
+  beforeEach(() => {
+    project = mkdtempSync(join(tmpdir(), 'dsh-board-project-'))
+    campaign = made(createEntity(project, 'campaign', '', 'Q3'))
+    mission = made(createEntity(project, 'mission', campaign, 'M1'))
+    task = made(createEntity(project, 'task', mission, 'Fix the login timeout'))
+  })
+
+  it('answers the read with the open project’s board, and says which project', async () => {
+    await bootWithBoard()
+    const board = (await fake.sendIpc('tasks:read')) as {
+      project: string
+      present: boolean
+      campaigns: { name: string; children: { name: string }[] }[]
+    }
+    expect(board.present).toBe(true)
+    expect(board.project).toBe(project)
+    expect(board.campaigns.map((one) => one.name)).toEqual(['Q3'])
+  })
+
+  // reason: no project open and a project with no board are different things,
+  // and only the second is worth offering to start. The views cannot tell them
+  // apart unless the read says which it was.
+  it('answers the read with no project when none is open', async () => {
+    readWorkspacesMock.mockReturnValue([])
+    await bootReady()
+    const board = (await fake.sendIpc('tasks:read')) as { project: string | undefined; present: boolean }
+    expect(board.present).toBe(false)
+    expect(board.project).toBeUndefined()
+  })
+
+  it('forwards a reveal to the board’s panel', async () => {
+    await bootWithBoard()
+    fake.views.pane.webContents.send.mockClear()
+    fake.sendIpc('tasks:reveal', mission)
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith('tasks:reveal', mission)
+  })
+
+  it('opens a card’s own file in the pane', async () => {
+    await bootWithBoard()
+    fake.views.pane.webContents.send.mockClear()
+    fake.sendIpc('tasks:open-file', task, 'workitem.yaml')
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith(
+      'pane:open',
+      project,
+      join('.dsh', 'tasks', task, 'workitem.yaml'),
+      expect.anything(),
+    )
+  })
+
+  // reason: a folder path arrives from a renderer, so it is a request and not
+  // evidence of where it points — and this one becomes a file that is opened.
+  it('opens nothing for a path outside the board, or a file it does not name', async () => {
+    await bootWithBoard()
+    fake.views.pane.webContents.send.mockClear()
+    fake.sendIpc('tasks:open-file', '../../etc', 'workitem.yaml')
+    fake.sendIpc('tasks:open-file', task, '.zshrc')
+    expect(fake.views.pane.webContents.send).not.toHaveBeenCalled()
+  })
+
+  it('creates a task under the mission it was given, with its first criterion', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:create', 'task', mission, 'Second thing', 'It works')).toEqual({ ok: true })
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: { name: string; criteria: { total: number } }[] }[] }[]
+    }
+    const tasks = board.campaigns[0].children[0].children
+    expect(tasks.map((one) => one.name)).toContain('Second thing')
+    expect(tasks.find((one) => one.name === 'Second thing')?.criteria.total).toBe(1)
+  })
+
+  it('sets the status of the card it was given', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:set-status', task, 'executing')).toEqual({ ok: true })
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: { status: string }[] }[] }[]
+    }
+    expect(board.campaigns[0].children[0].children[0].status).toBe('executing')
+  })
+
+  // reason: the prompt is itself something a hostile page could use — a dialog
+  // naming a plausible entity with Delete under the pointer. A path the board
+  // does not hold must not raise one at all.
+  it('raises no dialog for a path outside the board', async () => {
+    await bootWithBoard()
+    await expect(fake.sendIpc('tasks:trash', '../../etc')).resolves.toEqual({
+      ok: false,
+      reason: "../../etc is not inside this project's board.",
+    })
+    expect(fake.showMessageBox).not.toHaveBeenCalled()
+  })
+
+  // reason: a confirmation a renderer could answer for itself is not a
+  // confirmation. Trash moves an entity and everything under it away, so the
+  // dialog is raised in main and Cancel means nothing moved.
+  it('trashes nothing when the confirmation is cancelled', async () => {
+    await bootWithBoard()
+    await expect(fake.sendIpc('tasks:trash', task, 'Fix the login timeout')).resolves.toEqual({
+      ok: false,
+      reason: '',
+    })
+    expect(fake.showMessageBox).toHaveBeenCalled()
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: unknown[] }[] }[]
+    }
+    expect(board.campaigns[0].children[0].children).toHaveLength(1)
+  })
+
+  it('trashes once the confirmation is accepted', async () => {
+    await bootWithBoard()
+    fake.showMessageBox.mockResolvedValue({ response: 0 })
+    await expect(fake.sendIpc('tasks:trash', task, 'Fix the login timeout')).resolves.toEqual({ ok: true })
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: unknown[] }[] }[]
+    }
+    expect(board.campaigns[0].children[0].children).toHaveLength(0)
+  })
+
+  // reason: the card says "Fix the login timeout" and the folder is called
+  // `fix-the-login-timeout`. A confirmation that names the slug asks about
+  // something the user has never seen written down.
+  it('names the entity, not its slug, in the confirmation', async () => {
+    await bootWithBoard()
+    fake.showMessageBox.mockResolvedValue({ response: 0 })
+    await fake.sendIpc('tasks:trash', task, 'Fix the login timeout')
+    expect(fake.showMessageBox).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ message: 'Delete Fix the login timeout?' }),
+    )
+  })
+
+  // reason: every channel here is rooted in a project the harness opened, and
+  // a board write with no project is a write with no board to check it against.
+  it('refuses every channel when no project is open', async () => {
+    readWorkspacesMock.mockReturnValue([])
+    await bootReady()
+    fake.views.pane.webContents.send.mockClear()
+    const refused = { ok: false, reason: 'No project is open.' }
+    expect(fake.sendIpc('tasks:create', 'task', mission, 'Nope', '')).toEqual(refused)
+    expect(fake.sendIpc('tasks:set-status', task, 'done')).toEqual(refused)
+    await expect(fake.sendIpc('tasks:trash', task, 'Fix the login timeout')).resolves.toEqual(refused)
+    fake.sendIpc('tasks:open-file', task, 'workitem.yaml')
+    fake.sendIpc('tasks:reveal', mission)
+    expect(fake.showMessageBox).not.toHaveBeenCalled()
+    expect(fake.views.pane.webContents.send).not.toHaveBeenCalledWith('pane:open', expect.anything(), expect.anything(), expect.anything())
+  })
+
+  // reason: the write is exactly what makes what both views are showing stale.
+  it('tells both views to read themselves again after a write', async () => {
+    await bootWithBoard()
+    fake.views.tasks.webContents.send.mockClear()
+    fake.views.pane.webContents.send.mockClear()
+    await fake.sendIpc('tasks:set-status', task, 'done')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(fake.views.tasks.webContents.send).toHaveBeenCalledWith('tasks:changed')
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith('tasks:changed')
   })
 })

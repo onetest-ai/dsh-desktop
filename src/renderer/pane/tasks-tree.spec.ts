@@ -10,7 +10,7 @@ function page(): void {
 
 /** A board for the stub bridge, with only what a case names. */
 function board(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return { present: true, campaigns: [], tests: { path: 'tests', slug: 'tests', suites: [], tests: [] }, findings: [], ...over }
+  return { project: '/p/one', present: true, campaigns: [], tests: { path: 'tests', slug: 'tests', suites: [], tests: [] }, findings: [], ...over }
 }
 
 /** One entity for a stub board. */
@@ -82,6 +82,13 @@ describe('the tasks tree', () => {
     expect(document.getElementById('tasks-empty')?.textContent).toContain('no board')
   })
 
+  // reason: with no project open there is no place to create a campaign in,
+  // so the advice that names one would be pointing at nothing.
+  it('words no project apart from a project with no board', async () => {
+    await load(bridge(board({ project: undefined, present: false })))
+    expect(document.getElementById('tasks-empty')?.textContent).toContain('No project is open')
+  })
+
   it('nests a campaign, its mission and its task', async () => {
     await load(
       bridge(
@@ -135,6 +142,49 @@ describe('the tasks tree', () => {
     // reason: the reverse direction — what a test proves — is visible nowhere
     // else, so the tree is the only place it can be read.
     expect(text).toContain('1/2')
+  })
+
+  // reason: the board draws no card for a test, deliberately — so a reveal
+  // would bring the Board tab forward, clear the last highlight and point at
+  // nothing. The file is the one thing a test row can go to.
+  it('opens a test’s own file rather than revealing it on the board', async () => {
+    const stub = bridge(
+      board({
+        tests: {
+          path: 'tests',
+          slug: 'tests',
+          suites: [],
+          tests: [{ folderPath: 'tests/login', name: 'Login', validates: { pass: 1, total: 1 } }],
+        },
+      }),
+    )
+    await load(stub)
+    const rows = [...document.querySelectorAll<HTMLElement>('.tree-row')]
+    rows[rows.length - 1].click()
+    expect(stub.calls).toEqual([['open', 'tests/login', 'test.yaml']])
+  })
+
+  // reason: a fold is keyed on a board-relative path, and `campaigns/q3` is a
+  // path two projects can both have — a row folded in one would open the next
+  // project already folded, describing a board it was never about.
+  it('forgets what was folded when the project changes', async () => {
+    const shape = (project: string): Record<string, unknown> =>
+      board({
+        project,
+        campaigns: [
+          node('campaign', 'Q3', 'campaigns/q3', {
+            children: [node('mission', 'M1', 'campaigns/q3/missions/m1')],
+          }),
+        ],
+      })
+    const stub = bridge(shape('/p/one'))
+    await load(stub)
+    document.querySelector<HTMLElement>('.tree-twisty')?.click()
+    expect([...document.querySelectorAll('.tree-name')].map((node) => node.textContent)).toEqual(['Q3'])
+    stub.readTasks = async () => shape('/p/other')
+    stub.fire()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect([...document.querySelectorAll('.tree-name')].map((node) => node.textContent)).toEqual(['Q3', 'M1'])
   })
 
   it('asks main to reveal a row on the board when it is clicked', async () => {

@@ -27,7 +27,10 @@ function el(id: string): HTMLElement {
  * reopened from the top on each of them would be unusable exactly while
  * something is being planned. Held in the page and never stored, for the file
  * tree's reason — it is a glance at what exists, not an arrangement worth
- * restoring into a project it may no longer describe.
+ * restoring into a project it may no longer describe. Cleared when the
+ * project changes, for the same reason it is not stored: `campaigns/q3` is a
+ * path two projects can both have, and folding one because the other's was
+ * folded is this state describing a board it was never about.
  */
 const collapsed = new Set<string>()
 
@@ -116,7 +119,8 @@ function statusChip(status: string): HTMLElement {
  * Every row is a button so it is reachable by tab, and the arrow keys fold it
  * the way a tree is expected to. What the press does is the caller's, because
  * that is the whole difference between this view and the board: an entity
- * reveals, a container folds, and nothing here writes.
+ * reveals, a container folds, a test opens its own file, and nothing here
+ * writes.
  * @param name - what the row is called.
  * @param path - the row's folder path, which keys its fold.
  * @param foldable - whether it has anything beneath it to fold.
@@ -191,7 +195,11 @@ function drawEntity(entity: EntityView): HTMLElement {
 function drawTest(test: TestView): HTMLElement {
   const item = document.createElement('li')
   const row = rowFor(test.name, test.folderPath, false, () => {
-    window.pane.revealOnBoard(test.folderPath)
+    // Not a reveal: the board draws no card for a test, deliberately, so a
+    // reveal would bring the Board tab forward and point at nothing. The file
+    // is the only thing a test row can go to, and it is the same thing a
+    // card's click goes to for a workitem.
+    window.pane.openTaskFile(test.folderPath, 'test.yaml')
   })
   if (test.validates.total > 0) row.append(countTag(test.validates.pass, test.validates.total))
   item.append(row)
@@ -257,14 +265,18 @@ function draw(): void {
     return
   }
   const board = latest
-  // Named rather than counted: a file the board could not read is a row the
-  // user cannot see, and silence about it looks like the row not existing.
+  // Counted rather than named: a file that would not parse has no row here to
+  // hang it on, and silence about it looks like the entity not existing. The
+  // count says how many are missing; the file itself says which.
   note.textContent = `${board.findings.length} files could not be read.`
   note.hidden = board.findings.length === 0
   if (!board.present) {
-    // The one empty state with a way out of it, so it says what to do rather
-    // than only what is missing.
-    empty.textContent = 'This project has no board yet. Ask the agent to plan something, or create a campaign.'
+    // Two different absences, worded apart: a project with no board is worth
+    // offering to start, and advice to create a campaign with no project open
+    // names a place that does not exist.
+    empty.textContent = board.project === undefined
+      ? 'No project is open, so there is no board.'
+      : 'This project has no board yet. Ask the agent to plan something, or create a campaign.'
     empty.hidden = false
     return
   }
@@ -294,7 +306,12 @@ function draw(): void {
  */
 async function refresh(): Promise<void> {
   try {
-    latest = await window.pane.readTasks()
+    const next = await window.pane.readTasks()
+    // A fold is keyed on a board-relative path, and that path means something
+    // else in the next project — so the folds go with the board they were
+    // about rather than being reapplied to rows that merely share a name.
+    if (latest !== undefined && next.project !== latest.project) collapsed.clear()
+    latest = next
     trouble = undefined
   } catch (error) {
     // Nothing on the other side of the bridge rejects today. Without this it

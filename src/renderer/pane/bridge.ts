@@ -56,9 +56,13 @@ export interface SuiteView {
  *
  * `present` is false for a project with no `.dsh/tasks/` at all, which is a
  * different thing from a board with nothing in it: one is worth offering to
- * start, the other is not.
+ * start, the other is not. `project` separates a third state from both of
+ * those — no project open at all, where advice about creating a campaign
+ * would name a place that does not exist — and it is what each view compares
+ * to know the board it is holding notes about has been replaced.
  */
 export interface BoardViewData {
+  project: string | undefined
   present: boolean
   campaigns: EntityView[]
   tests: SuiteView
@@ -170,8 +174,11 @@ declare global {
       createBoardEntity(level: string, parent: string, name: string, second: string): Promise<BoardResult>
       setBoardStatus(folderPath: string, status: string): Promise<BoardResult>
       // Main confirms this one before the store is touched, the way
-      // `git:discard` does, so the panel does not ask a second time.
-      trashBoardEntity(folderPath: string): Promise<BoardResult>
+      // `git:discard` does, so the panel does not ask a second time. The name
+      // goes with the path because the confirmation is read by a person: the
+      // card says "Fix the login timeout" and only the folder knows
+      // `fix-the-login-timeout`. Main still checks the path and nothing else.
+      trashBoardEntity(folderPath: string, name: string): Promise<BoardResult>
       askTheme(): void
       onTheme(listener: (dark: boolean) => void): void
     }

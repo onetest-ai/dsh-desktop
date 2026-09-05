@@ -1147,11 +1147,17 @@ body {
  * The board itself, in the editor column.
  *
  * One campaign per group, one lane per mission, and six columns per lane.
- * The columns scroll sideways inside their own lane rather than the panel
- * scrolling as a whole: the lane's title has to stay readable while its far
- * columns are being looked at, and a panel-wide scroll takes it away.
+ * The panel is the only sideways scroller, so every lane's columns move
+ * together: six columns at fixed widths are the same six positions in every
+ * lane, and a lane that scrolled on its own would show `cancelled` beside the
+ * next lane's `draft` — a swimlane board whose lanes do not line up is no
+ * longer telling you anything by putting them under each other.
  */
 .board-group {
+  /* As wide as its widest lane rather than as wide as the panel, so a lane's
+     border still wraps its own columns once the board is scrolled sideways. */
+  width: max-content;
+  min-width: 100%;
   margin-bottom: 14px;
 }
 
@@ -1159,6 +1165,14 @@ body {
   margin: 0 0 6px;
   font-size: 13px;
   font-weight: 600;
+}
+
+/* The campaign the tree asked for. A campaign is a heading on this board and
+   nothing else, so the heading is what a campaign row reveals. */
+.board-group-revealed {
+  padding: 2px 4px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 2px var(--dsw-alias-interactive-primary, currentColor);
 }
 
 .board-lane {
@@ -1228,7 +1242,6 @@ body {
   display: flex;
   gap: 6px;
   align-items: flex-start;
-  overflow-x: auto;
 }
 
 /* A fixed width, so an empty column is as wide as a full one: a column that
@@ -1251,6 +1264,13 @@ body {
   padding: 0 2px;
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
+}
+
+/* The card the tree asked for. The same ring the lane and the heading carry,
+   because a reveal points at one thing and it should look the same whichever
+   of the three it turned out to be. */
+.board-card-revealed {
+  box-shadow: inset 0 0 0 2px var(--dsw-alias-interactive-primary, currentColor);
 }
 
 /* The card and its delete share a box so the delete can sit on the card's
@@ -1345,11 +1365,14 @@ body {
 /*
  * The create modal.
  *
- * The backdrop takes no pointer events at all: it cannot be clicked through,
- * and it cannot be clicked on either. A click outside the form is a gesture
- * with no meaning here, which is the point — the modal is closed by Cancel
- * and by its close control, and losing a half-typed task to a stray click is
- * what stops someone trusting a board.
+ * The backdrop takes pointer events, which is what makes this modal modal:
+ * it becomes the hit-test target for every click over the panel, so the lane
+ * plus and the cards visible through it are not reachable while a name is
+ * half typed. `pointer-events: none` here would be click-through — the board
+ * behind would keep taking clicks, and one of them reopens this modal with
+ * both fields cleared. Catching the click is all the backdrop does: it does
+ * not close, because losing a half-typed task to a stray gesture is what
+ * stops someone trusting a board. See `board.ts`'s handler on it.
  */
 .board-modal {
   position: fixed;
@@ -1358,7 +1381,7 @@ body {
   align-items: center;
   justify-content: center;
   background: var(--dsw-alias-bg-mask-drop);
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .board-modal-form {
@@ -1370,7 +1393,6 @@ body {
   border: 1px solid var(--dsw-alias-border-primary, currentColor);
   border-radius: 8px;
   background: var(--dsw-alias-bg-overlay);
-  pointer-events: auto;
 }
 
 .board-modal-head {

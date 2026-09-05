@@ -53,19 +53,23 @@ function oneMission(
     taskStatus?: string
     verdicts?: { pass: number; total: number }
     findings?: { folderPath: string; says: string }[]
+    /** A bug filed against the campaign, which gives the group a second lane. */
+    campaignBug?: boolean
+    project?: string
   } = {},
 ): Record<string, unknown> {
   const task = node('task', 'T1', 'campaigns/q3/missions/m1/tasks/t1', {
     status: over.taskStatus ?? 'draft',
     verdicts: over.verdicts ?? { pass: 0, total: 0 },
   })
+  const children: Record<string, unknown>[] = [
+    node('mission', 'M1', 'campaigns/q3/missions/m1', { children: [task] }),
+  ]
+  if (over.campaignBug === true) children.push(node('bug', 'B1', 'campaigns/q3/bugs/b1'))
   return {
+    project: over.project ?? '/p/one',
     present: true,
-    campaigns: [
-      node('campaign', 'Q3', 'campaigns/q3', {
-        children: [node('mission', 'M1', 'campaigns/q3/missions/m1', { children: [task] })],
-      }),
-    ],
+    campaigns: [node('campaign', 'Q3', 'campaigns/q3', { children })],
     tests: { path: 'tests', slug: 'tests', suites: [], tests: [] },
     findings: over.findings ?? [],
   }
@@ -83,7 +87,7 @@ interface Stub {
   openTaskFile: (folderPath: string, file: string) => void
   createBoardEntity: (level: string, parent: string, name: string, second: string) => Promise<StubResult>
   setBoardStatus: (folderPath: string, status: string) => Promise<StubResult>
-  trashBoardEntity: (folderPath: string) => Promise<StubResult>
+  trashBoardEntity: (folderPath: string, name: string) => Promise<StubResult>
   askTheme: () => void
   onTheme: () => void
   /**
@@ -130,8 +134,8 @@ function bridge(data: Record<string, unknown>, answers: { status?: StubResult; c
       calls.push(['status', folderPath, status])
       return answers.status ?? { ok: true }
     },
-    trashBoardEntity: async (folderPath) => {
-      calls.push(['trash', folderPath])
+    trashBoardEntity: async (folderPath, name) => {
+      calls.push(['trash', folderPath, name])
       return answers.trash ?? { ok: true }
     },
     askTheme: () => {},
@@ -255,7 +259,7 @@ describe('the board', () => {
     card?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))
     document.querySelector<HTMLElement>('.board-card-delete')?.click()
     for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
-    expect(stub.calls).toContainEqual(['trash', 'campaigns/q3/missions/m1/tasks/t1'])
+    expect(stub.calls).toContainEqual(['trash', 'campaigns/q3/missions/m1/tasks/t1', 'T1'])
   })
 
   // reason: main answers a cancelled confirmation with an empty reason, the
@@ -298,11 +302,99 @@ describe('the board', () => {
     expect(note?.textContent).toContain('tree')
   })
 
-  it('reveals and highlights a lane when main asks', async () => {
+  // reason: with no project open there is no place to create a campaign in,
+  // so the advice that names one would be pointing at nothing.
+  it('words no project apart from a project with no board', async () => {
+    await load(bridge({ project: undefined, present: false, campaigns: [], tests: { path: 'tests', slug: 'tests', suites: [], tests: [] }, findings: [] }))
+    expect(document.getElementById('board-empty')?.textContent).toContain('No project is open')
+    await load(bridge({ project: '/p/one', present: false, campaigns: [], tests: { path: 'tests', slug: 'tests', suites: [], tests: [] }, findings: [] }))
+    expect(document.getElementById('board-empty')?.textContent).toContain('no board yet')
+  })
+
+  // reason: a refusal and a highlight are both about one board's paths, and
+  // `campaigns/q3` exists in more than one project — a note about the project
+  // that was closed would sit over the board of the one that opened.
+  it('drops the refusal and the highlight when the project changes', async () => {
+    const stub = bridge(oneMission(), { status: { ok: false, reason: 'git said no' } })
+    await load(stub)
+    drop('campaigns/q3/missions/m1/tasks/t1', 'done')
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    stub.reveal('campaigns/q3/missions/m1')
+    expect(document.getElementById('board-note')?.textContent).toContain('git said no')
+    stub.readTasks = async () => oneMission({ project: '/p/other' })
+    stub.fire()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.getElementById('board-note')?.hidden).toBe(true)
+    expect(document.querySelector('.board-lane-revealed')).toBeNull()
+  })
+})
+
+/**
+ * What the tree's four kinds of row reveal.
+ *
+ * One case per kind, because each is a different element and only the mission
+ * was ever covered: a campaign is a heading, a mission is a lane, a task or a
+ * bug is a card, and a test is not on this board at all.
+ */
+describe('a reveal from the tree', () => {
+  it('marks a mission’s own lane', async () => {
     const stub = bridge(oneMission())
     await load(stub)
     stub.reveal('campaigns/q3/missions/m1')
     expect(document.querySelector('.board-lane-revealed')).not.toBeNull()
+  })
+
+  // reason: a campaign is a heading on this board and nothing else, so a
+  // reveal that matched only lanes had nothing to mark and marked nothing.
+  it('marks a campaign’s heading', async () => {
+    const stub = bridge(oneMission())
+    await load(stub)
+    stub.reveal('campaigns/q3')
+    expect(document.querySelector('.board-group-revealed')?.textContent).toBe('Q3')
+    expect(document.querySelector('.board-lane-revealed')).toBeNull()
+  })
+
+  // reason: a campaign's bug lane carries the campaign's own folder path, so
+  // a match on that string alone highlights the Bugs lane for a click on the
+  // campaign — a confidently wrong answer rather than a missing one.
+  it('marks the heading, not the bug lane that shares its path', async () => {
+    const stub = bridge(oneMission({ campaignBug: true }))
+    await load(stub)
+    stub.reveal('campaigns/q3')
+    const titles = [...document.querySelectorAll('.board-lane-title')].map((node) => node.textContent)
+    expect(titles).toContain('Bugs')
+    expect(document.querySelector('.board-group-revealed')).not.toBeNull()
+    expect(document.querySelector('.board-lane-revealed')).toBeNull()
+  })
+
+  // reason: the spec gives a task row its own card. Marking the lane instead
+  // leaves the reader hunting a lane of thirty cards for the one they asked
+  // for, which is the hunt the reveal exists to end.
+  it('marks a task’s own card', async () => {
+    const stub = bridge(oneMission())
+    await load(stub)
+    stub.reveal('campaigns/q3/missions/m1/tasks/t1')
+    const card = document.querySelector('.board-card-revealed')
+    expect(card?.textContent).toContain('T1')
+    expect(document.querySelector('.board-lane-revealed')).toBeNull()
+  })
+
+  it('marks a bug’s own card', async () => {
+    const stub = bridge(oneMission({ campaignBug: true }))
+    await load(stub)
+    stub.reveal('campaigns/q3/bugs/b1')
+    expect(document.querySelector('.board-card-revealed')?.textContent).toContain('B1')
+  })
+
+  // reason: the highlight has to survive the re-read a write triggers, since
+  // every redraw rebuilds the DOM the mark was written into.
+  it('keeps the mark across a redraw', async () => {
+    const stub = bridge(oneMission())
+    await load(stub)
+    stub.reveal('campaigns/q3/missions/m1/tasks/t1')
+    stub.fire()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.board-card-revealed')).not.toBeNull()
   })
 })
 
@@ -315,6 +407,23 @@ describe('the create modal', () => {
     document.getElementById('board-modal-form')?.dispatchEvent(new Event('submit', { cancelable: true }))
     for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
     expect(stub.calls).toContainEqual(['create', 'task', 'campaigns/q3/missions/m1', 'New thing', ''])
+  })
+
+  // reason: the backdrop is the modal's whole claim to being modal — it takes
+  // the pointer events so a lane's plus, visible through it, cannot be
+  // pressed while a name is half typed. jsdom does no CSS hit-testing, so the
+  // obvious assertion — that the click never reaches the control behind — is
+  // not available here: what is asserted instead is the half this page owns,
+  // that a click landing on the backdrop goes no further than the modal.
+  it('swallows a click on its backdrop rather than letting it through', async () => {
+    await load(bridge(oneMission()))
+    document.querySelector<HTMLElement>('.board-lane-add')?.click()
+    let escaped = false
+    document.body.addEventListener('click', () => {
+      escaped = true
+    })
+    document.getElementById('board-modal')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(escaped).toBe(false)
   })
 
   // reason: losing a half-typed task to a stray click is small and

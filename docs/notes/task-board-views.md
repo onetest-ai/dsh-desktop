@@ -17,15 +17,17 @@ Each has one job:
 
 `SideView` gains `'tasks'`, beside `'files'` and `'git'`. A third rail button, `⌘⌥T`, a `tasks.html` page with its own bundle, and `views.tasks` — the same shape the git panel added, for the same reason: three views that are rarely read at once do not each deserve permanent horizontal space.
 
-Rows nest campaign → mission → task/bug, collapsible, each carrying a status chip and — for a campaign or a mission — the progress computed on read. Beneath them, a second root: `tests`, with its suites and the tests inside them. A test row shows what it validates and how many of those verdicts pass, which is the reverse of the workitem's chip and the only place that direction is visible. **Clicking a row scrolls the board to that lane and highlights it**, bringing the Board tab forward if the pane was showing something else — a reveal that scrolled a panel nobody could see would look like nothing happening. A campaign row reveals its heading, a mission row its lane, and a task or bug row its own card. The tree does not open files and does not change anything.
+Rows nest campaign → mission → task/bug, collapsible, each carrying a status chip and — for a campaign or a mission — the progress computed on read. Beneath them, a second root: `tests`, with its suites and the tests inside them. A test row shows what it validates and how many of those verdicts pass, which is the reverse of the workitem's chip and the only place that direction is visible. **Clicking a row scrolls the board to whatever that row is on it and highlights that**, bringing the Board tab forward if the pane was showing something else — a reveal that scrolled a panel nobody could see would look like nothing happening. A campaign row reveals its heading, a mission row its lane, and a task or bug row its own card. A test row reveals nothing, because the board deliberately draws no card for a test — it opens the test's own `test.yaml` instead, which is the one thing a test row can go to and the same thing a card's click does for a workitem. That is the tree's only exception: nothing here changes anything.
 
-A project with no `.dsh/tasks/` is worded, not repaired, and says how a board gets started. The same three-states rule the git panel follows.
+A fold is remembered by folder path and forgotten when the project changes. `campaigns/q3` is a path two projects can both have, and reopening the next one already folded would be this state describing a board it was never about.
+
+A project with no `.dsh/tasks/` is worded, not repaired, and says how a board gets started — and no project open at all is worded differently again, since advice to create a campaign would be naming a place that does not exist. The same three-states rule the git panel follows.
 
 ## The board
 
 `PaneTab` gains `'board'`, a third panel in `pane.html` beside Editor and Web.
 
-**Columns are the six statuses, always, whether or not anything is in them.** An empty column is information: it names a place work can go. The set never changes shape under the reader, and when the panel is too narrow the board scrolls sideways rather than dropping a column.
+**Columns are the six statuses, always, whether or not anything is in them.** An empty column is information: it names a place work can go. The set never changes shape under the reader, and when the panel is too narrow the board scrolls sideways rather than dropping a column. The *board* scrolls, not each lane on its own: six columns at fixed widths are the same six positions in every lane, and lanes that drifted out of alignment would stop the rows meaning anything by being under each other.
 
 **Lanes are missions**, grouped under a campaign heading — including a mission with no work in it yet, which is a lane waiting to be filled rather than a mission that has gone missing. Bugs filed against a campaign rather than a mission get one lane of their own beneath it, so a bug is never homeless and never silently absent.
 
@@ -46,7 +48,7 @@ Its name, its type when it is a bug, how many of its acceptance criteria are tic
 | Drag a card to another column | `setStatus` |
 | `+` on a mission's lane | `createEntity` at level `task`, under that mission |
 | `+` on a campaign's bug lane | `createEntity` at level `bug`, under that campaign |
-| Right-click a card → Delete | `trashEntity`, behind a confirmation naming it |
+| Right-click a card → Delete | `trashEntity`, behind a confirmation naming the entity as the card does |
 | Click a card | opens its `workitem.yaml` (`bug.yaml` for a bug) in the editor column |
 
 Every one is a store call that already exists and is tested. The board adds gestures, not rules.
@@ -60,6 +62,8 @@ Every one is a store call that already exists and is tested. The board adds gest
 A `+` opens a small modal over the panel rather than an inline field. A card has a name, and a task should have its first acceptance criterion written while the thought that produced it is still there — two fields is past what an inline row carries well, and a modal is where a form belongs.
 
 **It closes on Cancel and on its close control, and on nothing else.** Not on a click outside it, not on the backdrop. Losing a half-typed task to a stray click is small and infuriating, and it is exactly the kind of thing that stops someone trusting a board with anything they have not already written down elsewhere.
+
+The backdrop nonetheless takes pointer events, which is what makes the modal modal: it is the hit-test target for every click over the panel, so the lane pluses and cards visible through it cannot be pressed while a name is half typed. A backdrop that took none would be click-through — the `+` below would reopen the modal with both fields cleared, and a card could be opened or dragged to a new status mid-create. Catching the click is all it does with it.
 
 Escape is treated the same as the backdrop and does not close it either. That is a deliberate departure from what a dialog usually does, so both Cancel and Close are ordinary focusable controls reachable by Tab — a keyboard user is never trapped, they simply leave the way everyone else does. A modal that could be dismissed by the key next to the one you were typing in is not meaningfully safer than one dismissed by a click.
 
@@ -90,7 +94,7 @@ Because both surfaces read the same channel and hear the same event, they cannot
 
 The store's findings — a file that will not parse, a status the board does not know, a task with no criterion — are already computed on read. Neither view shows them against the entity they name: the tree draws the same count the board does, in a line of its own above the rows, and a file that would not parse at all drops its entity from the tree entirely — there is no row left to mark it against. The one exception is narrower than a finding: a status outside what the board knows still gets its own chip on the row that carries it, because that entity parsed fine and made it into the tree; the file simply says something the board has no column for. The board carries the same count above its columns, telling the reader to open the tree for which. Neither hides an entity it could not read, and neither repairs one.
 
-A write that fails reports the reason the store gave, on the surface that asked for it, in one line. A dragged card whose write failed **returns to the column it came from**: leaving it where it was dropped would show a status that is not in the file. That refusal takes over the board's own findings line, and no re-read clears it: `refresh()` and `draw()` never touch it, so it survives every redraw a `tasks:changed` notice triggers — including one raised by somebody else's write, on a board this view never touched — until this same view attempts another drag or delete and that one succeeds. A cancelled confirmation is not a refusal: the store answers it with no reason, the way Discard in the git panel does, and the line falls back to the findings count rather than going blank. A modal whose create failed **stays open with what was typed still in it**, and says why — closing it would throw away the work along with the error.
+A write that fails reports the reason the store gave, on the surface that asked for it, in one line. A dragged card whose write failed **returns to the column it came from**: leaving it where it was dropped would show a status that is not in the file. That refusal takes over the board's own findings line, and no re-read of the same board clears it: `draw()` never touches it, so it survives every redraw a `tasks:changed` notice triggers — including one raised by somebody else's write, on a board this view never touched — until this same view attempts another drag or delete and that one succeeds. A read that comes back from a *different* project does clear it, along with the reveal's highlight: both are notes about one board's paths, and `campaigns/q3` in the project that just opened is not the card the refusal was about. A cancelled confirmation is not a refusal: the store answers it with no reason, the way Discard in the git panel does, and the line falls back to the findings count rather than going blank. A modal whose create failed **stays open with what was typed still in it**, and says why — closing it would throw away the work along with the error.
 
 ## Testing
 
@@ -102,7 +106,7 @@ The pure parts are the ones with the bugs in them, and they test without Electro
 - **Main's channels**, each gated against the open project, as every board channel already is.
 - Each is broken deliberately to confirm its test fails, as this project asks of a test that guards something important.
 
-The two cross-surface messages — the tree's reveal reaching the board, the card's click reaching the editor — are asserted where each page sends them, against a stubbed bridge: what the message is called and what it carries. Main's own forwarding of the two, where both ends would be visible at once, is not yet covered by a test of its own.
+The two cross-surface messages — the tree's reveal reaching the board, the card's click reaching the editor — are asserted where each page sends them, against a stubbed bridge: what the message is called and what it carries, and — for the reveal — which of the board's four kinds of row it marks. Main's forwarding of both is covered where the channels are, against the real store.
 
 ## Deliberately not in this
 

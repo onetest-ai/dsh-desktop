@@ -2675,7 +2675,11 @@ if (!app.requestSingleInstanceLock()) {
     // The board's own read, for both of its views. A full walk of
     // `.dsh/tasks/` every time and never a cache: the read is milliseconds,
     // and a cached board is a second thing that can disagree with disk.
-    ipcMain.handle('tasks:read', () => boardFor(currentProject?.path))
+    // Which project it was read from goes with it: a view that could not tell
+    // "no project" from "no board" would advise creating a campaign in a
+    // place that does not exist, and one that could not tell one project from
+    // the next would keep the last one's highlights and folds over it.
+    ipcMain.handle('tasks:read', () => ({ ...boardFor(currentProject?.path), project: currentProject?.path }))
     // The tree names a folder path; main hands it to the board's panel, which
     // brings its own tab forward. A reveal that scrolled a panel nobody could
     // see would look like nothing happening.
@@ -2734,19 +2738,25 @@ if (!app.requestSingleInstanceLock()) {
     // answer for itself — the way Discard in the git panel does. The panel
     // never asks a second time: two prompts for one press teach a user to
     // click through both.
-    ipcMain.handle('tasks:trash', async (_event, folderPath: string) => {
+    // The name is the renderer's because only the card has it: the folder is
+    // called `fix-the-login-timeout` and the entity is called "Fix the login
+    // timeout", and a confirmation is read by a person. It is wording and
+    // nothing more — the path is still what is resolved, and it is resolved
+    // before the dialog is raised.
+    ipcMain.handle('tasks:trash', async (_event, folderPath: string, name: string) => {
       const project = currentProject?.path
       if (project === undefined) return { ok: false, reason: 'No project is open.' }
       if (views === undefined || views.window.isDestroyed()) return { ok: false, reason: '' }
       if (resolveInBoard(project, folderPath) === undefined) {
         return { ok: false, reason: `${folderPath} is not inside this project's board.` }
       }
+      const called = name === undefined || name === '' ? (folderPath.split('/').pop() ?? folderPath) : name
       const { response } = await dialog.showMessageBox(views.window, {
         type: 'warning',
         buttons: ['Delete', 'Cancel'],
         defaultId: 1,
         cancelId: 1,
-        message: `Delete ${folderPath.split('/').pop() ?? folderPath}?`,
+        message: `Delete ${called}?`,
         detail: 'It moves to the board’s trash, with everything under it. Nothing is removed from disk.',
       })
       // An empty reason: the user answered, so there is nothing to report back

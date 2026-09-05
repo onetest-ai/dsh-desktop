@@ -39,7 +39,17 @@ let trouble: string | undefined
  */
 let refusal: string | undefined
 
-/** The lane main last asked to be shown, so a redraw keeps it marked. */
+/**
+ * The folder path main last asked to be shown, so a redraw keeps it marked.
+ *
+ * One string for all four kinds of row the tree draws, because that is all
+ * main sends. What it names is decided while drawing, against the board that
+ * is being drawn: a campaign heading, a mission's lane, or one card. A bug
+ * lane carries its campaign's own folder path, so the two cannot be told
+ * apart by the string alone — the campaign is matched on its heading and the
+ * lane only when it is a mission's, which is what keeps a campaign's click
+ * off the Bugs lane beneath it.
+ */
 let revealed: string | undefined
 
 /** What the modal is about to create, or undefined when it is closed. */
@@ -93,10 +103,11 @@ async function move(folderPath: string, status: string): Promise<void> {
  * asks a second time: two confirmations for one press teach a user to click
  * through both.
  * @param folderPath - the entity to trash.
+ * @param name - what the card calls it, which is what the prompt should say.
  * @returns resolution once the answer has been drawn.
  */
-async function trash(folderPath: string): Promise<void> {
-  const out = await window.pane.trashBoardEntity(folderPath)
+async function trash(folderPath: string, name: string): Promise<void> {
+  const out = await window.pane.trashBoardEntity(folderPath, name)
   refusal = out.ok ? undefined : out.reason
   draw()
 }
@@ -126,6 +137,9 @@ function cardFor(entity: EntityView): HTMLElement {
   if (entity.criteria.total > 0) {
     card.append(tag('board-card-criteria', `${String(entity.criteria.done)}/${String(entity.criteria.total)}`))
   }
+  // The tree reveals a task or a bug as its own card: a lane of thirty cards
+  // highlighted whole is the hunt the reveal was meant to end.
+  if (entity.folderPath === revealed) card.classList.add('board-card-revealed')
   const chip = chipOf(entity)
   if (chip !== undefined) {
     const node = tag('board-chip', chip.text)
@@ -155,7 +169,7 @@ function cardFor(entity: EntityView): HTMLElement {
   // and every press on it would also open the file.
   remove.hidden = true
   remove.addEventListener('click', () => {
-    void trash(entity.folderPath)
+    void trash(entity.folderPath, entity.name)
   })
   wrap.addEventListener('contextmenu', (event) => {
     event.preventDefault()
@@ -233,8 +247,10 @@ function laneFor(lane: LaneView): HTMLElement {
   columns.className = 'board-columns'
   for (const status of BOARD_STATUSES) columns.append(columnFor(status, lane.columns[status]))
   row.append(columns)
-  const holds = BOARD_STATUSES.some((status) => lane.columns[status].some((card) => card.folderPath === revealed))
-  if (revealed === lane.folderPath || holds) row.classList.add('board-lane-revealed')
+  // Only a mission's lane answers to its own path. A bug lane's path is its
+  // campaign's, so matching one here would give a campaign's click the Bugs
+  // lane instead of the heading it asked for.
+  if (lane.kind === 'mission' && lane.folderPath === revealed) row.classList.add('board-lane-revealed')
   return row
 }
 
@@ -294,9 +310,12 @@ function draw(): void {
   }
   drawNote()
   if (!latest.present) {
-    // The one empty state with a way out of it, so it says what to do rather
-    // than only what is missing.
-    empty.textContent = 'This project has no board yet. Ask the agent to plan something, or create a campaign.'
+    // Two different absences, worded apart: a project with no board is worth
+    // offering to start, and advice to create a campaign with no project open
+    // names a place that does not exist.
+    empty.textContent = latest.project === undefined
+      ? 'No project is open, so there is no board.'
+      : 'This project has no board yet. Ask the agent to plan something, or create a campaign.'
     empty.hidden = false
     return
   }
@@ -313,6 +332,10 @@ function draw(): void {
     const heading = document.createElement('h2')
     heading.className = 'board-group-title'
     heading.textContent = group.campaign.name
+    // A campaign is a heading on this board and nothing else, so its heading
+    // is what a campaign row reveals. Matched here, above the lanes, so the
+    // Bugs lane that shares its folder path never answers in its place.
+    if (group.campaign.folderPath === revealed) heading.classList.add('board-group-revealed')
     section.append(heading)
     for (const lane of group.lanes) section.append(laneFor(lane))
     into.append(section)
@@ -389,8 +412,11 @@ el('board-modal-form').addEventListener('submit', (event) => {
 })
 el('board-modal-cancel').addEventListener('click', closeModal)
 el('board-modal-close').addEventListener('click', closeModal)
-// The modal's own presses stop here so nothing behind it can act on them.
-// There is deliberately no handler on anything outside it: see `closeModal`.
+// Every press inside the modal, backdrop included, stops here: the backdrop
+// takes pointer events precisely so it is the hit-test target for a click on
+// the board behind it, and this is what keeps that click from bubbling on to
+// a lane's plus or a card. There is deliberately no handler that closes on
+// one: see `closeModal`.
 el('board-modal').addEventListener('click', (event) => {
   event.stopPropagation()
 })
@@ -405,7 +431,15 @@ el('board-modal').addEventListener('click', (event) => {
  */
 async function refresh(): Promise<void> {
   try {
-    latest = await window.pane.readTasks()
+    const next = await window.pane.readTasks()
+    // A refusal and a highlight are both about one board's paths, and a path
+    // means nothing in the next project: `campaigns/q3` exists in both, and a
+    // note about the one that was closed would sit over the one that opened.
+    if (latest !== undefined && next.project !== latest.project) {
+      refusal = undefined
+      revealed = undefined
+    }
+    latest = next
     trouble = undefined
   } catch (error) {
     // Nothing on the other side of the bridge rejects today. Without this it
@@ -422,10 +456,15 @@ window.pane.onReveal((folderPath) => {
   revealed = folderPath
   draw()
   document.getElementById('tab-board')?.click()
-  const lane = document.querySelector<HTMLElement>('.board-lane-revealed')
+  // Whichever of the three the draw above marked, in document order — the
+  // three selectors are mutually exclusive, since one folder path names one
+  // campaign, one mission or one card.
+  const target = document.querySelector<HTMLElement>(
+    '.board-group-revealed, .board-lane-revealed, .board-card-revealed',
+  )
   // Guarded because not every environment this page runs in implements it,
   // and a highlight that landed is worth more than the scroll that did not.
-  if (typeof lane?.scrollIntoView === 'function') lane.scrollIntoView({ block: 'nearest' })
+  if (typeof target?.scrollIntoView === 'function') target.scrollIntoView({ block: 'nearest' })
 })
 
 // Main says when: the project moved, or something under `.dsh/tasks/` did.
