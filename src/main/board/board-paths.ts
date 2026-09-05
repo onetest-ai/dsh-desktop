@@ -1,12 +1,15 @@
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
-import type { EntityKind } from './entity-schema'
+import { typeOf, type EntityLevel } from './entity-schema'
 
 /** Where a project keeps its board, beside the `mcp.json` it may already carry. */
 export const BOARD_DIR = join('.dsh', 'tasks')
 
 /** Where a deleted entity goes. Never read as part of the board. */
 export const TRASH_DIR = '.trash'
+
+/** Where tests live, in suites of any depth. Never a child of a workitem. */
+export const TESTS_DIR = 'tests'
 
 /**
  * The board directory of one project.
@@ -35,21 +38,38 @@ export function hasBoard(project: string): boolean {
 }
 
 /**
+ * The file inside an entity's folder.
+ *
+ * Named for the type while the folder says the level, so a campaign, a
+ * mission and a task all hold a `workitem.yaml`. A reader looking for
+ * `mission.yaml` would find nothing, which is why this is a function and not
+ * a string built at each call site.
+ * @param level - the entity's level.
+ * @returns the file name, including the extension.
+ */
+export function fileFor(level: EntityLevel): string {
+  return `${typeOf(level)}.yaml`
+}
+
+/**
  * The folder path of an entity, from the slugs of it and its parents.
  *
- * The path is the entity's identity — there is no id file — so this is the one
- * place the shape of the tree is written down. A bug takes two parts when a
- * campaign owns it and three when a mission does, which is what "parented by
- * exactly one" looks like on disk.
- * @param kind - which kind the last slug names.
- * @param parts - the slugs from the campaign down, ending with this entity's.
+ * The path is the entity's identity — there is no id file — so this is the
+ * one place the shape of the tree is written down. A bug takes two parts when
+ * a campaign owns it and three when a mission does, which is what "parented
+ * by exactly one" looks like on disk. A test takes as many as its suites
+ * give it, because a suite is a directory and nothing else.
+ * @param level - which level the last slug names.
+ * @param parts - for a workitem or a bug, the slugs from the campaign down;
+ *   for a test, its suites followed by its own slug.
  * @returns the folder path, relative to the board root, with forward slashes.
  */
-export function folderFor(kind: EntityKind, parts: string[]): string {
+export function folderFor(level: EntityLevel, parts: string[]): string {
+  if (level === 'test') return [TESTS_DIR, ...parts].join('/')
   const [campaign, ...rest] = parts
-  if (kind === 'campaign') return `campaigns/${campaign}`
-  if (kind === 'mission') return `campaigns/${campaign}/missions/${rest[0]}`
-  if (kind === 'task') return `campaigns/${campaign}/missions/${rest[0]}/tasks/${rest[1]}`
+  if (level === 'campaign') return `campaigns/${campaign}`
+  if (level === 'mission') return `campaigns/${campaign}/missions/${rest[0]}`
+  if (level === 'task') return `campaigns/${campaign}/missions/${rest[0]}/tasks/${rest[1]}`
   // A bug under a campaign has one slug after it; one under a mission has two.
   if (rest.length === 1) return `campaigns/${campaign}/bugs/${rest[0]}`
   return `campaigns/${campaign}/missions/${rest[0]}/bugs/${rest[1]}`

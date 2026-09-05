@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { boardRoot, folderFor, hasBoard, resolveInBoard } from './board-paths'
+import { boardRoot, fileFor, folderFor, hasBoard, resolveInBoard } from './board-paths'
 
 let project = ''
 beforeEach(() => {
@@ -39,6 +39,18 @@ describe('hasBoard', () => {
   })
 })
 
+describe('fileFor', () => {
+  // reason: the file is named for the TYPE while the directory says the
+  // LEVEL. A reader that looked for `mission.yaml` would find nothing.
+  it('names the file after the type, not the level', () => {
+    expect(fileFor('campaign')).toBe('workitem.yaml')
+    expect(fileFor('mission')).toBe('workitem.yaml')
+    expect(fileFor('task')).toBe('workitem.yaml')
+    expect(fileFor('bug')).toBe('bug.yaml')
+    expect(fileFor('test')).toBe('test.yaml')
+  })
+})
+
 describe('folderFor', () => {
   it('nests a task under its mission and campaign', () => {
     expect(folderFor('task', ['q3', 'm1', 't1'])).toBe('campaigns/q3/missions/m1/tasks/t1')
@@ -55,6 +67,14 @@ describe('folderFor', () => {
   it('names a campaign and a mission', () => {
     expect(folderFor('campaign', ['q3'])).toBe('campaigns/q3')
     expect(folderFor('mission', ['q3', 'm1'])).toBe('campaigns/q3/missions/m1')
+  })
+
+  // reason: tests are their own container, and a suite is just a directory —
+  // so a test's path is its suites and its slug, at any depth.
+  it('puts a test under the tests root, at whatever depth its suites give it', () => {
+    expect(folderFor('test', ['login'])).toBe('tests/login')
+    expect(folderFor('test', ['auth', 'login'])).toBe('tests/auth/login')
+    expect(folderFor('test', ['auth', 'oauth', 'google', 'callback'])).toBe('tests/auth/oauth/google/callback')
   })
 })
 
