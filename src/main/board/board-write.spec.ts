@@ -866,3 +866,49 @@ describe('every write', () => {
     expect(createEntity(project, 'mission', '../..', 'M1').ok).toBe(false)
   })
 })
+
+// reason: findings 1 and 2 of the branch review. Both are the same root — a
+// section body is opaque by the format's own claim and was not opaque to
+// `splitDoc` — and both only show up against a real file, written more than
+// once, which is what every other test in this file stops short of.
+describe('a body that holds markdown of its own', () => {
+  it('leaves the file byte-identical from the second write on', () => {
+    createEntity(project, 'campaign', '', 'Q3')
+    createEntity(project, 'bug', 'campaigns/q3', 'Crash')
+    const bug = 'campaigns/q3/bugs/crash'
+    expect(updateEntity(project, bug, { stepsToReproduce: 'run it:\n```\nnpm start', expected: 'it opens' }).ok).toBe(true)
+    const texts: string[] = []
+    for (let i = 0; i < 4; i += 1) {
+      expect(setStatus(project, bug, 'executing').ok).toBe(true)
+      texts.push(read(bug, 'bug.md'))
+    }
+    // The measured growth was 183 → 241 → 299 → 357 bytes, a whole heading set
+    // gained per write. Four writes of the same status, four identical files.
+    expect(new Set(texts).size).toBe(1)
+    expect(texts[0].match(/^## Expected$/gm)).toHaveLength(1)
+    const back = readBoard(project).campaigns[0].children.find((child) => child.level === 'bug')
+    expect(back?.fields.expected).toBe('it opens')
+    expect(back?.fields.stepsToReproduce).toContain('npm start')
+  })
+
+  it('converts a legacy file whose prose holds a heading, without re-attributing it', () => {
+    legacyBoard()
+    putLegacy(
+      'campaigns/q3/bugs/crash',
+      'bug.yaml',
+      'name: Crash\nstatus: backlog\nseverity: major\n' +
+        'description: |\n  intro\n\n  ## Design\n  deep stuff\n' +
+        'notes: |\n  ## Notes\n  inner\n' +
+        'steps_to_reproduce: |\n  run it:\n\n      indented four\n',
+    )
+    expect(setStatus(project, 'campaigns/q3/bugs/crash', 'executing').ok).toBe(true)
+    const text = read('campaigns/q3/bugs/crash', 'bug.md')
+    expect(text.match(/^## Notes$/gm)).toHaveLength(1)
+    const back = readBoard(project).campaigns[0]?.children.find((child) => child.level === 'bug')
+    expect(back?.fields.notes).toBe('### Notes\ninner')
+    expect(back?.fields.description).toBe('intro\n\n### Design\ndeep stuff')
+    expect(back?.fields.stepsToReproduce).toBe('run it:\n\n    indented four')
+    expect(back?.fields.extraSections).toBeUndefined()
+    expect(has('campaigns/q3/bugs/crash', 'bug.yaml')).toBe(false)
+  })
+})

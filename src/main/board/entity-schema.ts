@@ -16,11 +16,17 @@
  * `loadLegacyEntity` reads the `<type>.yaml` files the board shipped first. It does not have a
  * mapping of its own — it translates the old all-YAML map into an `EntityDoc` and hands it to the
  * same `fieldsFrom` a real document goes through, so the two formats cannot drift apart.
+ *
+ * What a body may contain is `entity-doc.ts`'s rule, stated on `normalizeBody`, and both directions
+ * here obey it: `dumpEntity` through `joinDoc`, and `loadLegacyEntity` by settling each prose value
+ * as it builds the document. A legacy prose value is the only body on the board that never came from
+ * a document, so it is the only one that can arrive holding a column-zero `##`.
  */
 import { load as yamlLoad, JSON_SCHEMA, YAMLException } from 'js-yaml'
 import {
   dumpChecklist,
   joinDoc,
+  normalizeBody,
   parseChecklist,
   sectionOf,
   splitDoc,
@@ -625,7 +631,11 @@ export function loadEntity(text: string): EntityFields {
  *
  * This runs once per file and can never be re-run, so what it cannot represent
  * it keeps rather than flattens: see `isLegacyProse` for a prose key holding a
- * list or a map, and `oneLine` for a criterion that spanned several lines.
+ * list or a map, and `oneLine` for a criterion that spanned several lines. The
+ * one thing it does change is a column-zero `##` inside a prose value, which
+ * `normalizeBody` demotes by a level rather than let the converted file read
+ * back with the heading re-attributed to a section of its own — every word
+ * survives, one hash is added, and the reasoning is on `normalizeBody`.
  * @param text - the whole `<type>.yaml` body.
  * @param level - the level the path says this file is, which disambiguates `expected`.
  * @returns the typed fields, identical to what the converted document reads as.
@@ -647,8 +657,15 @@ export function loadLegacyEntity(text: string, level: EntityLevel): EntityFields
   /** One prose key's text — `''` for a value left behind in `front` as unconvertible. */
   const prose = (key: string): string => (isLegacyProse(key, raw[key]) ? asString(raw[key]) : '')
   const sections: { heading: string; body: string }[] = []
+  // Settled here rather than left to `joinDoc`, so the entity this conversion
+  // answers with is the entity the file it writes reads back as. A legacy prose
+  // value is the one body on the board that never came from a document, so it is
+  // the one that can carry a column-zero `##` or a fence nobody closed — and this
+  // runs once, with the `.yaml` gone afterwards, so a disagreement between what
+  // was converted and what was written has nothing left to reconcile against.
   const add = (heading: string, body: string): void => {
-    if (body.trim()) sections.push({ heading, body: body.trim() })
+    const settled = normalizeBody(body)
+    if (settled) sections.push({ heading, body: settled })
   }
   const criteria = isLegacyProse('acceptance_criteria', raw.acceptance_criteria)
     ? parseCriteria(raw.acceptance_criteria).map((c) => ({ ...c, text: oneLine(c.text) }))
@@ -662,7 +679,7 @@ export function loadLegacyEntity(text: string, level: EntityLevel): EntityFields
   add('Environment', prose('environment'))
   add('Steps', prose('steps'))
   add('Notes', prose('notes'))
-  return fieldsFrom({ front, lead: prose('description').trim(), sections })
+  return fieldsFrom({ front, lead: normalizeBody(prose('description')), sections })
 }
 
 /**

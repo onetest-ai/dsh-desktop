@@ -89,3 +89,43 @@ describe('parseChecklist', () => {
     expect(parseChecklist(dumpChecklist(items))).toEqual(items)
   })
 })
+
+/**
+ * The bodies that break a naive split, each with what it must look like once the
+ * document has been written once.
+ *
+ * A property over a set of adversarial bodies rather than six separate cases,
+ * because the thing being pinned is one invariant — `splitDoc(joinDoc(doc))`
+ * answers `doc` — and a case per symptom would pin the symptoms instead.
+ */
+const ADVERSARIAL: readonly (readonly [what: string, body: string, settled: string])[] = [
+  ['a `## ` line at column zero', 'intro\n\n## Design\n\ndeep stuff', 'intro\n\n### Design\n\ndeep stuff'],
+  ['a fence nobody closed', 'before\n```\nnever closed', 'before\n```\nnever closed\n```'],
+  ['a tilde fence around a heading', '~~~\n## not a heading\n~~~', '~~~\n## not a heading\n~~~'],
+  ['a four-space indented code block', '    const x = 1\n\n    return x', '    const x = 1\n\n    return x'],
+  ['nothing but whitespace', '   \n\t\n  ', ''],
+  ['a line that is three dashes', 'above\n---\nbelow', 'above\n---\nbelow'],
+  ['a long fence holding a shorter one', '````\n```\n## inner\n```\n````', '````\n```\n## inner\n```\n````'],
+]
+
+describe('the round-trip invariant', () => {
+  for (const [what, body, settled] of ADVERSARIAL) {
+    it(`splits back to the document it was joined from, for a body holding ${what}`, () => {
+      const text = joinDoc({
+        front: { name: 'x' },
+        lead: body,
+        sections: [{ heading: 'A', body }, { heading: 'B', body: 'plain' }],
+      })
+      const doc = splitDoc(text)
+      // The headings first: finding a body's own `##` as a third section, or
+      // losing `B` into a fence that was never closed, is what this guards.
+      expect(doc.sections.map((s) => s.heading)).toEqual(['A', 'B'])
+      expect(doc.lead).toBe(settled)
+      expect(doc.sections[0].body).toBe(settled)
+      expect(doc.sections[1].body).toBe('plain')
+      // The invariant itself, and the bytes: a second write changes nothing.
+      expect(splitDoc(joinDoc(doc))).toEqual(doc)
+      expect(joinDoc(doc)).toBe(text)
+    })
+  }
+})

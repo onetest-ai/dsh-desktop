@@ -636,3 +636,83 @@ describe('loadLegacyEntity', () => {
     expect(loadEntity(dumpEntity('test', loadLegacyEntity(LEGACY_TEST, 'test'))).status).toBeUndefined()
   })
 })
+
+/**
+ * The same adversarial bodies `entity-doc.spec.ts` pins the invariant with, at
+ * the layer that actually writes a user's file. A body is opaque markdown by the
+ * format's own claim, and these are the shapes that claim is cheapest to break.
+ */
+const ADVERSARIAL: readonly (readonly [what: string, body: string])[] = [
+  ['a `## ` line at column zero', 'intro\n\n## Design\n\ndeep stuff'],
+  ['a fence nobody closed', 'before\n```\nnever closed'],
+  ['a four-space indented code block', '    const x = 1\n\n    return x'],
+]
+
+describe('dumpEntity and loadEntity inherit the round-trip', () => {
+  for (const [what, body] of ADVERSARIAL) {
+    it(`keeps every other section of a bug whose prose holds ${what}`, () => {
+      const base = loadEntity(doc('name: Crash\nstatus: backlog\nseverity: major\n'))
+      const first = dumpEntity('bug', {
+        ...base,
+        description: body,
+        stepsToReproduce: body,
+        expected: 'it opens',
+        actual: 'it dies',
+        notes: 'seen twice',
+      })
+      const fields = loadEntity(first)
+      // The fields the prose sits beside: swallowed into an unclosed fence,
+      // every one of these reads as undefined while its text is still on disk.
+      expect(fields.expected).toBe('it opens')
+      expect(fields.actual).toBe('it dies')
+      expect(fields.notes).toBe('seen twice')
+      expect(fields.extraSections).toBeUndefined()
+      // Written again, byte for byte the same file — the growth in finding 2.
+      expect(dumpEntity('bug', fields)).toBe(first)
+      expect(loadEntity(dumpEntity('bug', fields))).toEqual(fields)
+    })
+  }
+})
+
+// reason: the conversion runs once per file on somebody's repository and can
+// never be re-run, so a heading it re-attributed is re-attributed for good. The
+// existing conversion tests all use prose that happens to hold no heading and
+// no fence, which is the one thing agent-written prose is full of.
+describe('converting legacy prose that holds markdown of its own', () => {
+  const LEGACY = [
+    'name: Crash',
+    'status: backlog',
+    'severity: critical',
+    'description: |',
+    '  intro line',
+    '',
+    '  ## Design',
+    '  deep stuff',
+    'steps_to_reproduce: |',
+    '  open it:',
+    '',
+    '      indented four',
+    'expected: it opens',
+    'notes: |',
+    '  ## Notes',
+    '  inner',
+    '',
+  ].join('\n')
+
+  it('carries a heading and an indented block through without re-attributing them', () => {
+    const legacy = loadLegacyEntity(LEGACY, 'bug')
+    const text = dumpEntity('bug', legacy)
+    // One Notes heading, not two, and the note under it rather than under a
+    // repeat that `fields.notes` cannot see.
+    expect(text.match(/^## Notes$/gm)).toHaveLength(1)
+    const back = loadEntity(text)
+    expect(back.notes).toBe('### Notes\ninner')
+    expect(back.description).toBe('intro line\n\n### Design\ndeep stuff')
+    expect(back.stepsToReproduce).toBe('open it:\n\n    indented four')
+    expect(back.expected).toBe('it opens')
+    expect(back.extraSections).toBeUndefined()
+    // Read and convert are one operation, so what the conversion answered is
+    // what the file it wrote answers.
+    expect(back).toEqual({ ...legacy, extra: { ...legacy.extra, status: 'backlog', severity: 'critical' } })
+  })
+})
