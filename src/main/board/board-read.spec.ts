@@ -34,7 +34,7 @@ describe('readBoard', () => {
 
   it('reads a campaign, its mission, and its task', () => {
     put('campaigns/q3', 'workitem.yaml', 'name: Q3\nstatus: executing\n')
-    put('campaigns/q3/missions/m1', 'workitem.yaml', 'name: M1\nstatus: draft\n')
+    put('campaigns/q3/missions/m1', 'workitem.yaml', 'name: M1\nstatus: idea\n')
     put('campaigns/q3/missions/m1/tasks/t1', 'workitem.yaml', 'name: T1\nstatus: done\n')
     const board = readBoard(project)
     expect(board.present).toBe(true)
@@ -144,34 +144,34 @@ describe('readBoard', () => {
   // reason: progress is computed and shown; it is never written. This is the
   // rule the whole design is defined against.
   it('counts progress without touching any status', () => {
-    put('campaigns/q3', 'workitem.yaml', 'name: Q3\nstatus: draft\n')
-    put('campaigns/q3/missions/m1', 'workitem.yaml', 'name: M1\nstatus: draft\n')
+    put('campaigns/q3', 'workitem.yaml', 'name: Q3\nstatus: idea\n')
+    put('campaigns/q3/missions/m1', 'workitem.yaml', 'name: M1\nstatus: idea\n')
     put('campaigns/q3/missions/m1/tasks/t1', 'workitem.yaml', 'name: T1\nstatus: done\n')
-    put('campaigns/q3/missions/m1/tasks/t2', 'workitem.yaml', 'name: T2\nstatus: draft\n')
+    put('campaigns/q3/missions/m1/tasks/t2', 'workitem.yaml', 'name: T2\nstatus: idea\n')
     const board = readBoard(project)
     const mission = board.campaigns[0].children[0]
     expect(mission.progress).toEqual({ done: 1, total: 2 })
     // The mission's own status is what its file says, whatever its children do.
-    expect(mission.status).toBe('draft')
-    expect(board.campaigns[0].status).toBe('draft')
+    expect(mission.status).toBe('idea')
+    expect(board.campaigns[0].status).toBe('idea')
   })
 
-  // reason: the case the mission-with-a-draft-child test above can't catch —
+  // reason: the case the mission-with-an-idea-child test above can't catch —
   // every child done, at both levels. A rollup that only fires on full
   // completion (children.every(...)) is a no-op on a partial mission, so the
   // rule needs a fixture where completion actually is full, for the mission
   // and for the campaign above it, or a rollup can hide behind "all tests pass."
   it('keeps a parent status as its file declares it, even when every child is done', () => {
-    put('campaigns/q3', 'workitem.yaml', 'name: Q3\nstatus: draft\n')
-    put('campaigns/q3/missions/m1', 'workitem.yaml', 'name: M1\nstatus: draft\n')
+    put('campaigns/q3', 'workitem.yaml', 'name: Q3\nstatus: idea\n')
+    put('campaigns/q3/missions/m1', 'workitem.yaml', 'name: M1\nstatus: idea\n')
     put('campaigns/q3/missions/m1/tasks/t1', 'workitem.yaml', 'name: T1\nstatus: done\n')
     put('campaigns/q3/missions/m1/tasks/t2', 'workitem.yaml', 'name: T2\nstatus: done\n')
     const board = readBoard(project)
     const campaign = board.campaigns[0]
     const mission = campaign.children[0]
     // Every task is done, and still neither parent's status moved.
-    expect(mission.status).toBe('draft')
-    expect(campaign.status).toBe('draft')
+    expect(mission.status).toBe('idea')
+    expect(campaign.status).toBe('idea')
     // Progress reports the same completion that status must not adopt.
     expect(mission.progress).toEqual({ done: 2, total: 2 })
     expect(campaign.progress).toEqual({ done: 0, total: 1 })
@@ -248,7 +248,7 @@ describe('a folder holding the wrong type of file', () => {
   // reported, which was not correct given "a test has no status" is called
   // out as the one asymmetry in the model.
   it('reports a status field on a test', () => {
-    put('tests/login', 'test.yaml', 'name: Login\nstatus: draft\n')
+    put('tests/login', 'test.yaml', 'name: Login\nstatus: idea\n')
     const board = readBoard(project)
     expect(board.findings.some((f) => f.folderPath === 'tests/login' && f.says.includes('status'))).toBe(true)
   })

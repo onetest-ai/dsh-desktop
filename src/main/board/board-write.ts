@@ -153,7 +153,7 @@ export function createEntity(project: string, level: EntityLevel, parentFolder: 
     documents: [],
     validatedBy: [],
     runs: [],
-    ...(level === 'test' ? {} : { status: 'draft' }),
+    ...(level === 'test' ? {} : { status: 'idea' }),
   })
   return { ok: true, folderPath }
 }

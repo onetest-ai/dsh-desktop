@@ -627,7 +627,7 @@ describe('the board tools', () => {
   it('reads a board, with its statuses and folder paths', async () => {
     const project = boardFixture({
       'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\nstatus: executing\n',
-      'campaigns/q3/missions/m1/workitem.yaml': 'name: M1\nsubtype: mission\nstatus: draft\n',
+      'campaigns/q3/missions/m1/workitem.yaml': 'name: M1\nsubtype: mission\nstatus: idea\n',
     })
     const url = await serve(deps({ project: () => project }), 'editor')
     const text = textOf(await callTool(url, 'board_read'))
@@ -645,24 +645,24 @@ describe('the board tools', () => {
 
   // reason: the status set is fixed, and an agent learns that from the refusal
   // as much as from the description — so the refusal has to carry the list.
-  it('names the six statuses when it refuses one', async () => {
+  it('names the five statuses when it refuses one', async () => {
     const project = boardFixture({ 'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\n' })
     const url = await serve(deps({ project: () => project }), 'editor')
     const result = await callTool(url, 'board_status', { folder: 'campaigns/q3', status: 'inprogress' })
     expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('awaitingApproval')
+    expect(textOf(result)).toContain('validation')
   })
 
   // reason: the one rule the whole design is defined against.
   it('does not move a parent when a child is marked done', async () => {
     const project = boardFixture({
-      'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\nstatus: draft\n',
-      'campaigns/q3/missions/m1/workitem.yaml': 'name: M1\nsubtype: mission\nstatus: draft\n',
+      'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\nstatus: idea\n',
+      'campaigns/q3/missions/m1/workitem.yaml': 'name: M1\nsubtype: mission\nstatus: idea\n',
     })
     const url = await serve(deps({ project: () => project }), 'editor')
     await callTool(url, 'board_status', { folder: 'campaigns/q3/missions/m1', status: 'done' })
     const text = textOf(await callTool(url, 'board_read'))
-    expect(text).toContain('[draft] campaign Q3')
+    expect(text).toContain('[idea] campaign Q3')
     expect(text).toContain('(1/1 done)')
   })
 

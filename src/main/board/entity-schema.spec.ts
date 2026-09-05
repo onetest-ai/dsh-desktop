@@ -68,8 +68,8 @@ describe('dumpEntity', () => {
     expect(task).toContain('steps_to_reproduce')
   })
 
-  it('defaults a missing status to draft rather than omitting it', () => {
-    expect(dumpEntity('task', loadEntity('name: T\n'))).toContain('status: draft')
+  it('defaults a missing status to idea rather than omitting it', () => {
+    expect(dumpEntity('task', loadEntity('name: T\n'))).toContain('status: idea')
   })
 
   // reason: a round-trip that reorders or reformats turns every unrelated edit
@@ -81,8 +81,23 @@ describe('dumpEntity', () => {
 })
 
 describe('the vocabularies', () => {
-  it('has exactly the six statuses the board draws', () => {
-    expect([...ENTITY_STATUSES]).toEqual(['draft', 'executing', 'awaitingApproval', 'done', 'failed', 'cancelled'])
+  it('has exactly the five statuses the board draws, in the order work moves', () => {
+    expect([...ENTITY_STATUSES]).toEqual(['idea', 'backlog', 'executing', 'validation', 'done'])
+  })
+
+  // reason: failure is not a resting place. Work that fails goes back to
+  // `executing`, and what went wrong is already in a bug or a test verdict —
+  // a status meaning "this went wrong once" is stale the day work resumes.
+  it('has no failed and no cancelled', () => {
+    expect(ENTITY_STATUSES).not.toContain('failed')
+    expect(ENTITY_STATUSES).not.toContain('cancelled')
+  })
+
+  // reason: a link's verdict is a different question from a status — how far
+  // work has got, versus whether a check held — and the two vocabularies must
+  // not drift into each other.
+  it('keeps a link result vocabulary of its own, still carrying fail', () => {
+    expect([...LINK_RESULTS]).toEqual(['pass', 'fail', 'not_run'])
   })
 
   it('has exactly the three workitem subtypes', () => {
@@ -159,9 +174,9 @@ describe('what each level writes', () => {
     expect(test).not.toContain('acceptance_criteria')
   })
 
-  it('still gives a workitem and a bug a status, defaulting to draft', () => {
-    expect(dumpEntity('task', loadEntity('name: T\n'))).toContain('status: draft')
-    expect(dumpEntity('bug', loadEntity('name: B\n'))).toContain('status: draft')
+  it('still gives a workitem and a bug a status, defaulting to idea', () => {
+    expect(dumpEntity('task', loadEntity('name: T\n'))).toContain('status: idea')
+    expect(dumpEntity('bug', loadEntity('name: B\n'))).toContain('status: idea')
   })
 })
 

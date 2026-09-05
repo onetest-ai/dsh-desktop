@@ -182,7 +182,7 @@ function readEntity(root: string, folderPath: string, level: EntityLevel, findin
   // A test has no status: it is not work in flight, it is the instrument the
   // work is measured with. An empty string rather than a default, so nothing
   // downstream can mistake it for a position on the board.
-  const status = level === 'test' ? '' : (fields.status ?? 'draft')
+  const status = level === 'test' ? '' : (fields.status ?? 'idea')
   if (level !== 'test' && !(ENTITY_STATUSES as readonly string[]).includes(status)) {
     findings.push({ folderPath, says: `status "${oneLine(status)}" is not one the board knows.` })
   }

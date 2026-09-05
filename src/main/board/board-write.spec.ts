@@ -39,7 +39,7 @@ describe('createEntity', () => {
     const out = createEntity(project, 'campaign', '', 'Q3 Launch')
     expect(out).toEqual({ ok: true, folderPath: 'campaigns/q3-launch' })
     expect(read('campaigns/q3-launch', 'workitem.yaml')).toContain('name: Q3 Launch')
-    expect(read('campaigns/q3-launch', 'workitem.yaml')).toContain('status: draft')
+    expect(read('campaigns/q3-launch', 'workitem.yaml')).toContain('status: idea')
   })
 
   it('nests a mission and a task under their parents', () => {
@@ -113,8 +113,8 @@ describe('updateEntity', () => {
     createEntity(project, 'task', 'campaigns/q3/missions/m1', 'T1')
     setStatus(project, 'campaigns/q3/missions/m1/tasks/t1', 'done')
     const board = readBoard(project)
-    expect(board.campaigns[0].status).toBe('draft')
-    expect(board.campaigns[0].children[0].status).toBe('draft')
+    expect(board.campaigns[0].status).toBe('idea')
+    expect(board.campaigns[0].children[0].status).toBe('idea')
     expect(board.campaigns[0].children[0].progress).toEqual({ done: 1, total: 1 })
   })
 })
@@ -130,8 +130,8 @@ describe('setStatus', () => {
     createEntity(project, 'campaign', '', 'Q3')
     const out = setStatus(project, 'campaigns/q3', 'inprogress')
     expect(out.ok).toBe(false)
-    if (!out.ok) expect(out.reason).toContain('draft, executing, awaitingApproval, done, failed, cancelled')
-    expect(read('campaigns/q3', 'workitem.yaml')).toContain('status: draft')
+    if (!out.ok) expect(out.reason).toContain('idea, backlog, executing, validation, done')
+    expect(read('campaigns/q3', 'workitem.yaml')).toContain('status: idea')
   })
 })
 

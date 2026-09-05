@@ -49,18 +49,27 @@ export function typeOf(level: EntityLevel): EntityType {
   return level === 'bug' || level === 'test' ? level : 'workitem'
 }
 
-/** The set an entity's `status` field is drawn from. */
-export type EntityStatus = 'draft' | 'executing' | 'awaitingApproval' | 'done' | 'failed' | 'cancelled'
+/**
+ * The set an entity's `status` field is drawn from.
+ *
+ * Each name says what is true of the work rather than what someone means to
+ * do about it: an `idea` is worth writing down and nobody has committed to
+ * it, `backlog` is committed but not started, `executing` is being done,
+ * `validation` is done being done and not yet believed, and `done` is
+ * finished with.
+ */
+export type EntityStatus = 'idea' | 'backlog' | 'executing' | 'validation' | 'done'
 
-/** The canonical entity status values (unchanged from the Markdown model). */
-export const ENTITY_STATUSES: readonly EntityStatus[] = [
-  'draft',
-  'executing',
-  'awaitingApproval',
-  'done',
-  'failed',
-  'cancelled',
-]
+/**
+ * The five statuses, in the order work moves through them.
+ *
+ * The order is the board's column order, and it is left to right with nowhere
+ * else to go. There is no `failed`: failure is not a resting place, and what
+ * went wrong lives in a bug or a test's verdict, where it can say something
+ * useful. There is no `cancelled` either — abandoned work is still work you
+ * are finished with, and why belongs in the entity's notes.
+ */
+export const ENTITY_STATUSES: readonly EntityStatus[] = ['idea', 'backlog', 'executing', 'validation', 'done']
 
 /** What a test's verdict against one workitem can be. */
 export type LinkResult = 'pass' | 'fail' | 'not_run'
@@ -399,7 +408,7 @@ export function dumpEntity(level: EntityLevel, f: EntityFields): string {
   // A test has no status: it is not work in flight, it is the instrument the
   // work is measured with, and a status would put it in a column it does not
   // belong in.
-  if (type !== 'test') o.status = f.status ?? 'draft'
+  if (type !== 'test') o.status = f.status ?? 'idea'
   if (level === 'campaign') o.target = f.target ?? ''
   if (level === 'task' && f.role) o.role = f.role
   if (type === 'bug') o.severity = f.severity ?? 'major'
