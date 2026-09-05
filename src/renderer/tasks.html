@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Tasks</title>
+<!-- The harness's own tokens, vendored; see vendor/dsh-theme/README.md. -->
+<link rel="stylesheet" href="theme/base.css">
+<link rel="stylesheet" href="theme/design-platform.css">
+<link rel="stylesheet" href="pane.css">
+<body class="files">
+<main class="pane">
+  <div class="column-head">
+    <span class="project-name" id="tasks-title">Tasks</span>
+    <span class="head-spacer"></span>
+  </div>
+  <section class="panel">
+    <!-- Hidden until the first read lands: the panel would otherwise flash a
+         message about a project it has not looked at yet. -->
+    <p class="empty" id="tasks-empty" hidden></p>
+    <!-- What the board could not read. A live region, because a file the
+         board is silently missing is the thing worth announcing. -->
+    <p class="git-note" id="tasks-note" role="status" hidden></p>
+    <div id="tasks-tree"></div>
+  </section>
+</main>
+<script src="tasks-bundle.js"></script>

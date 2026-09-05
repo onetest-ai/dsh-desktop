@@ -104,6 +104,8 @@ const OPEN = {
 }
 /** The side column open on the git panel rather than the tree. */
 const GIT = { ...OPEN, files: { ...OPEN.files, view: 'git' as const } }
+/** The side column open on the task board's tree rather than the file tree. */
+const TASKS = { ...OPEN, files: { ...OPEN.files, view: 'tasks' as const } }
 
 describe('the main window drag region', () => {
   it('exports drag CSS that marks a top strip draggable and interactive elements not draggable', async () => {
@@ -133,17 +135,19 @@ describe('the window\'s views', () => {
   it('gives each view its own preload, and the web view none at all', async () => {
     const { createWindow } = await import('./window')
     createWindow(CLOSED)
-    expect(fake.views).toHaveLength(6)
+    expect(fake.views).toHaveLength(7)
     expect(fake.views[0].preload).toMatch(/harness\.js$/)
     expect(fake.views[1].preload).toMatch(/pane\.js$/)
     expect(fake.views[2].preload).toMatch(/pane\.js$/)
     // The git panel is one of this app's own pages and shares that preload.
     expect(fake.views[3].preload).toMatch(/pane\.js$/)
+    // The task board's tree is one of this app's own pages too.
+    expect(fake.views[4].preload).toMatch(/pane\.js$/)
     // The terminal's own preload: it exposes a shell it never names, and
     // nothing the pane's preload exposes.
-    expect(fake.views[4].preload).toMatch(/terminal\.js$/)
+    expect(fake.views[5].preload).toMatch(/terminal\.js$/)
     // Whatever the Web tab loads is foreign: it gets nothing.
-    expect(fake.views[5].preload).toBeUndefined()
+    expect(fake.views[6].preload).toBeUndefined()
   })
 
   it('starts with both columns hidden and the harness filling what the rail leaves', async () => {
@@ -178,7 +182,7 @@ describe('the window\'s views', () => {
     const views = createWindow(OPEN)
     applyLayout(views, OPEN, true)
     const editor = fake.views[1].bounds as { x: number; y: number; height: number }
-    const web = fake.views[5].bounds as { x: number; y: number; height: number }
+    const web = fake.views[6].bounds as { x: number; y: number; height: number }
     expect(web.x).toBe(editor.x)
     // Both strips: 35px of tabs and 35px of address bar.
     expect(web.y).toBe(editor.y + 70)
@@ -189,11 +193,11 @@ describe('the window\'s views', () => {
     const { createWindow, applyLayout } = await import('./window')
     const views = createWindow(OPEN)
     applyLayout(views, OPEN, true)
-    expect(fake.views[5].visible).toBe(true)
+    expect(fake.views[6].visible).toBe(true)
     applyLayout(views, OPEN, false)
-    expect(fake.views[5].visible).toBe(false)
+    expect(fake.views[6].visible).toBe(false)
     applyLayout(views, CLOSED, true)
-    expect(fake.views[5].visible).toBe(false)
+    expect(fake.views[6].visible).toBe(false)
   })
 
   // reason: `WebContentsView` has no layout of its own — nothing moves when
@@ -233,10 +237,10 @@ describe('the window\'s views', () => {
   it('shows the terminal panel only when it is open', async () => {
     const { createWindow, applyLayout } = await import('./window')
     const views = createWindow(CLOSED)
-    expect(fake.views[4].visible).toBe(false)
+    expect(fake.views[5].visible).toBe(false)
     applyLayout(views, { ...OPEN, terminal: { width: 720, height: 240, open: true } }, false)
-    expect(fake.views[4].visible).toBe(true)
-    expect(fake.views[4].bounds).toMatchObject({ height: 240 })
+    expect(fake.views[5].visible).toBe(true)
+    expect(fake.views[5].bounds).toMatchObject({ height: 240 })
   })
 
   it('tells the window page which columns are up', async () => {
@@ -244,15 +248,23 @@ describe('the window\'s views', () => {
     const views = createWindow(OPEN)
     applyLayout(views, OPEN, true)
     const sent = (fake.windowInstance.webContents.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)
-    expect(sent?.[1].open).toEqual({ editor: true, files: true, git: false, terminal: false, web: true })
+    expect(sent?.[1].open).toEqual({ editor: true, files: true, git: false, tasks: false, terminal: false, web: true })
     applyLayout(views, CLOSED, true)
     const closed = (fake.windowInstance.webContents.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)
-    expect(closed?.[1].open).toEqual({ editor: false, files: false, git: false, terminal: false, web: false })
+    expect(closed?.[1].open).toEqual({
+      editor: false,
+      files: false,
+      git: false,
+      tasks: false,
+      terminal: false,
+      web: false,
+    })
   })
 
-  // reason: the tree and the git panel take turns in one column. A view left
-  // with the column's bounds while the other is showing would be stacked over
-  // it, and the rail would light both buttons at once.
+  // reason: the tree, the git panel and the board's tree take turns in one
+  // column. A view left with the column's bounds while another is showing
+  // would be stacked over it, and the rail would light more than one button
+  // at once.
   it('gives the side column to one view at a time', async () => {
     const { createWindow, applyLayout } = await import('./window')
     const views = createWindow(OPEN)
@@ -261,6 +273,8 @@ describe('the window\'s views', () => {
     expect(fake.views[2].visible).toBe(true)
     expect(fake.views[3].visible).toBe(false)
     expect(fake.views[3].bounds).toMatchObject({ width: 0, height: 0 })
+    expect(fake.views[4].visible).toBe(false)
+    expect(fake.views[4].bounds).toMatchObject({ width: 0, height: 0 })
 
     applyLayout(views, GIT, false)
     expect(fake.views[2].visible).toBe(false)
@@ -268,8 +282,17 @@ describe('the window\'s views', () => {
     expect(fake.views[3].visible).toBe(true)
     // Exactly the rectangle the tree had, whatever the clamp settled on.
     expect(fake.views[3].bounds).toEqual(sideColumn)
+    expect(fake.views[4].visible).toBe(false)
     const sent = (fake.windowInstance.webContents.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)
-    expect(sent?.[1].open).toMatchObject({ files: false, git: true })
+    expect(sent?.[1].open).toMatchObject({ files: false, git: true, tasks: false })
+
+    applyLayout(views, TASKS, false)
+    expect(fake.views[3].visible).toBe(false)
+    expect(fake.views[4].visible).toBe(true)
+    // Exactly the rectangle the tree had, whatever the clamp settled on.
+    expect(fake.views[4].bounds).toEqual(sideColumn)
+    const sentTasks = (fake.windowInstance.webContents.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)
+    expect(sentTasks?.[1].open).toMatchObject({ files: false, git: false, tasks: true })
   })
 })
 
@@ -281,7 +304,7 @@ describe('the application menu', () => {
   async function viewItems(): Promise<Array<{ label?: string; role?: string; accelerator?: string }>> {
     const { installMenu } = await import('./window')
     const { Menu } = await import('electron')
-    installMenu(vi.fn(), { toggleFiles: vi.fn(), toggleGit: vi.fn(), toggleWeb: vi.fn(), toggleTerminal: vi.fn(), zoomIn: vi.fn(), zoomOut: vi.fn(), zoomReset: vi.fn() })
+    installMenu(vi.fn(), { toggleFiles: vi.fn(), toggleGit: vi.fn(), toggleTasks: vi.fn(), toggleWeb: vi.fn(), toggleTerminal: vi.fn(), zoomIn: vi.fn(), zoomOut: vi.fn(), zoomReset: vi.fn() })
     const template = vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)?.[0] ?? []
     const view = template.find((entry) => 'label' in entry && entry.label === 'View')
     return (view as { submenu?: Array<{ label?: string; role?: string; accelerator?: string }> }).submenu ?? []
@@ -295,6 +318,7 @@ describe('the application menu', () => {
     expect(items.filter((i) => i.accelerator !== undefined).map((i) => [i.label, i.accelerator])).toEqual([
       ['Toggle File Tree', 'CmdOrCtrl+Alt+B'],
       ['Toggle Source Control', 'CmdOrCtrl+Alt+G'],
+      ['Toggle Tasks', 'CmdOrCtrl+Alt+T'],
       ['Toggle Browser', 'CmdOrCtrl+Alt+W'],
       ['Toggle Terminal', 'CmdOrCtrl+Alt+J'],
       ['Actual Size', 'CmdOrCtrl+0'],
@@ -307,7 +331,7 @@ describe('the application menu', () => {
     const { installMenu } = await import('./window')
     const { Menu } = await import('electron')
     const toggleTerminal = vi.fn()
-    installMenu(vi.fn(), { toggleFiles: vi.fn(), toggleGit: vi.fn(), toggleWeb: vi.fn(), toggleTerminal, zoomIn: vi.fn(), zoomOut: vi.fn(), zoomReset: vi.fn() })
+    installMenu(vi.fn(), { toggleFiles: vi.fn(), toggleGit: vi.fn(), toggleTasks: vi.fn(), toggleWeb: vi.fn(), toggleTerminal, zoomIn: vi.fn(), zoomOut: vi.fn(), zoomReset: vi.fn() })
     const template = vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)?.[0] ?? []
     const view = template.find((entry) => 'label' in entry && entry.label === 'View') as {
       submenu: Array<{ label?: string; click?: () => void }>

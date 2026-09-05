@@ -88,6 +88,11 @@ const fake = vi.hoisted(() => {
     getBounds: vi.fn(() => ({ x: 0, y: 0, width: 220, height: 860 })),
     webContents: { send: vi.fn() },
   }
+  // The task board's tree: a page of this app's own, like the git panel.
+  const tasks = {
+    getBounds: vi.fn(() => ({ x: 0, y: 0, width: 220, height: 860 })),
+    webContents: { send: vi.fn() },
+  }
   // The terminal panel: `index.ts` pushes it the theme and the shell's output.
   const terminal = {
     getBounds: vi.fn(() => ({ x: 0, y: 620, width: 740, height: 240 })),
@@ -118,7 +123,7 @@ const fake = vi.hoisted(() => {
       },
     },
   }
-  const views = { window, harness, pane, files, git, terminal, web }
+  const views = { window, harness, pane, files, git, tasks, terminal, web }
 
   const app = {
     requestSingleInstanceLock: vi.fn(() => true),
@@ -2273,11 +2278,11 @@ describe('the side columns', () => {
   it('pushes the theme to every page of its own, the git panel included', async () => {
     fake.nativeTheme.shouldUseDarkColors = true
     await bootReady()
-    for (const view of [fake.views.pane, fake.views.files, fake.views.git, fake.views.terminal]) {
+    for (const view of [fake.views.pane, fake.views.files, fake.views.git, fake.views.tasks, fake.views.terminal]) {
       view.webContents.send.mockClear()
     }
     fake.sendIpc('theme:ask')
-    for (const view of [fake.views.pane, fake.views.files, fake.views.git, fake.views.terminal]) {
+    for (const view of [fake.views.pane, fake.views.files, fake.views.git, fake.views.tasks, fake.views.terminal]) {
       expect(view.webContents.send).toHaveBeenCalledWith('theme', true)
     }
   })

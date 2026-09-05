@@ -64,14 +64,14 @@ export interface ColumnState {
 }
 
 /** Which view the side column is showing. */
-export type SideView = 'files' | 'git'
+export type SideView = 'files' | 'git' | 'tasks'
 
 /**
  * The side column's stored state.
  *
- * One column with a choice of view rather than two columns: the tree and the
- * git panel are rarely read at once, and neither earns permanent horizontal
- * space on a laptop.
+ * One column with a choice of view rather than three columns: the tree, the
+ * git panel and the board's tree are rarely read at once, and none earns
+ * permanent horizontal space on a laptop.
  */
 export interface SideColumnState extends ColumnState {
   view: SideView

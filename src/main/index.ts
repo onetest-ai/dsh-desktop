@@ -163,16 +163,18 @@ function setColumn(key: keyof Columns, next: { width?: number; open?: boolean })
 /**
  * The view the side column's rectangle is currently in.
  *
- * The tree and the git panel take turns in that column, and `applyLayout`
- * gives the one that is not showing a 0x0 rectangle — so anything measuring
- * the column has to ask the view that has it. Measuring `files` while the
- * panel is up reads zero, and a zero committed at the end of a drag is stored
- * as a width the user never chose.
+ * The tree, the git panel and the board's tree take turns in that column, and
+ * `applyLayout` gives the two that are not showing a 0x0 rectangle — so
+ * anything measuring the column has to ask the view that has it. Measuring
+ * `files` while another view is up reads zero, and a zero committed at the
+ * end of a drag is stored as a width the user never chose.
  * @param window - the window and its views.
- * @returns whichever of the two is holding the column.
+ * @returns whichever of the three is holding the column.
  */
 function sideColumn(window: MainWindow): MainWindow['files'] {
-  return columns.files.view === 'git' ? window.git : window.files
+  if (columns.files.view === 'git') return window.git
+  if (columns.files.view === 'tasks') return window.tasks
+  return window.files
 }
 
 /**
@@ -1299,6 +1301,8 @@ function pushTheme(): void {
     // resolves to the light value, and the panel renders white beside a dark
     // harness — the failure 0.3.0 fixed for the Settings window.
     views.git.webContents,
+    // The board's tree is a page of this app's own too, for the same reason.
+    views.tasks.webContents,
     views.terminal.webContents,
     ...(settings === undefined ? [] : [settings]),
   ]) {
@@ -2519,6 +2523,9 @@ if (!app.requestSingleInstanceLock()) {
       toggleGit: () => {
         toggleSideView('git')
       },
+      toggleTasks: () => {
+        toggleSideView('tasks')
+      },
       toggleWeb,
       toggleTerminal: toggleTerminalPanel,
       zoomIn: () => {
@@ -2543,7 +2550,7 @@ if (!app.requestSingleInstanceLock()) {
         // `loadConfig` fills it in — the fallback here is for a stored object
         // that reached this build by any other route.
         const side = stored.config.pane.files
-        columns.files = { ...side, view: side.view === 'git' ? 'git' : 'files' }
+        columns.files = { ...side, view: side.view === 'git' || side.view === 'tasks' ? side.view : 'files' }
         // The panel's size is restored but never its open state, for the
         // editor's reason: a terminal exists because someone opened one, and
         // reopening it at launch would start a shell nobody asked for.
@@ -2608,6 +2615,9 @@ if (!app.requestSingleInstanceLock()) {
     })
     ipcMain.on('shell:toggle-git', () => {
       toggleSideView('git')
+    })
+    ipcMain.on('shell:toggle-tasks', () => {
+      toggleSideView('tasks')
     })
     ipcMain.on('shell:toggle-web', toggleWeb)
     // The panel's own read. Nothing about git reaches the renderer but this
