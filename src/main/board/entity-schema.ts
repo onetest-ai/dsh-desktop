@@ -1,10 +1,31 @@
 /**
- * The YAML entity schema — the on-disk shape of workitem/bug/test files, replacing the
- * Markdown managed-block. Each entity folder holds ONE `<type>.yaml`; children (tasks/bugs) are
- * folder-derived, so a parent never enumerates them. On-disk keys are snake_case; this module maps
- * them to the camelCase `EntityFields` the rest of the board uses, and back.
+ * The entity schema — the on-disk shape of workitem/bug/test files, now markdown with YAML
+ * frontmatter. Each entity folder holds ONE `<type>.md`; children (tasks/bugs) are folder-derived,
+ * so a parent never enumerates them.
+ *
+ * The split is the point of the format. Frontmatter carries what the board indexes — closed
+ * vocabularies and lists of paths, small and machine-owned — and the body carries what a person
+ * reads. Prose inside YAML is prose behind a fence: quoted, escaped, folded onto one line, and
+ * unreadable in the editor this app already ships. The same content as `##` sections opens as a
+ * document.
+ *
+ * This module owns the mapping only: `entity-doc.ts` knows how to split a document apart and put it
+ * back together, and knows nothing about entities; here we say which key and which heading each
+ * `EntityFields` member comes from. Frontmatter keys stay snake_case; headings are Title Case.
+ *
+ * `loadLegacyEntity` reads the `<type>.yaml` files the board shipped first. It does not have a
+ * mapping of its own — it translates the old all-YAML map into an `EntityDoc` and hands it to the
+ * same `fieldsFrom` a real document goes through, so the two formats cannot drift apart.
  */
-import { load as yamlLoad, dump as yamlDump, JSON_SCHEMA, YAMLException } from 'js-yaml'
+import { load as yamlLoad, JSON_SCHEMA, YAMLException } from 'js-yaml'
+import {
+  dumpChecklist,
+  joinDoc,
+  parseChecklist,
+  sectionOf,
+  splitDoc,
+  type EntityDoc,
+} from './entity-doc'
 
 /**
  * What an entity is, at the granularity the file name uses.
@@ -43,7 +64,7 @@ export const ENTITY_LEVELS: readonly EntityLevel[] = [...WORKITEM_SUBTYPES, 'bug
  * an entity sits in says its level, and the file inside is named for its
  * type. Every path and every filename in the store goes through here.
  * @param level - the level.
- * @returns the type whose `<type>.yaml` holds it.
+ * @returns the type whose `<type>.md` holds it.
  */
 export function typeOf(level: EntityLevel): EntityType {
   return level === 'bug' || level === 'test' ? level : 'workitem'
@@ -92,10 +113,22 @@ export const LINK_RESULTS: readonly LinkResult[] = ['pass', 'fail', 'not_run']
  */
 export const RUN_HISTORY = 50
 
+/**
+ * One acceptance criterion — a `- [ ]` line under `## Acceptance Criteria`.
+ *
+ * The index signature survives so callers that read an annotation off a
+ * criterion still compile, but **nothing on disk can carry one any more**. A
+ * criterion is now a line of markdown a person edits by hand, and a line has
+ * room for its tick and its text and nothing else. That is a deliberate loss:
+ * the YAML form could hold `evidence: log.txt` on an item, and the markdown
+ * form cannot, because a second structured list to keep in sync with the prose
+ * is the thing this format exists to remove. An annotation that must persist
+ * belongs in `## Notes`, or in a frontmatter key of its own.
+ */
 export interface AcceptanceCriterion {
   text: string
   done: boolean
-  /** Any other keys found on the item, carried through untouched. */
+  /** Any other keys a caller puts on the item in memory. Never read from, and never written to, disk. */
   [extra: string]: unknown
 }
 export interface DocumentLink {
@@ -165,58 +198,132 @@ export interface EntityFields {
   actual?: string // bug
   rca?: string // bug
   environment?: string // bug
+  /** A test's setup, as `## Preconditions`. */
+  preconditions?: string
+  /** A test's fixture table, as `## Test Data`. */
+  testData?: string
+  /** A test's `## Expected Final State`. */
+  expectedFinalState?: string
+  /** A test's `## Teardown`. */
+  teardown?: string
   /** Free-form appended prose — recorded decisions, rationale, sign-offs. Preserved verbatim. */
   notes?: string
   /**
-   * Top-level keys this schema does not model, carried through a round-trip untouched. Every write
+   * Frontmatter keys this schema does not model, carried through a round-trip untouched. Every write
    * rewrites the whole file from these fields, so without this an unmodelled key is destroyed by the
    * next unrelated edit — which is how a campaign's `notes` decision record was lost.
    */
   extra?: Record<string, unknown>
+  /**
+   * Sections this schema does not model, carried through a round-trip and re-emitted last. The same
+   * promise `extra` makes for keys, made for headings: a `## Rollout` nobody modelled is malformed
+   * rather than lost, and an agent may add a section this schema has never heard of without the
+   * panel destroying it on the next edit.
+   */
+  extraSections?: { heading: string; body: string }[]
 }
 
 /**
- * Which top-level keys each level emits. A known key outside its level's list
- * is misplaced — carried through `extra` rather than destroyed, and reported.
+ * Which frontmatter keys each level emits, in no particular order — `dumpEntity` fixes the order.
+ *
+ * Only what the board indexes lives here: a closed vocabulary, or a list of
+ * paths. Nothing a person writes a paragraph into, because a paragraph in YAML
+ * is a paragraph nobody can read. A known key outside its level's list is
+ * misplaced — carried through `extra` rather than destroyed, and reported.
  */
 export const LEVEL_KEYS: Record<EntityLevel, readonly string[]> = {
-  campaign: ['name', 'subtype', 'status', 'target', 'description', 'acceptance_criteria', 'validated_by', 'documents', 'notes'],
-  mission: ['name', 'subtype', 'status', 'description', 'acceptance_criteria', 'validated_by', 'documents', 'notes'],
-  task: ['name', 'subtype', 'status', 'role', 'description', 'acceptance_criteria', 'validated_by', 'notes'],
-  bug: [
-    'name',
-    'status',
-    'severity',
-    'description',
-    'steps_to_reproduce',
-    'expected',
-    'actual',
-    'rca',
-    'environment',
-    'notes',
-  ],
-  test: ['name', 'description', 'steps', 'expected', 'runs', 'notes'],
+  campaign: ['name', 'subtype', 'status', 'validated_by', 'documents'],
+  mission: ['name', 'subtype', 'status', 'validated_by', 'documents'],
+  task: ['name', 'subtype', 'status', 'role', 'validated_by'],
+  bug: ['name', 'status', 'severity'],
+  test: ['name', 'runs'],
 }
 
-/** The top-level keys this schema owns; anything else round-trips through `extra`. */
-export const KNOWN_KEYS = new Set([
-  'name',
-  'subtype',
+/**
+ * Which `##` sections each level emits, in the order they are written.
+ *
+ * The order is the order a reader wants them in — a bug reads reproduction,
+ * expectation, actual, then why; a test reads setup, data, steps, end state,
+ * cleanup — and it is fixed so that an unrelated edit never reshuffles a file.
+ * A level's sections are always emitted, blank body and all, because a heading
+ * with nothing under it is an invitation to fill it in, and one that vanished
+ * on the first round-trip is a field the writer never learns exists.
+ *
+ * The description is not here: it is the lead, before the first heading, at
+ * every level, and it is never a key either.
+ */
+export const LEVEL_SECTIONS: Record<EntityLevel, readonly string[]> = {
+  campaign: ['Target', 'Acceptance Criteria', 'Notes'],
+  mission: ['Acceptance Criteria', 'Notes'],
+  task: ['Acceptance Criteria', 'Notes'],
+  bug: ['Steps to Reproduce', 'Expected', 'Actual', 'RCA', 'Environment', 'Notes'],
+  test: ['Preconditions', 'Test Data', 'Steps', 'Expected Final State', 'Teardown', 'Notes'],
+}
+
+/** The frontmatter keys this schema owns; anything else round-trips through `extra`. */
+export const KNOWN_KEYS = new Set<string>(Object.values(LEVEL_KEYS).flat())
+
+/** The `EntityFields` members that hold one section's opaque markdown, verbatim. */
+type ProseField =
+  | 'target'
+  | 'stepsToReproduce'
+  | 'expected'
+  | 'actual'
+  | 'rca'
+  | 'environment'
+  | 'preconditions'
+  | 'testData'
+  | 'steps'
+  | 'expectedFinalState'
+  | 'teardown'
+  | 'notes'
+
+/**
+ * Every heading that carries opaque prose, and the field it fills.
+ *
+ * One table read in both directions, so a heading can never be read from one
+ * spelling and written back under another. `Acceptance Criteria` is absent
+ * because it is the one section that is not opaque — it is parsed as a
+ * checklist, and handled on its own.
+ */
+const SECTION_FIELDS: readonly (readonly [string, ProseField])[] = [
+  ['Target', 'target'],
+  ['Steps to Reproduce', 'stepsToReproduce'],
+  ['Expected', 'expected'],
+  ['Actual', 'actual'],
+  ['RCA', 'rca'],
+  ['Environment', 'environment'],
+  ['Preconditions', 'preconditions'],
+  ['Test Data', 'testData'],
+  ['Steps', 'steps'],
+  ['Expected Final State', 'expectedFinalState'],
+  ['Teardown', 'teardown'],
+  ['Notes', 'notes'],
+]
+
+/** Every heading this schema models, in the order `dumpEntity` carries the unowned ones. */
+const ALL_HEADINGS: readonly string[] = ['Acceptance Criteria', ...SECTION_FIELDS.map(([h]) => h)]
+
+/** The same set, lower-cased, for the case-insensitive match `sectionOf` also makes. */
+const MODELLED_HEADINGS = new Set(ALL_HEADINGS.map((h) => h.toLowerCase()))
+
+/**
+ * The `<type>.yaml` keys that became prose — the lead or a `##` section.
+ *
+ * Named here so `loadLegacyEntity` can subtract them from the old map and hand
+ * what is left through as frontmatter: everything the old format kept as a key
+ * and the new one keeps as a key needs no translation at all.
+ */
+const LEGACY_PROSE_KEYS = new Set([
   'description',
-  'acceptance_criteria',
-  'validated_by',
-  'documents',
-  'status',
-  'role',
   'target',
-  'severity',
+  'acceptance_criteria',
   'steps_to_reproduce',
   'expected',
   'actual',
   'rca',
   'environment',
   'steps',
-  'runs',
   'notes',
 ])
 
@@ -258,6 +365,16 @@ function carryForward(raw: Record<string, unknown>): Record<string, unknown> {
   }
   return out
 }
+/**
+ * Read a legacy `acceptance_criteria` list of `{text, done}` maps.
+ *
+ * Only `loadLegacyEntity` reaches this now — a document's criteria come out of
+ * `## Acceptance Criteria` through `parseChecklist`. An item's extra keys are
+ * read here and then dropped by the checklist that replaces it; see
+ * `AcceptanceCriterion` for why that loss is deliberate.
+ * @param v - the raw value.
+ * @returns the criteria, in file order.
+ */
 function parseCriteria(v: unknown): AcceptanceCriterion[] {
   if (!Array.isArray(v)) return []
   const out: AcceptanceCriterion[] = []
@@ -361,82 +478,134 @@ export function yamlFailureReason(error: unknown): string {
   return message.split('\n')[0]
 }
 
-/** Parse a `<type>.yaml` file body into typed fields. Missing keys default rather than throw. */
-export function loadEntity(text: string): EntityFields {
-  // JSON_SCHEMA keeps a bare `2026-09-05T09:12:00Z` a string rather than
-  // resolving it to a Date: every field here is read back out as text, and a
-  // run's timestamp must round-trip byte-for-byte to stay comparable.
-  const raw = (yamlLoad(text, { schema: JSON_SCHEMA }) ?? {}) as Record<string, unknown>
-  return {
-    name: asString(raw.name),
-    description: asString(raw.description),
-    acceptanceCriteria: parseCriteria(raw.acceptance_criteria),
-    documents: parseDocuments(raw.documents),
-    validatedBy: parseLinks(raw.validated_by),
-    runs: parseRuns(raw.runs),
-    subtype: optString(raw.subtype),
-    steps: optString(raw.steps),
-    status: optString(raw.status),
-    role: optString(raw.role),
-    target: optString(raw.target),
-    severity: optString(raw.severity),
-    stepsToReproduce: optString(raw.steps_to_reproduce),
-    expected: optString(raw.expected),
-    actual: optString(raw.actual),
-    rca: optString(raw.rca),
-    environment: optString(raw.environment),
-    notes: optString(raw.notes),
-    extra: carryForward(raw),
+/**
+ * Map a parsed document onto typed fields.
+ *
+ * The one place the mapping lives. `loadEntity` reaches it through `splitDoc`
+ * and `loadLegacyEntity` reaches it by building a document out of the old
+ * all-YAML map, so the two on-disk formats cannot answer differently: there is
+ * only one answer, and both roads lead to it.
+ *
+ * No level is passed, and none is needed — the headings in the document
+ * already say which sections it has, and a field whose section is absent
+ * simply stays `undefined`.
+ * @param doc - the document, from a file or translated from a legacy one.
+ * @returns the typed fields.
+ */
+function fieldsFrom(doc: EntityDoc): EntityFields {
+  const front = doc.front
+  const unmodelled = doc.sections.filter((s) => !MODELLED_HEADINGS.has(s.heading.trim().toLowerCase()))
+  const fields: EntityFields = {
+    name: asString(front.name),
+    // The lead — whatever stands before the first heading — is the description
+    // at every level, and is never a key.
+    description: doc.lead,
+    acceptanceCriteria: parseChecklist(sectionOf(doc, 'Acceptance Criteria')),
+    documents: parseDocuments(front.documents),
+    validatedBy: parseLinks(front.validated_by),
+    runs: parseRuns(front.runs),
+    subtype: optString(front.subtype),
+    status: optString(front.status),
+    role: optString(front.role),
+    severity: optString(front.severity),
+    extra: carryForward(front),
+    extraSections: unmodelled.length ? unmodelled.map((s) => ({ heading: s.heading, body: s.body })) : undefined,
   }
+  // A section that is absent and a section that is present but blank mean the
+  // same thing — nothing was written there — and both must read as `undefined`
+  // rather than as an empty string a panel would render as content.
+  for (const [heading, field] of SECTION_FIELDS) fields[field] = optString(sectionOf(doc, heading))
+  return fields
+}
+
+/** Parse a `<type>.md` file body — frontmatter, lead and sections — into typed fields. */
+export function loadEntity(text: string): EntityFields {
+  return fieldsFrom(splitDoc(text))
 }
 
 /**
- * Serialize typed fields to a `<type>.yaml` body, emitting only the keys that level uses, in a
- * stable order.
+ * Parse the `<type>.yaml` file the board shipped before, into the same typed fields.
+ *
+ * A reader prefers `<type>.md` and falls back here, so an existing board keeps
+ * working unchanged with its prose still in YAML strings; the next write
+ * converts it. The translation is deliberately not a second mapping — the old
+ * map becomes an `EntityDoc` and goes through `fieldsFrom`, which is what makes
+ * "convert the file" and "read the file" provably the same operation.
+ *
+ * The level is needed here where `loadEntity` needs none, and for exactly one
+ * key: the old format spelled both a bug's expectation and a test's end state
+ * `expected`, and the new one calls them `## Expected` and `## Expected Final
+ * State`. A document says which it has; a legacy map does not.
+ * @param text - the whole `<type>.yaml` body.
+ * @param level - the level the path says this file is, which disambiguates `expected`.
+ * @returns the typed fields, identical to what the converted document reads as.
+ */
+export function loadLegacyEntity(text: string, level: EntityLevel): EntityFields {
+  // JSON_SCHEMA keeps a bare `2026-09-05T09:12:00Z` a string rather than
+  // resolving it to a Date: every field here is read back out as text, and a
+  // run's timestamp must round-trip byte-for-byte to stay comparable. js-yaml
+  // v4 answers `undefined` for an empty document, so an empty file must read as
+  // an empty entity rather than throw.
+  const raw = (yamlLoad(text, { schema: JSON_SCHEMA }) ?? {}) as Record<string, unknown>
+  const front: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (!LEGACY_PROSE_KEYS.has(k)) front[k] = v
+  }
+  const sections: { heading: string; body: string }[] = []
+  const add = (heading: string, body: string): void => {
+    if (body.trim()) sections.push({ heading, body: body.trim() })
+  }
+  add('Target', asString(raw.target))
+  add('Acceptance Criteria', dumpChecklist(parseCriteria(raw.acceptance_criteria)))
+  add('Steps to Reproduce', asString(raw.steps_to_reproduce))
+  add(level === 'test' ? 'Expected Final State' : 'Expected', asString(raw.expected))
+  add('Actual', asString(raw.actual))
+  add('RCA', asString(raw.rca))
+  add('Environment', asString(raw.environment))
+  add('Steps', asString(raw.steps))
+  add('Notes', asString(raw.notes))
+  return fieldsFrom({ front, lead: asString(raw.description).trim(), sections })
+}
+
+/**
+ * What one heading holds, read off the fields.
+ *
+ * `Acceptance Criteria` is the exception the format makes on purpose: it is
+ * serialised as a checklist rather than written out verbatim, because the board
+ * counts and ticks it.
+ * @param f - the entity's typed fields.
+ * @param heading - a heading from `ALL_HEADINGS`.
+ * @returns the body to write under it; `''` when there is nothing.
+ */
+function bodyFor(f: EntityFields, heading: string): string {
+  if (heading === 'Acceptance Criteria') return dumpChecklist(f.acceptanceCriteria)
+  const found = SECTION_FIELDS.find(([h]) => h === heading)
+  return found ? (f[found[1]] ?? '') : ''
+}
+
+/**
+ * Serialize typed fields to a `<type>.md` body — frontmatter, lead and sections — emitting only
+ * what that level uses, in a stable order.
  * @param level - the level to dump at. Wins over whatever `f.subtype` says, since the caller got
  *   its level from the path and the path is what the reader walks.
  * @param f - the entity's typed fields.
- * @returns the YAML body to write for that level.
+ * @returns the file body to write for that level.
  */
 export function dumpEntity(level: EntityLevel, f: EntityFields): string {
   const type = typeOf(level)
-  const o: Record<string, unknown> = { name: f.name }
+  const front: Record<string, unknown> = { name: f.name }
   // The level the caller named wins over whatever the file said, because the
   // caller got its level from the path and the path is what the reader walks.
   // A file that disagreed is reported by the reader, not silently kept.
-  if (type === 'workitem') o.subtype = level
+  if (type === 'workitem') front.subtype = level
   // A test has no status: it is not work in flight, it is the instrument the
   // work is measured with, and a status would put it in a column it does not
   // belong in.
-  if (type !== 'test') o.status = f.status ?? 'idea'
-  if (level === 'campaign') o.target = f.target ?? ''
-  if (level === 'task' && f.role) o.role = f.role
-  if (type === 'bug') o.severity = f.severity ?? 'major'
-  o.description = f.description ?? ''
-  if (type === 'bug') {
-    o.steps_to_reproduce = f.stepsToReproduce ?? ''
-    o.expected = f.expected ?? ''
-    o.actual = f.actual ?? ''
-    o.rca = f.rca ?? ''
-    o.environment = f.environment ?? ''
-  } else if (type === 'test') {
-    o.steps = f.steps ?? ''
-    o.expected = f.expected ?? ''
-    o.runs = f.runs.slice(-RUN_HISTORY).map((r) => ({
-      at: r.at,
-      workitem: r.workitem,
-      result: r.result,
-      ...restOf(r, ['at', 'workitem', 'result']),
-    }))
-  } else {
-    // Spread the item's other keys back out — an agent may annotate a criterion
-    // (evidence, who verified it) and a rewrite must not strip that.
-    o.acceptance_criteria = f.acceptanceCriteria.map((c) => ({
-      text: c.text,
-      done: c.done,
-      ...restOf(c, ['text', 'done']),
-    }))
-    o.validated_by = f.validatedBy.map((l) => ({
+  if (type !== 'test') front.status = f.status ?? 'idea'
+  if (level === 'task' && f.role) front.role = f.role
+  if (type === 'bug') front.severity = f.severity ?? 'major'
+  if (type === 'workitem') {
+    front.validated_by = f.validatedBy.map((l) => ({
       test: l.test,
       result: l.result,
       comment: l.comment,
@@ -445,17 +614,36 @@ export function dumpEntity(level: EntityLevel, f: EntityFields): string {
     }))
   }
   if (level === 'campaign' || level === 'mission') {
-    o.documents = f.documents.map((d) => ({ label: d.label, target: d.target, ...restOf(d, ['label', 'target']) }))
+    front.documents = f.documents.map((d) => ({ label: d.label, target: d.target, ...restOf(d, ['label', 'target']) }))
   }
-  // Free-form appended prose (decisions/rationale/sign-offs), for any level.
-  if (f.notes && f.notes.trim()) o.notes = f.notes
+  if (type === 'test') {
+    front.runs = f.runs.slice(-RUN_HISTORY).map((r) => ({
+      at: r.at,
+      workitem: r.workitem,
+      result: r.result,
+      ...restOf(r, ['at', 'workitem', 'result']),
+    }))
+  }
   // Keys this schema does not model are re-emitted last, so a write never
   // destroys content it did not understand. The typed model always wins for a
   // key this LEVEL owns — including when it chose to omit one, which is how a
   // field gets cleared.
   for (const [k, v] of Object.entries(f.extra ?? {})) {
-    if (k in o || LEVEL_KEYS[level].includes(k)) continue
-    o[k] = v
+    if (k in front || LEVEL_KEYS[level].includes(k)) continue
+    front[k] = v
   }
-  return yamlDump(o, { lineWidth: -1, noRefs: true })
+  const owned = LEVEL_SECTIONS[level]
+  const sections = owned.map((heading) => ({ heading, body: bodyFor(f, heading) }))
+  // The same safety net `extra` is for keys, for headings: a section this level
+  // does not own but which carries content — a `## Target` that ended up on a
+  // task — is malformed, and malformed is reported by the reader rather than
+  // deleted by the writer. Unlike an owned section, a blank one is not written,
+  // because a heading no level here asked for is not an invitation to anything.
+  for (const heading of ALL_HEADINGS) {
+    if (owned.includes(heading)) continue
+    const body = bodyFor(f, heading)
+    if (body.trim()) sections.push({ heading, body })
+  }
+  for (const section of f.extraSections ?? []) sections.push({ heading: section.heading, body: section.body })
+  return joinDoc({ front, lead: f.description ?? '', sections })
 }
