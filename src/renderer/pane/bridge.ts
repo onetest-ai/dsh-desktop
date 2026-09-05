@@ -202,12 +202,17 @@ declare global {
       // the tree does not — the renderer holds a folder path and nothing else.
       openTaskFile(folderPath: string, file: string): void
       onReveal(listener: (folderPath: string) => void): void
-      // The board's three writes. Each answers with what the store did, and
+      // The board's four writes. Each answers with what the store did, and
       // each leaves the redraw to the `tasks:changed` main sends afterwards:
       // the panel never moves a card on its own say-so, because the file is
       // the only thing that knows where a card is.
       createBoardEntity(level: string, parent: string, name: string, second: string): Promise<BoardResult>
       setBoardStatus(folderPath: string, status: string): Promise<BoardResult>
+      // The second of the detail's two editable things. The index is the
+      // criterion's position in the list the detail was drawn from, which is
+      // the list the store parsed out of the same file — a text would be a
+      // second way to name the same line, and the two could disagree.
+      tickCriterion(folderPath: string, index: number, done: boolean): Promise<BoardResult>
       // Main confirms this one before the store is touched, the way
       // `git:discard` does, so the panel does not ask a second time. The name
       // goes with the path because the confirmation is read by a person: the

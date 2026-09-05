@@ -62,7 +62,7 @@ import { boardFor, detailFor, watchBoard } from './board-ipc'
 import { BOARD_DIR, resolveInBoard } from './board/board-paths'
 // `setStatus` is imported under a name of its own: this file already has one,
 // which is about the window's state rather than an entity's.
-import { addCriterion, createEntity, setStatus as setEntityStatus, trashEntity, updateEntity, type WriteResult } from './board/board-write'
+import { addCriterion, createEntity, setStatus as setEntityStatus, tickCriterion, trashEntity, updateEntity, type WriteResult } from './board/board-write'
 import { ENTITY_LEVELS, type EntityLevel } from './board/entity-schema'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
@@ -2698,20 +2698,27 @@ if (!app.requestSingleInstanceLock()) {
       }
       views.pane.webContents.send('tasks:reveal', folderPath)
     })
-    // A card's click opens the entity's own YAML. The file name comes from the
-    // level, which only main knows — the renderer holds a folder path and
-    // nothing else, which is what keeps `fileFor` on one side of the bridge.
-    // The folder is resolved inside the board before anything is opened: a
-    // path from a renderer is a request, not evidence of where it points.
+    // Open file in a detail hands the editor the entity's own document. The
+    // file name comes from the read that drew the detail rather than from the
+    // renderer's own idea of the level, and it is checked here anyway: a path
+    // and a name from a renderer are a request, not evidence of what they
+    // point at, and this one becomes a file that is opened.
+    //
+    // Six names, not three. An entity is a `.md` since the conversion, and
+    // a board nobody has converted still holds the `.yaml` — `detailFor`
+    // answers with whichever is on disk, so dropping either half would make
+    // Open file do nothing at all on exactly those entities. The folder is
+    // resolved inside the board first; the two checks are halves of one gate.
     ipcMain.on('tasks:open-file', (_event, folderPath: string, file: string) => {
       const project = currentProject?.path
       if (project === undefined) return
       const dir = resolveInBoard(project, folderPath)
       if (dir === undefined) return
-      if (!['workitem.yaml', 'bug.yaml', 'test.yaml'].includes(file)) return
+      const named = ['workitem.md', 'bug.md', 'test.md', 'workitem.yaml', 'bug.yaml', 'test.yaml']
+      if (!named.includes(file)) return
       openInPane(project, join(BOARD_DIR, folderPath, file))
     })
-    // The board's three writes. Every one of them goes to the store, which
+    // The board's four writes. Every one of them goes to the store, which
     // resolves the folder inside the board before it touches anything: a path
     // from a renderer is a request, not evidence of where it points. Each then
     // tells both views to read themselves again, since the write is exactly
@@ -2738,6 +2745,17 @@ if (!app.requestSingleInstanceLock()) {
       const project = currentProject?.path
       if (project === undefined) return { ok: false, reason: 'No project is open.' }
       const out = setEntityStatus(project, folderPath, status)
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
+    })
+    // The detail's other write. The index is a position in the criteria the
+    // same read handed the detail, and the store checks it against the file
+    // it is about to rewrite — a stale index refuses rather than ticking a
+    // line the reader never saw.
+    ipcMain.handle('tasks:tick', (_event, folderPath: string, index: number, done: boolean) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      const out = tickCriterion(project, folderPath, index, done)
       notifyTasksChanged()
       return out.ok ? { ok: true } : out
     })

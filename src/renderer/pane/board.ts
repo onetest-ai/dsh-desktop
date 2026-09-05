@@ -1,6 +1,7 @@
+import { type DetailActions, renderDetail } from './board-detail.ts'
 import { BOARD_STATUSES, chipOf, groupBoard, type EntityView, type LaneView } from './board-rows.ts'
 import './bridge.ts'
-import type { BoardViewData } from './bridge.ts'
+import type { BoardViewData, EntityDetailView } from './bridge.ts'
 import { followHarnessTheme } from './theme.ts'
 
 // Applies the harness's dark-mode attribute to this page; every colour here
@@ -52,20 +53,24 @@ let refusal: string | undefined
  */
 let revealed: string | undefined
 
+/**
+ * The entity whose detail is on screen, or undefined when the columns are.
+ *
+ * The whole detail rather than the folder path it was opened from: it is what
+ * `draw` renders, and holding only the path would mean either a read inside
+ * `draw` — which is synchronous and called from every redraw — or a second
+ * copy of the entity kept somewhere else. Re-read in `refresh` alongside the
+ * board, from the same walk of the same files, so the detail and the card it
+ * was opened from cannot disagree.
+ *
+ * Not remembered across a session, and cleared with the project: a panel that
+ * reopened on the task you were reading last Tuesday has decided something
+ * for you.
+ */
+let detail: EntityDetailView | undefined
+
 /** What the modal is about to create, or undefined when it is closed. */
 let pending: { level: 'task' | 'bug'; parent: string } | undefined
-
-/**
- * The file an entity's own fields live in.
- *
- * The level decides it and nothing else does: a card holds a folder path, and
- * the folder holds exactly one of these.
- * @param entity - the card.
- * @returns the file name inside the entity's folder.
- */
-function fileOf(entity: EntityView): string {
-  return entity.level === 'bug' ? 'bug.yaml' : 'workitem.yaml'
-}
 
 /**
  * A small dimmed tag on a card.
@@ -113,7 +118,7 @@ async function trash(folderPath: string, name: string): Promise<void> {
 }
 
 /**
- * One card: a button that opens its file and can be dragged to a column.
+ * One card: a button that opens the entity's detail and can be dragged.
  *
  * A button so it is reachable by tab and pressed by Enter, and `draggable`
  * on top of that rather than instead of it — the drag is the quick way to a
@@ -147,7 +152,10 @@ function cardFor(entity: EntityView): HTMLElement {
     card.append(node)
   }
   card.addEventListener('click', () => {
-    window.pane.openTaskFile(entity.folderPath, fileOf(entity))
+    // The detail, not the file. The file is a document now and worth opening,
+    // but opening it is still a detour when all that was wanted was to see
+    // the thing that was clicked — Open file inside the detail is that door.
+    void openDetail(entity.folderPath)
   })
   card.addEventListener('dragstart', (event) => {
     // The path and nothing else: what a drop means is decided by the column
@@ -166,7 +174,7 @@ function cardFor(entity: EntityView): HTMLElement {
   remove.setAttribute('aria-label', `Delete ${entity.name}`)
   // Hidden until asked for, and a sibling of the card rather than a child of
   // it: a button inside a button is invalid markup a browser may take apart,
-  // and every press on it would also open the file.
+  // and every press on it would also open the card's detail.
   remove.hidden = true
   remove.addEventListener('click', () => {
     void trash(entity.folderPath, entity.name)
@@ -286,12 +294,133 @@ function drawNote(): void {
 }
 
 /**
- * Redraw the board from the last read.
+ * Which of the panel's surfaces is on screen.
+ *
+ * One decision, made in one place, so the panel cannot show two at once —
+ * they share `#board-groups`, and a second container would let a detail and
+ * the columns both be in the document with only CSS keeping them apart. A
+ * further destination is a further case here and a further `draw*` beside
+ * the two below, not a rewrite of either.
+ * @returns the surface `draw` should put in the container.
+ */
+function surface(): 'columns' | 'detail' {
+  return detail === undefined ? 'columns' : 'detail'
+}
+
+/**
+ * What every control in a detail does.
+ *
+ * Built once rather than per draw: none of them closes over the entity being
+ * drawn — `renderDetail` passes the folder path of whatever row was pressed,
+ * which is not always the entity the detail is about.
+ */
+const detailActions: DetailActions = {
+  back: () => {
+    detail = undefined
+    draw()
+  },
+  open: (folderPath: string) => {
+    void openDetail(folderPath)
+  },
+  openFile: (folderPath: string, file: string) => {
+    window.pane.openTaskFile(folderPath, file)
+  },
+  setStatus: (folderPath: string, status: string) => {
+    void move(folderPath, status)
+  },
+  tick: (folderPath: string, index: number, done: boolean) => {
+    void flip(folderPath, index, done)
+  },
+}
+
+/**
+ * Draw the open entity in place of the columns.
+ * @param into - the panel's one container.
+ * @param empty - the line that words an absent board, which this surface has none of.
+ */
+function drawDetail(into: HTMLElement, empty: HTMLElement): void {
+  if (detail === undefined) return
+  empty.hidden = true
+  into.append(renderDetail(detail, detailActions))
+}
+
+/**
+ * Draw the board itself: a group per campaign, a lane per mission.
+ * @param into - the panel's one container.
+ * @param empty - the line that words a board with nothing on it.
+ */
+function drawColumns(into: HTMLElement, empty: HTMLElement): void {
+  const groups = groupBoard(latest?.campaigns ?? [])
+  if (groups.length === 0) {
+    empty.textContent = 'The board is empty.'
+    empty.hidden = false
+    return
+  }
+  empty.hidden = true
+  for (const group of groups) {
+    const section = document.createElement('section')
+    section.className = 'board-group'
+    const heading = document.createElement('h2')
+    heading.className = 'board-group-title'
+    heading.textContent = group.campaign.name
+    // A campaign is a heading on this board and nothing else, so its heading
+    // is what a campaign row reveals. Matched here, above the lanes, so the
+    // Bugs lane that shares its folder path never answers in its place.
+    if (group.campaign.folderPath === revealed) heading.classList.add('board-group-revealed')
+    section.append(heading)
+    for (const lane of group.lanes) section.append(laneFor(lane))
+    into.append(section)
+  }
+}
+
+/**
+ * Show one entity's detail, read fresh.
+ *
+ * Every way into the surface comes through here — a card, a child row, a link
+ * row, the parent line — so there is one place that decides what happens when
+ * the path names nothing: the columns come back with a line saying so, rather
+ * than a blank detail of an entity that is not there. That is the same answer
+ * `refresh` gives for an entity deleted while its detail was open, and it is
+ * the reason a folder path is never trusted to still be on the board.
+ * @param folderPath - the entity to open.
+ * @returns resolution once the panel has been redrawn.
+ */
+async function openDetail(folderPath: string): Promise<void> {
+  const next = await window.pane.readTaskDetail(folderPath)
+  detail = next
+  if (next === undefined) refusal = `${folderPath} is no longer on the board.`
+  draw()
+}
+
+/**
+ * Tick or untick one acceptance criterion, and say so when the store would not.
+ *
+ * `move`'s shape, for `move`'s reason: the box is not flipped before the
+ * answer comes back, so a refusal needs no undo — the redraw that follows
+ * puts the checkbox back where the file says it is.
+ * @param folderPath - the entity the criterion belongs to.
+ * @param index - the criterion's position in the list.
+ * @param done - what the box was just set to.
+ * @returns resolution once the answer has been drawn.
+ */
+async function flip(folderPath: string, index: number, done: boolean): Promise<void> {
+  const out = await window.pane.tickCriterion(folderPath, index, done)
+  refusal = out.ok ? undefined : out.reason
+  draw()
+}
+
+/**
+ * Redraw the panel from the last read.
  *
  * Rebuilt whole rather than patched, for the tree's reason: main re-reads the
  * whole board on every write an agent makes, a card carries no state of its
  * own beyond the drag that is already over, and a rebuild cannot disagree
  * with the data it is drawn from.
+ *
+ * The empty states above the switch are about the read and not about which
+ * surface is showing: no project, no board, and a read that failed are all
+ * answers to "is there anything here at all", and none of the surfaces has
+ * anything to draw once one of them is true.
  */
 function draw(): void {
   const into = el('board-groups')
@@ -319,26 +448,13 @@ function draw(): void {
     empty.hidden = false
     return
   }
-  const groups = groupBoard(latest.campaigns)
-  if (groups.length === 0) {
-    empty.textContent = 'The board is empty.'
-    empty.hidden = false
-    return
-  }
-  empty.hidden = true
-  for (const group of groups) {
-    const section = document.createElement('section')
-    section.className = 'board-group'
-    const heading = document.createElement('h2')
-    heading.className = 'board-group-title'
-    heading.textContent = group.campaign.name
-    // A campaign is a heading on this board and nothing else, so its heading
-    // is what a campaign row reveals. Matched here, above the lanes, so the
-    // Bugs lane that shares its folder path never answers in its place.
-    if (group.campaign.folderPath === revealed) heading.classList.add('board-group-revealed')
-    section.append(heading)
-    for (const lane of group.lanes) section.append(laneFor(lane))
-    into.append(section)
+  switch (surface()) {
+    case 'detail':
+      drawDetail(into, empty)
+      return
+    case 'columns':
+      drawColumns(into, empty)
+      return
   }
 }
 
@@ -424,9 +540,10 @@ el('board-modal').addEventListener('click', (event) => {
 /**
  * Re-read the board and redraw.
  *
- * The only caller of the bridge's read, so every trigger costs one: main
- * reads the whole board off disk each time and never caches it, and a burst
- * of agent writes arrives here as one debounced notice.
+ * The only caller of the bridge's reads, so every trigger costs one board and
+ * — while a detail is open — one entity: main reads the whole board off disk
+ * each time and never caches it, and a burst of agent writes arrives here as
+ * one debounced notice.
  * @returns resolution once the board has been redrawn.
  */
 async function refresh(): Promise<void> {
@@ -438,9 +555,19 @@ async function refresh(): Promise<void> {
     if (latest !== undefined && next.project !== latest.project) {
       refusal = undefined
       revealed = undefined
+      detail = undefined
     }
     latest = next
     trouble = undefined
+    // The open detail, re-read beside the board rather than kept from the
+    // read that opened it: an agent's edit lands on both surfaces at once,
+    // and an entity deleted while its detail was open falls back to the
+    // columns with a line, which is the one thing a stale copy could not do.
+    if (detail !== undefined) {
+      const again = await window.pane.readTaskDetail(detail.folderPath)
+      if (again === undefined) refusal = `${detail.folderPath} is no longer on the board.`
+      detail = again
+    }
   } catch (error) {
     // Nothing on the other side of the bridge rejects today. Without this it
     // would not have to: one that did would leave `latest` unset, which draws
@@ -454,6 +581,11 @@ async function refresh(): Promise<void> {
 // lane scrolled to inside a panel nobody can see looks like nothing happened.
 window.pane.onReveal((folderPath) => {
   revealed = folderPath
+  // A reveal always lands on the board: it names a card, a lane or a heading,
+  // and all three are on the columns. Marking one behind an open detail would
+  // scroll a surface nobody can see, which is the thing the tab-forward below
+  // exists to prevent one level up.
+  detail = undefined
   draw()
   document.getElementById('tab-board')?.click()
   // Whichever of the three the draw above marked, in document order — the

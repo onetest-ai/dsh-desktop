@@ -1369,6 +1369,205 @@ body {
 }
 
 /*
+ * The detail view, in the place the columns were.
+ *
+ * Prose, so it is capped at a readable measure and left where the columns
+ * started rather than centred: the board next to it begins at the left edge,
+ * and a detail that jumped to the middle of the panel would read as a
+ * different page rather than as the same one, one level in. The board's own
+ * horizontal scroll is not this surface's — nothing here is wider than the
+ * measure.
+ */
+.board-detail {
+  max-width: 68ch;
+}
+
+.board-detail-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+/* First on the surface and left-most on it, because it is the answer to
+   "where am I": the columns are gone, and this is what brings them back. */
+.board-detail-back {
+  flex: none;
+  padding: 2px 6px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.board-detail-back:hover,
+.board-detail-file:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.board-detail-title {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The same tag the lane's status is, because it says the same thing about the
+   same kind of entity. */
+.board-detail-status {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+/* The way out of a read surface into the editor, which is where prose is
+   written. Quiet: it is a door, not the point of the page. */
+.board-detail-file {
+  flex: none;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.board-detail-parent {
+  margin: 0 0 8px;
+}
+
+.board-detail-heading {
+  margin: 12px 0 4px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* A section the file has and nobody has filled in. Dimmed and italic so it
+   reads as an invitation rather than as content. */
+.board-detail-blank {
+  margin: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-style: italic;
+}
+
+.board-detail-prose {
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* A table is why the file format changed, so it is the one thing here with
+   borders: a Steps table drawn without them is the wall of pipes again. */
+.board-detail-prose table {
+  border-collapse: collapse;
+}
+
+.board-detail-prose td,
+.board-detail-prose th {
+  padding: 2px 6px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  text-align: left;
+}
+
+.board-detail-prose pre {
+  overflow-x: auto;
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-overlay);
+}
+
+.board-detail-field {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.board-detail-select {
+  padding: 2px 4px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 4px;
+  background: var(--dsw-alias-surface-primary, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+}
+
+.board-detail-criteria {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-detail-criteria label {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+/* A row is a whole line, unlike a card: a detail is read down the page, and
+   the name is what the eye is running along. */
+.board-detail-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-detail-row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.board-detail-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-detail-row-note,
+.board-detail-row-comment,
+.board-detail-row-bug {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+}
+
+/* The comment is the only thing on a row that is a sentence, so it takes the
+   space the rest of the row does not. */
+.board-detail-row-comment {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
  * The create modal.
  *
  * The backdrop takes pointer events, which is what makes this modal modal:

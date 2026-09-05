@@ -2843,7 +2843,7 @@ describe('the git write channels', () => {
 })
 
 /**
- * The board's six channels, over the bridge rather than through their helpers.
+ * The board's seven channels, over the bridge rather than through their helpers.
  *
  * The store beneath them is real here — nothing under `src/main/board/` is
  * faked — because what these tests are about is the gate in front of it: every
@@ -2956,13 +2956,32 @@ describe('the board channels', () => {
     )
   })
 
+  // reason: an entity is a `.md` since the conversion, and the allowlist that
+  // guards this channel named only the three `.yaml`s — which made Open file
+  // a silent no-op on every converted entity, the only kind the store writes.
+  it('opens the entity’s markdown document as well as the legacy YAML', async () => {
+    await bootWithBoard()
+    fake.views.pane.webContents.send.mockClear()
+    fake.sendIpc('tasks:open-file', task, 'workitem.md')
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith(
+      'pane:open',
+      project,
+      join('.dsh', 'tasks', task, 'workitem.md'),
+      expect.anything(),
+    )
+  })
+
   // reason: a folder path arrives from a renderer, so it is a request and not
   // evidence of where it points — and this one becomes a file that is opened.
+  // Widening the list to the `.md`s must not widen it to anything else: this
+  // is one half of the gate, `resolveInBoard` above it is the other.
   it('opens nothing for a path outside the board, or a file it does not name', async () => {
     await bootWithBoard()
     fake.views.pane.webContents.send.mockClear()
     fake.sendIpc('tasks:open-file', '../../etc', 'workitem.yaml')
     fake.sendIpc('tasks:open-file', task, '.zshrc')
+    fake.sendIpc('tasks:open-file', task, 'notes.md')
+    fake.sendIpc('tasks:open-file', task, '../../../.zshrc')
     expect(fake.views.pane.webContents.send).not.toHaveBeenCalled()
   })
 
@@ -2984,6 +3003,24 @@ describe('the board channels', () => {
       campaigns: { children: { children: { status: string }[] }[] }[]
     }
     expect(board.campaigns[0].children[0].children[0].status).toBe('executing')
+  })
+
+  // reason: the detail's other write. It is gated on the open project as
+  // every board channel is, and the store refuses an index the file does not
+  // have rather than appending one — a detail can be a moment out of date.
+  it('ticks the criterion it was given, and refuses one that is not there', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:create', 'task', mission, 'Second thing', 'It works')).toEqual({ ok: true })
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: { name: string; folderPath: string }[] }[] }[]
+    }
+    const second = board.campaigns[0].children[0].children.find((one) => one.name === 'Second thing')
+    expect(fake.sendIpc('tasks:tick', second?.folderPath, 0, true)).toEqual({ ok: true })
+    const detail = (await fake.sendIpc('tasks:detail', second?.folderPath)) as {
+      criteria: { text: string; done: boolean }[]
+    }
+    expect(detail.criteria).toEqual([{ text: 'It works', done: true }])
+    expect((fake.sendIpc('tasks:tick', second?.folderPath, 4, true) as { ok: boolean }).ok).toBe(false)
   })
 
   // reason: the prompt is itself something a hostile page could use — a dialog
@@ -3046,6 +3083,7 @@ describe('the board channels', () => {
     const refused = { ok: false, reason: 'No project is open.' }
     expect(fake.sendIpc('tasks:create', 'task', mission, 'Nope', '')).toEqual(refused)
     expect(fake.sendIpc('tasks:set-status', task, 'done')).toEqual(refused)
+    expect(fake.sendIpc('tasks:tick', task, 0, true)).toEqual(refused)
     await expect(fake.sendIpc('tasks:trash', task, 'Fix the login timeout')).resolves.toEqual(refused)
     fake.sendIpc('tasks:open-file', task, 'workitem.yaml')
     fake.sendIpc('tasks:reveal', mission)

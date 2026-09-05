@@ -75,6 +75,31 @@ function oneMission(
   }
 }
 
+/**
+ * What `readTaskDetail` answers, with only what a case names.
+ *
+ * The folder path is filled in by the stub from whatever was asked for, so a
+ * case never has to keep the two in step by hand.
+ * @param over - what this case is about.
+ * @returns the detail, as the panel receives it.
+ */
+function detail(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    level: 'task',
+    folderPath: '',
+    name: 'T1',
+    status: 'idea',
+    description: 'What it is for.',
+    sections: [],
+    criteria: [],
+    children: [],
+    links: [],
+    validates: [],
+    file: 'workitem.md',
+    ...over,
+  }
+}
+
 /** What one board write answered with. */
 type StubResult = { ok: true } | { ok: false; reason: string }
 
@@ -85,8 +110,10 @@ interface Stub {
   onReveal: (listener: (folderPath: string) => void) => void
   revealOnBoard: (folderPath: string) => void
   openTaskFile: (folderPath: string, file: string) => void
+  readTaskDetail: (folderPath: string) => Promise<Record<string, unknown> | undefined>
   createBoardEntity: (level: string, parent: string, name: string, second: string) => Promise<StubResult>
   setBoardStatus: (folderPath: string, status: string) => Promise<StubResult>
+  tickCriterion: (folderPath: string, index: number, done: boolean) => Promise<StubResult>
   trashBoardEntity: (folderPath: string, name: string) => Promise<StubResult>
   askTheme: () => void
   onTheme: () => void
@@ -106,10 +133,13 @@ interface Stub {
 /**
  * A bridge answering with one board and recording the writes the board makes.
  * @param data - what `readTasks` answers.
- * @param answers - what a write answers, when the case is about a refusal.
+ * @param answers - what a write answers, when the case is about a refusal, and the detail a card opens.
  * @returns the bridge, with its recordings.
  */
-function bridge(data: Record<string, unknown>, answers: { status?: StubResult; create?: StubResult; trash?: StubResult } = {}): Stub {
+function bridge(
+  data: Record<string, unknown>,
+  answers: { status?: StubResult; create?: StubResult; trash?: StubResult; detail?: Record<string, unknown> } = {},
+): Stub {
   const calls: unknown[][] = []
   let changed: (() => void) | undefined
   let revealed: ((folderPath: string) => void) | undefined
@@ -126,6 +156,10 @@ function bridge(data: Record<string, unknown>, answers: { status?: StubResult; c
     reveal: (folderPath) => revealed?.(folderPath),
     revealOnBoard: (folderPath) => calls.push(['reveal', folderPath]),
     openTaskFile: (folderPath, file) => calls.push(['open', folderPath, file]),
+    readTaskDetail: async (folderPath) => {
+      calls.push(['detail', folderPath])
+      return answers.detail === undefined ? undefined : { ...answers.detail, folderPath }
+    },
     createBoardEntity: async (level, parent, name, second) => {
       calls.push(['create', level, parent, name, second])
       return answers.create ?? { ok: true }
@@ -133,6 +167,10 @@ function bridge(data: Record<string, unknown>, answers: { status?: StubResult; c
     setBoardStatus: async (folderPath, status) => {
       calls.push(['status', folderPath, status])
       return answers.status ?? { ok: true }
+    },
+    tickCriterion: async (folderPath, index, done) => {
+      calls.push(['tick', folderPath, index, done])
+      return { ok: true }
     },
     trashBoardEntity: async (folderPath, name) => {
       calls.push(['trash', folderPath, name])
@@ -219,11 +257,16 @@ describe('the board', () => {
     expect(document.querySelector('.board-chip')?.textContent).toBe('1/2 passing')
   })
 
-  it('opens the entity’s own file when a card is clicked', async () => {
-    const stub = bridge(oneMission())
+  // reason: this is the complaint the whole change is about — a click used to
+  // hand the editor a serialised map, and the answer to "what is this task"
+  // was YAML. It asks for the detail now, and opens nothing in the editor.
+  it('asks for the entity’s detail when a card is clicked, rather than opening a file', async () => {
+    const stub = bridge(oneMission(), { detail: detail() })
     await load(stub)
     document.querySelector<HTMLElement>('.board-card')?.click()
-    expect(stub.calls).toContainEqual(['open', 'campaigns/q3/missions/m1/tasks/t1', 'workitem.yaml'])
+    for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
+    expect(stub.calls).toContainEqual(['detail', 'campaigns/q3/missions/m1/tasks/t1'])
+    expect(stub.calls.filter((call) => call[0] === 'open')).toEqual([])
   })
 
   // reason: drag writes on drop. A card that changed status while dragged
@@ -395,6 +438,136 @@ describe('a reveal from the tree', () => {
     stub.fire()
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
     expect(document.querySelector('.board-card-revealed')).not.toBeNull()
+  })
+})
+
+/**
+ * The detail, as the panel puts it in place of the columns.
+ *
+ * What `board-detail.spec.ts` does not cover: that surface is a pure function
+ * from data to DOM, and these are about which surface is on screen and what
+ * the panel re-reads while one is.
+ */
+describe('a detail in the panel', () => {
+  /**
+   * Open the first card's detail and settle.
+   * @param stub - the bridge the board talks to.
+   * @returns resolution once the detail has been drawn.
+   */
+  async function openFirstCard(stub: Stub): Promise<void> {
+    document.querySelector<HTMLElement>('.board-card')?.click()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+  }
+
+  it('draws the detail in place of the columns', async () => {
+    const stub = bridge(oneMission(), { detail: detail() })
+    await load(stub)
+    await openFirstCard(stub)
+    expect(document.querySelector('.board-detail-title')?.textContent).toBe('T1')
+    expect(document.querySelector('.board-column')).toBeNull()
+  })
+
+  // reason: the detail replaces the board, so back is the only way the board
+  // comes back — and the spec is explicit that this is not a modal.
+  it('puts the columns back when back is pressed', async () => {
+    const stub = bridge(oneMission(), { detail: detail() })
+    await load(stub)
+    await openFirstCard(stub)
+    document.querySelector<HTMLElement>('.board-detail-back')?.click()
+    expect(document.querySelector('.board-detail')).toBeNull()
+    expect(document.querySelector('.board-column')).not.toBeNull()
+  })
+
+  // reason: every redraw rebuilds the container, and a `tasks:changed` from an
+  // agent's own write arrives while somebody is reading a detail. A redraw
+  // that put the columns back would throw them out of what they were reading.
+  it('redraws the detail, not the board, when the board changes underneath', async () => {
+    const stub = bridge(oneMission(), { detail: detail() })
+    await load(stub)
+    await openFirstCard(stub)
+    stub.fire()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.board-detail-title')).not.toBeNull()
+    expect(document.querySelector('.board-column')).toBeNull()
+    // Re-read rather than redrawn from the copy it was opened with: an
+    // agent's edit has to reach the surface that is showing.
+    expect(stub.calls.filter((call) => call[0] === 'detail').length).toBe(2)
+  })
+
+  // reason: an entity an agent deleted while its detail was open leaves the
+  // panel drawing something that is not there. The board is what is left.
+  it('falls back to the columns, with a note, when the entity is gone', async () => {
+    const stub = bridge(oneMission(), { detail: detail() })
+    await load(stub)
+    await openFirstCard(stub)
+    stub.readTaskDetail = async () => undefined
+    stub.fire()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.board-detail')).toBeNull()
+    expect(document.querySelector('.board-column')).not.toBeNull()
+    expect(document.getElementById('board-note')?.textContent).toContain('no longer on the board')
+  })
+
+  // reason: a reveal names a card, a lane or a heading, and all three are on
+  // the columns — one marked behind an open detail would be a highlight
+  // nobody can see, which is the thing the reveal exists to end.
+  it('lands on the board when the tree reveals something', async () => {
+    const stub = bridge(oneMission(), { detail: detail() })
+    await load(stub)
+    await openFirstCard(stub)
+    stub.reveal('campaigns/q3/missions/m1')
+    expect(document.querySelector('.board-detail')).toBeNull()
+    expect(document.querySelector('.board-lane-revealed')).not.toBeNull()
+  })
+
+  // reason: a folder path names different work in a different repository, so
+  // a detail carried across would be one project's entity over another's.
+  it('closes when the project changes', async () => {
+    const stub = bridge(oneMission(), { detail: detail() })
+    await load(stub)
+    await openFirstCard(stub)
+    stub.readTasks = async () => oneMission({ project: '/p/other' })
+    stub.fire()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.board-detail')).toBeNull()
+    expect(document.querySelector('.board-column')).not.toBeNull()
+  })
+
+  // reason: the two writes the detail owns are the board's own, and they go
+  // through the same bridge the drag does — a detail that wrote through some
+  // second path could disagree with the card about what happened.
+  it('writes a status and a tick through the board’s own bridge', async () => {
+    const stub = bridge(oneMission(), {
+      // The checkboxes go where the section says, so a detail with criteria
+      // and no section for them draws none — as the file would have neither.
+      detail: detail({
+        sections: [{ heading: 'Acceptance Criteria', body: '- [ ] It holds' }],
+        criteria: [{ text: 'It holds', done: false }],
+      }),
+    })
+    await load(stub)
+    await openFirstCard(stub)
+    const select = document.querySelector<HTMLSelectElement>('.board-detail-select')
+    if (select !== null) select.value = 'done'
+    select?.dispatchEvent(new Event('change'))
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    // Queried again: the write above redrew the surface, so the checkbox from
+    // before it is no longer the one on screen.
+    document.querySelector<HTMLInputElement>('.board-detail-tick')?.dispatchEvent(new Event('change'))
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(stub.calls).toContainEqual(['status', 'campaigns/q3/missions/m1/tasks/t1', 'done'])
+    expect(stub.calls).toContainEqual(['tick', 'campaigns/q3/missions/m1/tasks/t1', 0, false])
+  })
+
+  // reason: Open file is the detour into the editor, and the file comes from
+  // the read rather than from the level — an unconverted board still holds a
+  // `.yaml`, and the level alone cannot say which is there.
+  it('hands the editor the file the read named', async () => {
+    const stub = bridge(oneMission(), { detail: detail({ file: 'workitem.yaml' }) })
+    await load(stub)
+    await openFirstCard(stub)
+    document.querySelector<HTMLElement>('.board-detail-file')?.click()
+    expect(stub.calls).toContainEqual(['open', 'campaigns/q3/missions/m1/tasks/t1', 'workitem.yaml'])
   })
 })
 
