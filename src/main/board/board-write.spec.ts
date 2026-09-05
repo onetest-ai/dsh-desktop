@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readBoard } from './board-read'
 import {
   addCriterion,
@@ -13,7 +13,26 @@ import {
   trashEntity,
   unlinkTest,
   updateEntity,
+  type WriteResult,
 } from './board-write'
+import { RUN_HISTORY } from './entity-schema'
+
+/** Flipped by the ordering test so one write, and only that one, fails. */
+const disk = vi.hoisted(() => ({ writeThrows: false }))
+
+// reason: the conversion's whole safety argument is an ordering — the markdown
+// is on disk before the `.yaml` it replaces is removed — and an ordering is
+// only provable by making the first half fail. Every other test in this file
+// runs the real write, so the mock is a passthrough unless a test asks for it.
+vi.mock('../atomic-write', async () => {
+  const actual = await vi.importActual<typeof import('../atomic-write')>('../atomic-write')
+  return {
+    writeFileAtomic: (filePath: string, contents: string, mode?: number): void => {
+      if (disk.writeThrows) throw new Error('no space left on device')
+      actual.writeFileAtomic(filePath, contents, mode)
+    },
+  }
+})
 
 let project = ''
 beforeEach(() => {
@@ -26,20 +45,59 @@ beforeEach(() => {
   mkdirSync(join(project, '.dsh', 'tasks'), { recursive: true })
 })
 afterEach(() => {
+  disk.writeThrows = false
   rmSync(project, { recursive: true, force: true })
 })
 
-/** The YAML on disk for one folder path. */
+/** The markdown on disk for one folder path. */
 function read(folderPath: string, file: string): string {
   return readFileSync(join(project, '.dsh', 'tasks', folderPath, file), 'utf8')
+}
+
+/** Whether a folder holds a file at all — what a conversion is judged by. */
+function has(folderPath: string, file: string): boolean {
+  return existsSync(join(project, '.dsh', 'tasks', folderPath, file))
+}
+
+/**
+ * Put an entity on the board in the format that came before, the way a board
+ * nobody has converted holds one: a `<type>.yaml` and no markdown beside it.
+ */
+function putLegacy(folderPath: string, file: string, body: string): void {
+  mkdirSync(join(project, '.dsh', 'tasks', folderPath), { recursive: true })
+  writeFileSync(join(project, '.dsh', 'tasks', folderPath, file), body)
+}
+
+/** A campaign and a test, both stored the way the board stored them before. */
+function legacyBoard(): void {
+  putLegacy(
+    'campaigns/q3',
+    'workitem.yaml',
+    'name: Q3\nsubtype: campaign\nstatus: idea\ndescription: ship it\n' +
+      'acceptance_criteria:\n  - text: it works\n    done: false\n' +
+      "validated_by:\n  - test: tests/login\n    result: pass\n    comment: ''\n",
+  )
+  putLegacy('tests/login', 'test.yaml', 'name: Login\nsteps: open the login page\n')
 }
 
 describe('createEntity', () => {
   it('creates a campaign from its name', () => {
     const out = createEntity(project, 'campaign', '', 'Q3 Launch')
     expect(out).toEqual({ ok: true, folderPath: 'campaigns/q3-launch' })
-    expect(read('campaigns/q3-launch', 'workitem.yaml')).toContain('name: Q3 Launch')
-    expect(read('campaigns/q3-launch', 'workitem.yaml')).toContain('status: idea')
+    expect(read('campaigns/q3-launch', 'workitem.md')).toContain('name: Q3 Launch')
+    expect(read('campaigns/q3-launch', 'workitem.md')).toContain('status: idea')
+  })
+
+  // reason: a create has nothing to convert, so it must write the format the
+  // board reads and never the one it only falls back to.
+  it('writes a markdown document and never the yaml that came before', () => {
+    createEntity(project, 'campaign', '', 'Q3')
+    createEntity(project, 'bug', 'campaigns/q3', 'Crash')
+    createEntity(project, 'test', '', 'Login')
+    expect(has('campaigns/q3', 'workitem.md')).toBe(true)
+    expect(has('campaigns/q3', 'workitem.yaml')).toBe(false)
+    expect(has('campaigns/q3/bugs/crash', 'bug.yaml')).toBe(false)
+    expect(has('tests/login', 'test.yaml')).toBe(false)
   })
 
   it('nests a mission and a task under their parents', () => {
@@ -91,8 +149,12 @@ describe('updateEntity', () => {
   it('changes the fields it is given and leaves the rest', () => {
     createEntity(project, 'campaign', '', 'Q3')
     expect(updateEntity(project, 'campaigns/q3', { description: 'ship it' }).ok).toBe(true)
-    const text = read('campaigns/q3', 'workitem.yaml')
-    expect(text).toContain('description: ship it')
+    const text = read('campaigns/q3', 'workitem.md')
+    // The description is the document's lead, before the first heading — not a
+    // key. A file still carrying `description:` would be one the writer never
+    // converted.
+    expect(text).toContain('\nship it\n')
+    expect(text).not.toContain('description:')
     expect(text).toContain('name: Q3')
   })
 
@@ -100,10 +162,13 @@ describe('updateEntity', () => {
   // key must survive an edit made by something that has never heard of it.
   it('keeps a key the schema does not model', () => {
     createEntity(project, 'campaign', '', 'Q3')
-    const file = join(project, '.dsh', 'tasks', 'campaigns', 'q3', 'workitem.yaml')
-    writeFileSync(file, `${readFileSync(file, 'utf8')}owner: alice\n`)
+    const file = join(project, '.dsh', 'tasks', 'campaigns', 'q3', 'workitem.md')
+    // Into the frontmatter, not onto the end of the file: an unmodelled key
+    // lives where the modelled ones do, and appending after the body would be
+    // adding prose rather than a key.
+    writeFileSync(file, readFileSync(file, 'utf8').replace('---\n\n', 'owner: alice\n---\n\n'))
     updateEntity(project, 'campaigns/q3', { description: 'changed' })
-    expect(read('campaigns/q3', 'workitem.yaml')).toContain('owner: alice')
+    expect(read('campaigns/q3', 'workitem.md')).toContain('owner: alice')
   })
 
   // reason: the one rule the whole design is defined against.
@@ -123,7 +188,7 @@ describe('setStatus', () => {
   it('moves an entity to a status', () => {
     createEntity(project, 'campaign', '', 'Q3')
     expect(setStatus(project, 'campaigns/q3', 'executing').ok).toBe(true)
-    expect(read('campaigns/q3', 'workitem.yaml')).toContain('status: executing')
+    expect(read('campaigns/q3', 'workitem.md')).toContain('status: executing')
   })
 
   it('refuses a status the board does not know', () => {
@@ -131,7 +196,7 @@ describe('setStatus', () => {
     const out = setStatus(project, 'campaigns/q3', 'inprogress')
     expect(out.ok).toBe(false)
     if (!out.ok) expect(out.reason).toContain('idea, backlog, executing, validation, done')
-    expect(read('campaigns/q3', 'workitem.yaml')).toContain('status: idea')
+    expect(read('campaigns/q3', 'workitem.md')).toContain('status: idea')
   })
 })
 
@@ -144,9 +209,8 @@ describe('criteria', () => {
 
   it('adds a criterion unticked', () => {
     expect(addCriterion(project, 'campaigns/q3/missions/m1/tasks/t1', 'it works').ok).toBe(true)
-    const text = read('campaigns/q3/missions/m1/tasks/t1', 'workitem.yaml')
-    expect(text).toContain('text: it works')
-    expect(text).toContain('done: false')
+    const text = read('campaigns/q3/missions/m1/tasks/t1', 'workitem.md')
+    expect(text).toContain('## Acceptance Criteria\n\n- [ ] it works\n')
   })
 
   it('ticks one by position', () => {
@@ -175,7 +239,7 @@ describe('criteria', () => {
     const out = addCriterion(project, 'tests/login', 'it works')
     expect(out.ok).toBe(false)
     if (!out.ok) expect(out.reason).toContain('proof')
-    expect(read('tests/login', 'test.yaml')).not.toContain('acceptance_criteria')
+    expect(read('tests/login', 'test.md')).not.toContain('Acceptance Criteria')
   })
 
   // reason: a bug's file emits no `acceptance_criteria` either, so the same
@@ -185,11 +249,49 @@ describe('criteria', () => {
     const out = addCriterion(project, 'campaigns/q3/bugs/crash', 'it works')
     expect(out.ok).toBe(false)
     if (!out.ok) expect(out.reason).toContain('defect report')
-    expect(read('campaigns/q3/bugs/crash', 'bug.yaml')).not.toContain('acceptance_criteria')
+    expect(read('campaigns/q3/bugs/crash', 'bug.md')).not.toContain('Acceptance Criteria')
   })
 
-  it('still adds a criterion to a task', () => {
+  // reason: the guard is asked of a table, and a table read wrongly refuses
+  // every level rather than only the two that have no criteria — which broke
+  // board_criterion for tasks, missions and campaigns alike. Both directions
+  // have to be pinned, or half of that is invisible.
+  it('still adds a criterion to a campaign, a mission and a task', () => {
+    expect(addCriterion(project, 'campaigns/q3', 'the campaign works').ok).toBe(true)
+    expect(addCriterion(project, 'campaigns/q3/missions/m1', 'the mission works').ok).toBe(true)
     expect(addCriterion(project, 'campaigns/q3/missions/m1/tasks/t1', 'it works').ok).toBe(true)
+    expect(tickCriterion(project, 'campaigns/q3', 0, true).ok).toBe(true)
+    expect(read('campaigns/q3', 'workitem.md')).toContain('- [x] the campaign works')
+  })
+
+  // reason: a refusal that is only a refusal in the return value is not one.
+  // An earlier fix wave produced a version that reported `ok: true` and
+  // discarded the write; this pins the file itself, byte for byte.
+  it('leaves a bug-s and a test-s file byte-identical when a criterion is refused', () => {
+    createEntity(project, 'test', '', 'Login')
+    createEntity(project, 'bug', 'campaigns/q3', 'Crash')
+    const beforeTest = read('tests/login', 'test.md')
+    const beforeBug = read('campaigns/q3/bugs/crash', 'bug.md')
+    expect(addCriterion(project, 'tests/login', 'it works').ok).toBe(false)
+    expect(addCriterion(project, 'campaigns/q3/bugs/crash', 'it works').ok).toBe(false)
+    expect(tickCriterion(project, 'tests/login', 0, true).ok).toBe(false)
+    expect(tickCriterion(project, 'campaigns/q3/bugs/crash', 0, true).ok).toBe(false)
+    expect(read('tests/login', 'test.md')).toBe(beforeTest)
+    expect(read('campaigns/q3/bugs/crash', 'bug.md')).toBe(beforeBug)
+  })
+
+  // reason: the checklist is the criteria's whole storage now, so a tick that
+  // rewrote a neighbouring line — or the prose around the section — would be
+  // an edit nobody made, in a repository.
+  it('ticks exactly one line and leaves the rest of the document byte-identical', () => {
+    const task = 'campaigns/q3/missions/m1/tasks/t1'
+    updateEntity(project, task, { description: 'the lead paragraph', notes: 'careful here' })
+    addCriterion(project, task, 'first')
+    addCriterion(project, task, 'second')
+    addCriterion(project, task, 'third')
+    const before = read(task, 'workitem.md')
+    expect(tickCriterion(project, task, 1, true).ok).toBe(true)
+    expect(read(task, 'workitem.md')).toBe(before.replace('- [ ] second', '- [x] second'))
   })
 
   it('refuses to tick a criterion on a test', () => {
@@ -218,7 +320,7 @@ describe('trashEntity', () => {
     // .trash, is what only a move produces.
     const trashed = join(project, '.dsh', 'tasks', '.trash', 'campaigns', 'q3')
     expect(existsSync(trashed)).toBe(true)
-    expect(readFileSync(join(trashed, 'workitem.yaml'), 'utf8')).toContain('name: Q3')
+    expect(readFileSync(join(trashed, 'workitem.md'), 'utf8')).toContain('name: Q3')
   })
 
   it('takes the children with it', () => {
@@ -230,7 +332,7 @@ describe('trashEntity', () => {
     // file, still readable under the trashed campaign, is what only a move
     // (of the whole subtree) produces.
     const trashedMission = join(project, '.dsh', 'tasks', '.trash', 'campaigns', 'q3', 'missions', 'm1')
-    expect(readFileSync(join(trashedMission, 'workitem.yaml'), 'utf8')).toContain('name: M1')
+    expect(readFileSync(join(trashedMission, 'workitem.md'), 'utf8')).toContain('name: M1')
   })
 
   // reason: trashing twice is ordinary — two agents, one stale board — and the
@@ -285,7 +387,7 @@ describe('creating a test', () => {
       ok: true,
       folderPath: 'tests/login-happy-path',
     })
-    expect(read('tests/login-happy-path', 'test.yaml')).toContain('name: Login happy path')
+    expect(read('tests/login-happy-path', 'test.md')).toContain('name: Login happy path')
   })
 
   it('puts a test inside a suite when one is named', () => {
@@ -303,7 +405,7 @@ describe('creating a test', () => {
   // does not belong in.
   it('writes no status on a test', () => {
     createEntity(project, 'test', '', 'Login')
-    expect(read('tests/login', 'test.yaml')).not.toContain('status')
+    expect(read('tests/login', 'test.md')).not.toContain('status')
   })
 
   it('refuses a suite path outside the tests container', () => {
@@ -370,10 +472,25 @@ describe('writing a test through the other five paths', () => {
     expect(updateEntity(project, 'tests/login', { steps: 'open the login page', expected: 'the dashboard loads' }).ok).toBe(
       true,
     )
-    const text = read('tests/login', 'test.yaml')
-    expect(text).toContain('steps: open the login page')
-    expect(text).toContain('expected: the dashboard loads')
+    const text = read('tests/login', 'test.md')
+    expect(text).toContain('## Steps\n\nopen the login page\n')
+    expect(text).toContain('the dashboard loads')
     expect(readBoard(project).tests.tests[0].fields.steps).toBe('open the login page')
+  })
+
+  // reason: a test's setup and its steps are the document, not two more keys,
+  // and the panel reads them off the headings.
+  it('writes a test-s sections under their own headings', () => {
+    createEntity(project, 'test', '', 'Login')
+    expect(updateEntity(project, 'tests/login', { steps: 'click Sign in', preconditions: 'a seeded account' }).ok).toBe(
+      true,
+    )
+    const text = read('tests/login', 'test.md')
+    expect(text).toContain('## Preconditions\n\na seeded account\n')
+    expect(text).toContain('## Steps\n\nclick Sign in\n')
+    const back = readBoard(project).tests.tests[0].fields
+    expect(back.preconditions).toBe('a seeded account')
+    expect(back.steps).toBe('click Sign in')
   })
 
   // reason: a test is not work in flight — the instrument work is measured
@@ -382,7 +499,7 @@ describe('writing a test through the other five paths', () => {
     createEntity(project, 'test', '', 'Login')
     const out = setStatus(project, 'tests/login', 'executing')
     expect(out.ok).toBe(false)
-    expect(read('tests/login', 'test.yaml')).not.toContain('status')
+    expect(read('tests/login', 'test.md')).not.toContain('status')
   })
 
   it('trashes a test', () => {
@@ -402,15 +519,15 @@ describe('linkTest', () => {
 
   it('records a verdict on the workitem, not on the test', () => {
     expect(linkTest(project, 'campaigns/q3', 'tests/login', 'pass', '').ok).toBe(true)
-    expect(read('campaigns/q3', 'workitem.yaml')).toContain('test: tests/login')
-    expect(read('campaigns/q3', 'workitem.yaml')).toContain('result: pass')
-    expect(read('tests/login', 'test.yaml')).not.toContain('campaigns/q3')
+    expect(read('campaigns/q3', 'workitem.md')).toContain('test: tests/login')
+    expect(read('campaigns/q3', 'workitem.md')).toContain('result: pass')
+    expect(read('tests/login', 'test.md')).not.toContain('campaigns/q3')
   })
 
   it('carries a comment and a bug', () => {
     createEntity(project, 'bug', 'campaigns/q3', 'Login 500')
     linkTest(project, 'campaigns/q3', 'tests/login', 'fail', 'returns 500', 'campaigns/q3/bugs/login-500')
-    const text = read('campaigns/q3', 'workitem.yaml')
+    const text = read('campaigns/q3', 'workitem.md')
     expect(text).toContain('comment: returns 500')
     expect(text).toContain('bug: campaigns/q3/bugs/login-500')
   })
@@ -485,7 +602,7 @@ describe('recordRun', () => {
     expect(recordRun(project, 'tests/login', 'campaigns/q3', 'pass', '2026-09-05T09:00:00Z').ok).toBe(true)
     const runs = readBoard(project).tests.tests[0].fields.runs
     expect(runs).toEqual([{ at: '2026-09-05T09:00:00Z', workitem: 'campaigns/q3', result: 'pass' }])
-    expect(read('campaigns/q3', 'workitem.yaml')).not.toContain('runs')
+    expect(read('campaigns/q3', 'workitem.md')).not.toContain('runs')
   })
 
   // reason: the run history is what makes flakiness visible, so a second run
@@ -504,6 +621,26 @@ describe('recordRun', () => {
     expect(readBoard(project).campaigns[0].fields.validatedBy[0].result).toBe('pass')
   })
 
+  // reason: a run is a record, not prose — it belongs in the frontmatter the
+  // schema owns, where the next reader parses it rather than reads it.
+  it('writes the run into the frontmatter, above the first heading', () => {
+    recordRun(project, 'tests/login', 'campaigns/q3', 'pass', '2026-09-05T09:00:00Z')
+    const text = read('tests/login', 'test.md')
+    expect(text.slice(0, text.indexOf('## '))).toContain("at: '2026-09-05T09:00:00Z'")
+  })
+
+  // reason: the history is what makes flakiness visible, and an uncapped one
+  // grows a file nobody can read until the repository notices.
+  it('caps the history at RUN_HISTORY, keeping the most recent', () => {
+    for (let n = 0; n < RUN_HISTORY + 5; n += 1) {
+      recordRun(project, 'tests/login', 'campaigns/q3', 'pass', `run-${String(n)}`)
+    }
+    const runs = readBoard(project).tests.tests[0].fields.runs
+    expect(runs).toHaveLength(RUN_HISTORY)
+    expect(runs[0].at).toBe('run-5')
+    expect(runs[runs.length - 1].at).toBe(`run-${String(RUN_HISTORY + 4)}`)
+  })
+
   it('refuses a result that is not one of the three', () => {
     expect(recordRun(project, 'tests/login', 'campaigns/q3', 'green', 'a').ok).toBe(false)
   })
@@ -515,12 +652,100 @@ describe('recordRun', () => {
   // reason: `readEntity`'s own loadEntity call is guarded; this one was the
   // single exception, and let a YAMLException reach the tool handler as a
   // transport failure instead of a sentence naming the file.
-  it('reports a test.yaml that will not parse, rather than throwing', () => {
-    writeFileSync(join(project, '.dsh', 'tasks', 'tests', 'login', 'test.yaml'), 'name: [unclosed\n')
+  it('reports a test.md that will not parse, rather than throwing', () => {
+    writeFileSync(join(project, '.dsh', 'tasks', 'tests', 'login', 'test.md'), '---\nname: [unclosed\n---\n')
     expect(() => recordRun(project, 'tests/login', 'campaigns/q3', 'pass', 'a')).not.toThrow()
     const out = recordRun(project, 'tests/login', 'campaigns/q3', 'pass', 'a')
     expect(out.ok).toBe(false)
-    if (!out.ok) expect(out.reason).toContain('test.yaml')
+    if (!out.ok) expect(out.reason).toContain('test.md')
+  })
+})
+
+// reason: the board shipped `<type>.yaml` first, and a board nobody has
+// converted must not need a migration pass to keep working. Writing to an
+// entity is the conversion: the markdown lands, and the file it replaces goes.
+describe('converting a legacy entity', () => {
+  const yamlIsGone = (): void => {
+    expect(has('campaigns/q3', 'workitem.md')).toBe(true)
+    expect(has('campaigns/q3', 'workitem.yaml')).toBe(false)
+  }
+
+  const writes: { name: string; run: () => WriteResult }[] = [
+    { name: 'updateEntity', run: () => updateEntity(project, 'campaigns/q3', { description: 'changed' }) },
+    { name: 'setStatus', run: () => setStatus(project, 'campaigns/q3', 'executing') },
+    { name: 'addCriterion', run: () => addCriterion(project, 'campaigns/q3', 'and this too') },
+    { name: 'tickCriterion', run: () => tickCriterion(project, 'campaigns/q3', 0, true) },
+    { name: 'linkTest', run: () => linkTest(project, 'campaigns/q3', 'tests/login', 'fail', 'broke') },
+    { name: 'unlinkTest', run: () => unlinkTest(project, 'campaigns/q3', 'tests/login') },
+  ]
+
+  for (const one of writes) {
+    it(`converts the file when ${one.name} writes it`, () => {
+      legacyBoard()
+      expect(one.run().ok).toBe(true)
+      yamlIsGone()
+    })
+  }
+
+  // reason: converting must not cost the entity anything it carried. What the
+  // old file said in YAML strings the new one says in the document, and the
+  // reader has to get the same entity back either way.
+  it('keeps the description, the criteria and the verdict through the conversion', () => {
+    legacyBoard()
+    expect(setStatus(project, 'campaigns/q3', 'executing').ok).toBe(true)
+    const text = read('campaigns/q3', 'workitem.md')
+    expect(text).toContain('status: executing')
+    expect(text).toContain('\nship it\n')
+    expect(text).toContain('## Acceptance Criteria\n\n- [ ] it works\n')
+    expect(text).toContain('test: tests/login')
+    const back = readBoard(project).campaigns[0]
+    expect(back.fields.description).toBe('ship it')
+    expect(back.fields.acceptanceCriteria).toEqual([{ text: 'it works', done: false }])
+    expect(back.fields.validatedBy[0].test).toBe('tests/login')
+    yamlIsGone()
+  })
+
+  // reason: `## Acceptance Criteria` is not in the old file at all, so the
+  // section has to be written from nothing rather than found and appended to.
+  it('creates the criteria section on a legacy file that had none', () => {
+    putLegacy('campaigns/q3', 'workitem.yaml', 'name: Q3\nsubtype: campaign\nstatus: idea\n')
+    expect(addCriterion(project, 'campaigns/q3', 'it works').ok).toBe(true)
+    expect(read('campaigns/q3', 'workitem.md')).toContain('## Acceptance Criteria\n\n- [ ] it works\n')
+    yamlIsGone()
+  })
+
+  it('converts a test through recordRun, the one write that opens its own file', () => {
+    legacyBoard()
+    expect(recordRun(project, 'tests/login', 'campaigns/q3', 'pass', 'a').ok).toBe(true)
+    const text = read('tests/login', 'test.md')
+    expect(text).toContain('## Steps\n\nopen the login page\n')
+    expect(text).toContain('workitem: campaigns/q3')
+    expect(has('tests/login', 'test.md')).toBe(true)
+    expect(has('tests/login', 'test.yaml')).toBe(false)
+  })
+
+  // reason: this is the ordering, and it is the only thing standing between a
+  // failed write and an entity with no file at all. Removing the `.yaml` first
+  // would leave the folder empty when the markdown never lands.
+  it('leaves the yaml alone when the markdown write fails', () => {
+    legacyBoard()
+    disk.writeThrows = true
+    expect(() => setStatus(project, 'campaigns/q3', 'executing')).toThrow()
+    expect(has('campaigns/q3', 'workitem.yaml')).toBe(true)
+    expect(has('campaigns/q3', 'workitem.md')).toBe(false)
+    disk.writeThrows = false
+    expect(readBoard(project).campaigns[0].name).toBe('Q3')
+  })
+
+  // reason: both files present is a conversion someone stalled or a file
+  // someone edited by hand — the reader already says the `.yaml` is ignored,
+  // and a writer that deleted it would delete the thing that finding is about.
+  it('leaves a yaml beside a markdown alone, since it was not opened from it', () => {
+    createEntity(project, 'campaign', '', 'Q3')
+    putLegacy('campaigns/q3', 'workitem.yaml', 'name: Q3 by hand\n')
+    expect(setStatus(project, 'campaigns/q3', 'executing').ok).toBe(true)
+    expect(has('campaigns/q3', 'workitem.yaml')).toBe(true)
+    expect(read('campaigns/q3', 'workitem.md')).toContain('status: executing')
   })
 })
 

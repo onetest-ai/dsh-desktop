@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -242,6 +242,24 @@ describe('reading .md, and the .yaml that came before', () => {
     expect(board.findings).toHaveLength(1)
     expect(board.findings[0].folderPath).toBe('campaigns/q3')
     expect(board.findings[0].says).not.toContain('\n')
+  })
+
+  // reason: the fallback has an error branch of its own, and it is the one a
+  // board nobody has converted actually reaches — a corrupted `.yaml` with no
+  // `.md` beside it. It must name the file it could not read, leave the entity
+  // off the board, and repair nothing.
+  it('reports a malformed legacy .yaml, naming it, and leaves it out', () => {
+    put('campaigns/q3', 'workitem.yaml', 'name: [unclosed\n')
+    const board = readBoard(project)
+    expect(board.campaigns).toEqual([])
+    expect(board.findings).toHaveLength(1)
+    expect(board.findings[0].folderPath).toBe('campaigns/q3')
+    expect(board.findings[0].says).toContain('workitem.yaml could not be read')
+    expect(board.findings[0].says).not.toContain('\n')
+    expect(readFileSync(join(project, '.dsh', 'tasks', 'campaigns', 'q3', 'workitem.yaml'), 'utf8')).toBe(
+      'name: [unclosed\n',
+    )
+    expect(existsSync(join(project, '.dsh', 'tasks', 'campaigns', 'q3', 'workitem.md'))).toBe(false)
   })
 })
 

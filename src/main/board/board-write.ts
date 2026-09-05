@@ -1,14 +1,24 @@
-import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { writeFileAtomic } from '../atomic-write'
-import { boardRoot, fileFor, folderFor, realpathAsFarAsExists, resolveInBoard, TESTS_DIR, TRASH_DIR } from './board-paths'
+import {
+  boardRoot,
+  fileFor,
+  folderFor,
+  legacyFileFor,
+  realpathAsFarAsExists,
+  resolveInBoard,
+  TESTS_DIR,
+  TRASH_DIR,
+} from './board-paths'
 import { collectTests, findEntity, findTest, readBoard } from './board-read'
 import {
   dumpEntity,
   ENTITY_STATUSES,
-  LEVEL_KEYS,
+  LEVEL_SECTIONS,
   LINK_RESULTS,
   loadEntity,
+  loadLegacyEntity,
   typeOf,
   yamlFailureReason,
   type EntityFields,
@@ -41,6 +51,24 @@ const SIBLING_DIR: Record<EntityLevel, string> = {
 }
 
 /**
+ * Whether a folder's entity was read from the `<type>.yaml` the board shipped
+ * before, rather than from its `<type>.md`.
+ *
+ * Asked of the directory rather than of the reader, because that is the same
+ * question `readEntity` answers and the same way it answers it: `.md` wins,
+ * and the legacy file is only the source when there is no `.md` at all. Both
+ * present is not a conversion — the reader already reports the `.yaml` as
+ * ignored, and a writer that deleted it there would be deleting a file the
+ * person who edited it has not yet been told about.
+ * @param dir - the entity's directory.
+ * @param level - the entity's level, which names both files.
+ * @returns true when only the legacy file is there.
+ */
+function openedFromLegacy(dir: string, level: EntityLevel): boolean {
+  return !existsSync(join(dir, fileFor(level))) && existsSync(join(dir, legacyFileFor(level)))
+}
+
+/**
  * Read one entity's file, for a write that is about to rewrite it.
  *
  * Tests live in their own container, addressed by path rather than found by
@@ -48,32 +76,55 @@ const SIBLING_DIR: Record<EntityLevel, string> = {
  * the same way `linkTest` already has to when it validates a test argument.
  * @param project - the project's root directory.
  * @param folderPath - the entity's path within the board.
- * @returns the level, the fields, and the resolved directory — or why not.
+ * @returns the level, the fields, the resolved directory, and whether the
+ *   fields came from a legacy file — or why not.
  */
 function open(
   project: string,
   folderPath: string,
-): { ok: true; level: EntityLevel; fields: EntityFields; dir: string } | { ok: false; reason: string } {
+):
+  | { ok: true; level: EntityLevel; fields: EntityFields; dir: string; legacy: boolean }
+  | { ok: false; reason: string } {
   const dir = resolveInBoard(project, folderPath)
   if (dir === undefined) return { ok: false, reason: `${folderPath} is not inside this project's board.` }
   const board = readBoard(project)
   const entity = findEntity(board, folderPath) ?? findTest(board.tests, folderPath)
   if (entity === undefined) return { ok: false, reason: `${folderPath} is not on the board.` }
-  return { ok: true, level: entity.level, fields: entity.fields, dir }
+  return { ok: true, level: entity.level, fields: entity.fields, dir, legacy: openedFromLegacy(dir, entity.level) }
 }
 
 /**
- * Write an entity's file, whole, through the schema.
+ * Write an entity's file, whole, through the schema — and, for one opened from
+ * the format that came before, retire the file it was opened from.
  *
  * Whole-file rather than a patch, because the schema owns the key order and
  * which keys a level emits — and because `dumpEntity` re-emits the unmodelled
  * keys it carried in, which a line-level patch could not.
+ *
+ * The conversion is a write, never a migration pass: an entity becomes a
+ * markdown document the first time something writes to it, and a board nobody
+ * writes to keeps reading exactly as it did. The unlink is strictly after the
+ * atomic write has returned, so a write that throws leaves the `.yaml` as the
+ * only file — which is still a whole, readable entity. On the reverse failure
+ * — the `.md` written and the unlink refused — the `.yaml` stays and the
+ * reader says in a finding that it is being ignored, which is true and is the
+ * one outcome a person can act on.
  * @param dir - the entity's directory.
- * @param level - which `<type>.yaml` to write.
+ * @param level - which `<type>.md` to write.
  * @param fields - the fields to write.
+ * @param legacy - true when the entity was opened from `<type>.yaml`, which is
+ *   then removed once the markdown is safely on disk.
  */
-function save(dir: string, level: EntityLevel, fields: EntityFields): void {
+function save(dir: string, level: EntityLevel, fields: EntityFields, legacy: boolean): void {
   writeFileAtomic(join(dir, fileFor(level)), dumpEntity(level, fields))
+  if (!legacy) return
+  try {
+    unlinkSync(join(dir, legacyFileFor(level)))
+  } catch {
+    // Left where it is on purpose. The entity is already converted; the stale
+    // `.yaml` is a reported finding rather than a lost write, and throwing
+    // here would report a write that in fact succeeded as a failure.
+  }
 }
 
 /**
@@ -146,15 +197,22 @@ export function createEntity(project: string, level: EntityLevel, parentFolder: 
   const dir = resolveInBoard(project, folderPath)
   if (dir === undefined) return { ok: false, reason: `${folderPath} is not inside this project's board.` }
   mkdirSync(dir, { recursive: true })
-  save(dir, level, {
-    name,
-    description: '',
-    acceptanceCriteria: [],
-    documents: [],
-    validatedBy: [],
-    runs: [],
-    ...(level === 'test' ? {} : { status: 'idea' }),
-  })
+  // Never legacy: nothing was opened, so there is no `.yaml` here that this
+  // create is entitled to remove.
+  save(
+    dir,
+    level,
+    {
+      name,
+      description: '',
+      acceptanceCriteria: [],
+      documents: [],
+      validatedBy: [],
+      runs: [],
+      ...(level === 'test' ? {} : { status: 'idea' }),
+    },
+    false,
+  )
   return { ok: true, folderPath }
 }
 
@@ -168,7 +226,7 @@ export function createEntity(project: string, level: EntityLevel, parentFolder: 
 export function updateEntity(project: string, folderPath: string, patch: Partial<EntityFields>): WriteResult {
   const found = open(project, folderPath)
   if (!found.ok) return found
-  save(found.dir, found.level, { ...found.fields, ...patch })
+  save(found.dir, found.level, { ...found.fields, ...patch }, found.legacy)
   return { ok: true, folderPath }
 }
 
@@ -198,14 +256,18 @@ export function setStatus(project: string, folderPath: string, status: string): 
 /**
  * Why a level refuses an acceptance criterion, when it does.
  *
- * Driven by `LEVEL_KEYS` rather than a hard-coded list of levels, so a level
- * later added to the schema without `acceptance_criteria` is caught here too,
- * instead of silently reintroducing the write-that-lies this guards against.
+ * Driven by `LEVEL_SECTIONS` rather than a hard-coded list of levels, so a
+ * level later added to the schema without an `## Acceptance Criteria` section
+ * is caught here too, instead of silently reintroducing the write-that-lies
+ * this guards against. Criteria are a section and not a frontmatter key — they
+ * are a checklist a person ticks in the document — so `LEVEL_KEYS` is the
+ * wrong table to ask: it names no level's criteria, and asking it refuses
+ * every level, which is the same lie with the sign flipped.
  * @param level - the level asked to carry a criterion.
  * @returns why it cannot, or nothing when it can.
  */
 function whyNoCriteria(level: EntityLevel): string | undefined {
-  if (LEVEL_KEYS[level].includes('acceptance_criteria')) return undefined
+  if (LEVEL_SECTIONS[level].includes('Acceptance Criteria')) return undefined
   if (level === 'test') return 'a test is proof that work was done, not a plan for doing it'
   if (level === 'bug') return 'a bug is a defect report, not a plan'
   return `a ${level} carries no acceptance criteria`
@@ -215,9 +277,9 @@ function whyNoCriteria(level: EntityLevel): string | undefined {
  * Add an acceptance criterion, unticked.
  *
  * Unticked always: a criterion created as already met is one nobody checked.
- * Refused for a level whose file emits no `acceptance_criteria` at all — a
- * test or a bug — rather than written and silently dropped by `dumpEntity`,
- * which is a refusal turned into a false success.
+ * Refused for a level whose document has no `## Acceptance Criteria` section
+ * at all — a test or a bug — rather than written and silently dropped by
+ * `dumpEntity`, which is a refusal turned into a false success.
  * @param project - the project's root directory.
  * @param folderPath - the entity to add it to.
  * @param text - what has to be true.
@@ -230,7 +292,7 @@ export function addCriterion(project: string, folderPath: string, text: string):
   const why = whyNoCriteria(found.level)
   if (why !== undefined) return { ok: false, reason: `${folderPath} is a ${found.level}: ${why}, so it has no acceptance criteria.` }
   const criteria = [...found.fields.acceptanceCriteria, { text: text.trim(), done: false }]
-  save(found.dir, found.level, { ...found.fields, acceptanceCriteria: criteria })
+  save(found.dir, found.level, { ...found.fields, acceptanceCriteria: criteria }, found.legacy)
   return { ok: true, folderPath }
 }
 
@@ -257,7 +319,7 @@ export function tickCriterion(project: string, folderPath: string, index: number
     return { ok: false, reason: `${folderPath} has ${String(criteria.length)} criteria, so there is none at ${String(index)}.` }
   }
   const next = criteria.map((one, at) => (at === index ? { ...one, done } : one))
-  save(found.dir, found.level, { ...found.fields, acceptanceCriteria: next })
+  save(found.dir, found.level, { ...found.fields, acceptanceCriteria: next }, found.legacy)
   return { ok: true, folderPath }
 }
 
@@ -361,7 +423,7 @@ export function linkTest(
   if (!tests.has(test)) return { ok: false, reason: `${test} is not a test on this board.` }
   const kept = found.fields.validatedBy.filter((link) => link.test !== test)
   const link = { test, result, comment, ...(bug === undefined || bug === '' ? {} : { bug }) }
-  save(found.dir, found.level, { ...found.fields, validatedBy: [...kept, link] })
+  save(found.dir, found.level, { ...found.fields, validatedBy: [...kept, link] }, found.legacy)
   return { ok: true, folderPath }
 }
 
@@ -387,7 +449,7 @@ export function unlinkTest(project: string, folderPath: string, test: string): W
   if (kept.length === found.fields.validatedBy.length) {
     return { ok: false, reason: `${folderPath} does not name ${test}.` }
   }
-  save(found.dir, found.level, { ...found.fields, validatedBy: kept })
+  save(found.dir, found.level, { ...found.fields, validatedBy: kept }, found.legacy)
   return { ok: true, folderPath }
 }
 
@@ -411,22 +473,28 @@ export function recordRun(project: string, testFolder: string, workitem: string,
   }
   const dir = resolveInBoard(project, testFolder)
   if (dir === undefined) return { ok: false, reason: `${testFolder} is not inside this project's board.` }
+  // The same preference `readEntity` walks, for the same reason: this is the
+  // one write that does not go through `open`, and a board nobody has
+  // converted holds only `test.yaml` — refusing it as "not a test" would make
+  // the run history the one thing a legacy board could not record.
+  const legacy = openedFromLegacy(dir, 'test')
+  const file = legacy ? legacyFileFor('test') : fileFor('test')
   let text: string
   try {
-    text = readFileSync(join(dir, fileFor('test')), 'utf8')
+    text = readFileSync(join(dir, file), 'utf8')
   } catch {
     return { ok: false, reason: `${testFolder} is not a test.` }
   }
   let fields: EntityFields
   try {
-    fields = loadEntity(text)
+    fields = legacy ? loadLegacyEntity(text, 'test') : loadEntity(text)
   } catch (error) {
     // Reading never throws out of a tool handler: the agent gets a sentence
     // naming the file, the way `readEntity` reports the same failure to
     // `board_read` — not a YAMLException reaching the HTTP transport.
-    return { ok: false, reason: `${fileFor('test')} could not be read: ${yamlFailureReason(error)}` }
+    return { ok: false, reason: `${file} could not be read: ${yamlFailureReason(error)}` }
   }
   const runs = [...fields.runs, { at: at ?? new Date().toISOString(), workitem, result }]
-  save(dir, 'test', { ...fields, runs })
+  save(dir, 'test', { ...fields, runs }, legacy)
   return { ok: true, folderPath: testFolder }
 }
