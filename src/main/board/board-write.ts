@@ -1,52 +1,64 @@
-import { lstatSync, mkdirSync, readdirSync, renameSync } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { writeFileAtomic } from '../atomic-write'
-import { boardRoot, folderFor, realpathAsFarAsExists, resolveInBoard, TRASH_DIR } from './board-paths'
-import { findEntity, readBoard } from './board-read'
-import { dumpEntity, ENTITY_STATUSES, type EntityFields, type EntityKind } from './entity-schema'
+import { boardRoot, fileFor, folderFor, realpathAsFarAsExists, resolveInBoard, TESTS_DIR, TRASH_DIR } from './board-paths'
+import { collectTests, findEntity, readBoard } from './board-read'
+import { dumpEntity, ENTITY_STATUSES, LINK_RESULTS, loadEntity, typeOf, type EntityFields, type EntityLevel } from './entity-schema'
 import { slugify, uniqueSlug } from './slug'
 
 /** What one write reports back. */
 export type WriteResult = { ok: true; folderPath: string } | { ok: false; reason: string }
 
-/** Which kind may hold which, so a parent of the wrong kind is refused rather than nested. */
-const PARENT_OF: Record<EntityKind, EntityKind | undefined> = {
-  campaign: undefined,
-  mission: 'campaign',
-  task: 'mission',
-  // A bug is parented by exactly one of a campaign or a mission; checked below.
-  bug: undefined,
+/** Which level may hold which, so a parent of the wrong level is refused rather than nested. */
+const PARENT_OF: Record<EntityLevel, readonly EntityLevel[]> = {
+  campaign: [],
+  mission: ['campaign'],
+  task: ['mission'],
+  // A bug is parented by exactly one of a campaign or a mission.
+  bug: ['campaign', 'mission'],
+  // A test's parent is a suite, which is a directory rather than an entity —
+  // checked by path instead, since there is nothing to look up.
+  test: [],
+}
+
+/** The directory a level's siblings share, under its parent. */
+const SIBLING_DIR: Record<EntityLevel, string> = {
+  campaign: 'campaigns',
+  mission: 'missions',
+  task: 'tasks',
+  bug: 'bugs',
+  test: TESTS_DIR,
 }
 
 /**
  * Read one entity's file, for a write that is about to rewrite it.
  * @param project - the project's root directory.
  * @param folderPath - the entity's path within the board.
- * @returns the kind, the fields, and the resolved directory — or why not.
+ * @returns the level, the fields, and the resolved directory — or why not.
  */
 function open(
   project: string,
   folderPath: string,
-): { ok: true; kind: EntityKind; fields: EntityFields; dir: string } | { ok: false; reason: string } {
+): { ok: true; level: EntityLevel; fields: EntityFields; dir: string } | { ok: false; reason: string } {
   const dir = resolveInBoard(project, folderPath)
   if (dir === undefined) return { ok: false, reason: `${folderPath} is not inside this project's board.` }
   const entity = findEntity(readBoard(project), folderPath)
   if (entity === undefined) return { ok: false, reason: `${folderPath} is not on the board.` }
-  return { ok: true, kind: entity.kind, fields: entity.fields, dir }
+  return { ok: true, level: entity.level, fields: entity.fields, dir }
 }
 
 /**
  * Write an entity's file, whole, through the schema.
  *
  * Whole-file rather than a patch, because the schema owns the key order and
- * which keys a kind emits — and because `dumpEntity` re-emits the unmodelled
+ * which keys a level emits — and because `dumpEntity` re-emits the unmodelled
  * keys it carried in, which a line-level patch could not.
  * @param dir - the entity's directory.
- * @param kind - which `<kind>.yaml` to write.
+ * @param level - which `<type>.yaml` to write.
  * @param fields - the fields to write.
  */
-function save(dir: string, kind: EntityKind, fields: EntityFields): void {
-  writeFileAtomic(join(dir, `${kind}.yaml`), dumpEntity(kind, fields))
+function save(dir: string, level: EntityLevel, fields: EntityFields): void {
+  writeFileAtomic(join(dir, fileFor(level)), dumpEntity(level, fields))
 }
 
 /**
@@ -56,16 +68,28 @@ function save(dir: string, kind: EntityKind, fields: EntityFields): void {
  * entities with one name is ordinary, and a create that silently overwrote the
  * first would destroy whatever plan it carried.
  * @param project - the project's root directory.
- * @param kind - what to create.
- * @param parentFolder - the parent's folder path; empty for a campaign.
+ * @param level - what to create.
+ * @param parentFolder - the parent's folder path; empty for a campaign or for
+ *   a test at the tests root.
  * @param name - the display name, which the slug is derived from.
  * @returns the new folder path, or why nothing was created.
  */
-export function createEntity(project: string, kind: EntityKind, parentFolder: string, name: string): WriteResult {
-  if (name.trim() === '') return { ok: false, reason: `Name the ${kind} first.` }
+export function createEntity(project: string, level: EntityLevel, parentFolder: string, name: string): WriteResult {
+  if (name.trim() === '') return { ok: false, reason: `Name the ${level} first.` }
   const board = readBoard(project)
   let parts: string[]
-  if (kind === 'campaign') {
+  if (level === 'test') {
+    // A suite is a directory and nothing else, so there is no entity to look
+    // up — only a path to check. An empty parent means the tests root.
+    const suite = parentFolder === '' ? TESTS_DIR : parentFolder
+    if (suite !== TESTS_DIR && !suite.startsWith(`${TESTS_DIR}/`)) {
+      return { ok: false, reason: `${parentFolder} is not inside the tests container.` }
+    }
+    if (resolveInBoard(project, suite) === undefined) {
+      return { ok: false, reason: `${suite} is not inside this project's board.` }
+    }
+    parts = suite === TESTS_DIR ? [] : suite.slice(TESTS_DIR.length + 1).split('/')
+  } else if (level === 'campaign') {
     parts = []
   } else {
     if (resolveInBoard(project, parentFolder) === undefined) {
@@ -73,19 +97,19 @@ export function createEntity(project: string, kind: EntityKind, parentFolder: st
     }
     const parent = findEntity(board, parentFolder)
     if (parent === undefined) return { ok: false, reason: `${parentFolder} is not on the board.` }
-    const wanted = kind === 'bug' ? ['campaign', 'mission'] : [PARENT_OF[kind]]
-    if (!wanted.includes(parent.kind)) {
-      return { ok: false, reason: `a ${kind} cannot go under a ${parent.kind}.` }
+    if (!PARENT_OF[level].includes(parent.level)) {
+      return { ok: false, reason: `a ${level} cannot go under a ${parent.level}.` }
     }
     // The odd segments, not a filter on the words: a campaign legitimately
-    // slugged `missions` would otherwise be dropped from its own children's
-    // paths. The shape is fixed — campaigns/<c>[/missions/<m>] — so position
-    // is what identifies a slug, never its spelling.
+    // slugged `missions` would otherwise be dropped from its children's paths.
     parts = parentFolder.split('/').filter((_, at) => at % 2 === 1)
   }
-  const siblingDir = kind === 'campaign' ? 'campaigns' : kind === 'mission' ? 'missions' : kind === 'task' ? 'tasks' : 'bugs'
   const under =
-    kind === 'campaign' ? join(boardRoot(project), 'campaigns') : join(resolveInBoard(project, parentFolder)!, siblingDir)
+    level === 'test'
+      ? join(boardRoot(project), TESTS_DIR, ...parts)
+      : level === 'campaign'
+        ? join(boardRoot(project), 'campaigns')
+        : join(resolveInBoard(project, parentFolder)!, SIBLING_DIR[level])
   let taken: Set<string>
   try {
     taken = new Set(
@@ -97,11 +121,19 @@ export function createEntity(project: string, kind: EntityKind, parentFolder: st
     taken = new Set()
   }
   const slug = uniqueSlug(slugify(name), taken)
-  const folderPath = folderFor(kind, [...parts, slug])
+  const folderPath = folderFor(level, [...parts, slug])
   const dir = resolveInBoard(project, folderPath)
   if (dir === undefined) return { ok: false, reason: `${folderPath} is not inside this project's board.` }
   mkdirSync(dir, { recursive: true })
-  save(dir, kind, { name, description: '', acceptanceCriteria: [], documents: [], status: 'draft' })
+  save(dir, level, {
+    name,
+    description: '',
+    acceptanceCriteria: [],
+    documents: [],
+    validatedBy: [],
+    runs: [],
+    ...(level === 'test' ? {} : { status: 'draft' }),
+  })
   return { ok: true, folderPath }
 }
 
@@ -115,7 +147,7 @@ export function createEntity(project: string, kind: EntityKind, parentFolder: st
 export function updateEntity(project: string, folderPath: string, patch: Partial<EntityFields>): WriteResult {
   const found = open(project, folderPath)
   if (!found.ok) return found
-  save(found.dir, found.kind, { ...found.fields, ...patch })
+  save(found.dir, found.level, { ...found.fields, ...patch })
   return { ok: true, folderPath }
 }
 
@@ -150,7 +182,7 @@ export function addCriterion(project: string, folderPath: string, text: string):
   const found = open(project, folderPath)
   if (!found.ok) return found
   const criteria = [...found.fields.acceptanceCriteria, { text: text.trim(), done: false }]
-  save(found.dir, found.kind, { ...found.fields, acceptanceCriteria: criteria })
+  save(found.dir, found.level, { ...found.fields, acceptanceCriteria: criteria })
   return { ok: true, folderPath }
 }
 
@@ -175,7 +207,7 @@ export function tickCriterion(project: string, folderPath: string, index: number
     return { ok: false, reason: `${folderPath} has ${String(criteria.length)} criteria, so there is none at ${String(index)}.` }
   }
   const next = criteria.map((one, at) => (at === index ? { ...one, done } : one))
-  save(found.dir, found.kind, { ...found.fields, acceptanceCriteria: next })
+  save(found.dir, found.level, { ...found.fields, acceptanceCriteria: next })
   return { ok: true, folderPath }
 }
 
@@ -236,4 +268,104 @@ export function trashEntity(project: string, folderPath: string): WriteResult {
   }
   renameSync(found.dir, join(into, uniqueSlug(slug, taken)))
   return { ok: true, folderPath }
+}
+
+/**
+ * Say that a test proves a workitem, and what happened when it was run.
+ *
+ * The verdict lands on the workitem rather than on the test, because a
+ * verdict is about a pairing: one test can pass for the mission it was
+ * written for and fail for the one that reused it, and both are true at once.
+ *
+ * Linking the same test twice replaces the verdict rather than adding a
+ * second — a re-run is ordinary, and two verdicts for one pairing would leave
+ * no way to say which is current. The old entry's bug goes with it: it
+ * described a failure that is no longer the answer.
+ * @param project - the project's root directory.
+ * @param folderPath - the workitem being proved.
+ * @param test - the test's folder path.
+ * @param result - one of `LINK_RESULTS`.
+ * @param comment - why, in the reader's own words; may be empty.
+ * @param bug - the defect a failure produced, when one was filed.
+ * @returns the workitem's folder path, or why nothing was linked.
+ */
+export function linkTest(
+  project: string,
+  folderPath: string,
+  test: string,
+  result: string,
+  comment: string,
+  bug?: string,
+): WriteResult {
+  if (!(LINK_RESULTS as readonly string[]).includes(result)) {
+    return { ok: false, reason: `"${result}" is not a result. Use one of: ${LINK_RESULTS.join(', ')}.` }
+  }
+  const found = open(project, folderPath)
+  if (!found.ok) return found
+  if (typeOf(found.level) !== 'workitem') {
+    return { ok: false, reason: `a ${found.level} does not declare what proves it.` }
+  }
+  const board = readBoard(project)
+  const tests = new Set<string>()
+  collectTests(board.tests, tests)
+  if (!tests.has(test)) return { ok: false, reason: `${test} is not a test on this board.` }
+  const kept = found.fields.validatedBy.filter((link) => link.test !== test)
+  const link = { test, result, comment, ...(bug === undefined || bug === '' ? {} : { bug }) }
+  save(found.dir, found.level, { ...found.fields, validatedBy: [...kept, link] })
+  return { ok: true, folderPath }
+}
+
+/**
+ * Stop claiming that a test proves a workitem.
+ *
+ * This is how a test is retired: validation *is* the link, so a test nothing
+ * points at proves nothing, which is exactly what retired means. A test that
+ * was never linked is refused rather than reported as removed — saying a
+ * thing was unlinked when it never was is how a stale board looks tidy.
+ * @param project - the project's root directory.
+ * @param folderPath - the workitem to unlink from.
+ * @param test - the test's folder path.
+ * @returns the workitem's folder path, or why nothing changed.
+ */
+export function unlinkTest(project: string, folderPath: string, test: string): WriteResult {
+  const found = open(project, folderPath)
+  if (!found.ok) return found
+  const kept = found.fields.validatedBy.filter((link) => link.test !== test)
+  if (kept.length === found.fields.validatedBy.length) {
+    return { ok: false, reason: `${folderPath} does not name ${test}.` }
+  }
+  save(found.dir, found.level, { ...found.fields, validatedBy: kept })
+  return { ok: true, folderPath }
+}
+
+/**
+ * Append one execution to a test's own history.
+ *
+ * Deliberately does not touch the workitem's verdict. A verdict is a claim
+ * with an author; a run is a thing that happened. Letting a run rewrite a
+ * verdict would put a claim on the board that nobody made — and the two
+ * disagreeing is exactly the signal that a verdict has gone stale.
+ * @param project - the project's root directory.
+ * @param testFolder - the test that ran.
+ * @param workitem - the workitem it was run against.
+ * @param result - one of `LINK_RESULTS`.
+ * @param at - when it ran; now, in ISO 8601, when not given.
+ * @returns the test's folder path, or why nothing was recorded.
+ */
+export function recordRun(project: string, testFolder: string, workitem: string, result: string, at?: string): WriteResult {
+  if (!(LINK_RESULTS as readonly string[]).includes(result)) {
+    return { ok: false, reason: `"${result}" is not a result. Use one of: ${LINK_RESULTS.join(', ')}.` }
+  }
+  const dir = resolveInBoard(project, testFolder)
+  if (dir === undefined) return { ok: false, reason: `${testFolder} is not inside this project's board.` }
+  let text: string
+  try {
+    text = readFileSync(join(dir, fileFor('test')), 'utf8')
+  } catch {
+    return { ok: false, reason: `${testFolder} is not a test.` }
+  }
+  const fields = loadEntity(text)
+  const runs = [...fields.runs, { at: at ?? new Date().toISOString(), workitem, result }]
+  save(dir, 'test', { ...fields, runs })
+  return { ok: true, folderPath: testFolder }
 }
