@@ -531,6 +531,51 @@ describe('a detail in the panel', () => {
     expect(stub.calls.filter((call) => call[0] === 'detail').length).toBe(2)
   })
 
+  // reason: the re-read is one await long, and a back press landing inside it
+  // was overwritten by the answer that arrived afterwards — the reader pressed
+  // back, saw the columns, and the detail they had just left came back on its
+  // own. The redraw a `tasks:changed` triggers is about the surface that was
+  // open when it started, and it no longer is.
+  it('does not put a closed detail back when a re-read lands after back', async () => {
+    const stub = bridge(oneMission(), { detail: detail() })
+    await load(stub)
+    await openFirstCard()
+    let answer: ((value: Record<string, unknown>) => void) | undefined
+    stub.readTaskDetail = async () =>
+      await new Promise<Record<string, unknown>>((resolve) => {
+        answer = resolve
+      })
+    stub.fire()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    // Inside the window: the board has been re-read, the entity has not.
+    document.querySelector<HTMLElement>('.board-detail-back')?.click()
+    expect(document.querySelector('.board-column')).not.toBeNull()
+    answer?.({ ...detail(), folderPath: 'campaigns/q3/missions/m1/tasks/t1' })
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.board-detail')).toBeNull()
+    expect(document.querySelector('.board-column')).not.toBeNull()
+  })
+
+  // reason: `openDetail` has the same await and the same unconditional
+  // assignment. A reveal landing inside it names the columns and a mark on
+  // them, and the detail arriving afterwards would take both away.
+  it('does not open a detail whose read lands after the tree reveals a card', async () => {
+    const stub = bridge(oneMission(), { detail: detail() })
+    await load(stub)
+    let answer: ((value: Record<string, unknown>) => void) | undefined
+    stub.readTaskDetail = async () =>
+      await new Promise<Record<string, unknown>>((resolve) => {
+        answer = resolve
+      })
+    document.querySelector<HTMLElement>('.board-card')?.click()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    stub.reveal('campaigns/q3/missions/m1')
+    answer?.({ ...detail(), folderPath: 'campaigns/q3/missions/m1/tasks/t1' })
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.board-detail')).toBeNull()
+    expect(document.querySelector('.board-lane-revealed')).not.toBeNull()
+  })
+
   // reason: an entity an agent deleted while its detail was open leaves the
   // panel drawing something that is not there. The board is what is left.
   it('falls back to the columns, with a note, when the entity is gone', async () => {
@@ -793,6 +838,28 @@ describe('the Tests destination', () => {
     // the destination's own — it needs no class of its own to be told apart.
     document.querySelector<HTMLElement>('.board-tests .board-detail-back')?.click()
     expect(document.querySelector('.board-column')).not.toBeNull()
+  })
+
+  // reason: found by opening the running app — the control said one place and
+  // went to another. A detail opened over the Tests list goes back to Tests,
+  // so a label reading "Board" is the surface lying about where it is about to
+  // put you, and the label could not be fixed inside `board-detail.ts`: back
+  // was a bare callback and the destination lives only in `board.ts`.
+  it('labels back with the surface it returns to, on each of the two', async () => {
+    const stub = bridge(withTests(), { detail: detail({ level: 'test', status: '' }) })
+    await load(stub)
+    document.getElementById('board-tests')?.click()
+    document.querySelector<HTMLElement>('.board-tests-row')?.click()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.board-detail-back')?.textContent).toBe('← Tests')
+    document.querySelector<HTMLElement>('.board-detail-back')?.click()
+    // The Tests list's own back is the same control drawn from the same
+    // source, so it cannot drift from the detail's.
+    expect(document.querySelector('.board-tests .board-detail-back')?.textContent).toBe('← Board')
+    document.querySelector<HTMLElement>('.board-tests .board-detail-back')?.click()
+    document.querySelector<HTMLElement>('.board-card')?.click()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.board-detail-back')?.textContent).toBe('← Board')
   })
 
   // reason: the tree's test row names a folder the board draws no card for.

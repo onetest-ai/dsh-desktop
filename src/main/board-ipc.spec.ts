@@ -229,6 +229,30 @@ describe('detailFor', () => {
     expect(test.find((one) => one.heading === 'Teardown')?.body).toBe('')
   })
 
+  // reason: `dumpEntity` re-emits a section this level does not own — a
+  // `## Target` that ended up on a task, which is also where a legacy bug's
+  // `steps:` lands — so the prose is on disk and was drawn nowhere. The spec
+  // says such a section is malformed rather than lost and shows up as a
+  // finding; a detail that omitted it hid the only thing that could act on it.
+  it('carries a section the level does not own, marked as a finding', () => {
+    aBoard()
+    put(
+      'campaigns/q3/missions/m1/tasks/t1/workitem.md',
+      '---\nname: T1\nsubtype: task\n---\n\n## Target\n\nShip it.\n\n## Rollout\n\nSlowly.\n',
+    )
+    const sections = detailFor(project, 'campaigns/q3/missions/m1/tasks/t1')!.sections
+    expect(sections.map((one) => one.heading)).toEqual(['Acceptance Criteria', 'Notes', 'Target', 'Rollout'])
+    expect(sections.find((one) => one.heading === 'Target')).toEqual({ heading: 'Target', body: 'Ship it.', stray: true })
+  })
+
+  // reason: the level's own sections are the file working as intended, and a
+  // finding line under every one of them would say nothing.
+  it('marks none of a level’s own sections as a finding', () => {
+    aBoard()
+    const sections = detailFor(project, 'campaigns/q3/missions/m1')!.sections
+    expect(sections.every((one) => one.stray !== true)).toBe(true)
+  })
+
   // reason: a board nobody has converted still reads, so Open file on one of
   // its entities has to hand over the file that is actually there.
   it('names the legacy file for an entity still stored as yaml', () => {

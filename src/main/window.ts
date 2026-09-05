@@ -271,6 +271,23 @@ export function createWindow(columns: Columns): MainWindow {
     event.preventDefault()
   })
 
+  // The other half of the same guard, for the gesture `will-navigate` never
+  // hears: a cmd-click, a middle-click, or a `target="_blank"` — which the
+  // sanitiser keeps — asks for a *window* rather than a navigation, and
+  // Electron's default answer is to make one. That window would carry this
+  // view's preload and none of its chrome.
+  //
+  // Where an http(s) link goes is the renderer's own answer, given here
+  // because the renderer never sees this gesture: the user's links go to the
+  // user's browser. Every other scheme is denied outright rather than passed
+  // on — `shell.openExternal` on a `file:` or a scheme some other app claims
+  // is opening it, and the click path in `board-detail.ts` already refuses
+  // exactly those.
+  pane.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+
   // A page that opens a new window gets the system browser, exactly as the
   // harness view does: this app has one place to put a page, and it is here.
   web.webContents.setWindowOpenHandler(({ url }) => {

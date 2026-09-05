@@ -166,8 +166,15 @@ export interface EntityDetailWire {
   parent?: { folderPath: string; name: string }
   /** The lead paragraph. */
   description: string
-  /** `[{ heading, body }]` in the level's own order, blank ones included so the reader sees the shape. */
-  sections: { heading: string; body: string }[]
+  /**
+   * `[{ heading, body }]` in the level's own order, blank ones included so the reader sees the shape.
+   *
+   * `stray` marks a section this level does not own — modelled elsewhere in the
+   * schema, or modelled nowhere. It is drawn with a finding rather than dropped:
+   * the file is the only place it can be fixed, and a surface that hid it left
+   * the reader nothing to act on.
+   */
+  sections: { heading: string; body: string; stray?: boolean }[]
   criteria: { text: string; done: boolean }[]
   /** Children as rows: tasks, bugs and sub-missions. */
   children: { level: string; folderPath: string; name: string; status: string }[]
@@ -205,7 +212,19 @@ function locate(
 }
 
 /**
- * The level's own sections, paired with what the fields hold under each.
+ * Every heading the schema models, in the order `dumpEntity` writes the unowned ones.
+ *
+ * The same derivation `entity-schema.ts` makes for its own `ALL_HEADINGS`, and
+ * a copy on purpose rather than an import, because that constant is private to
+ * the module that writes files and exporting it would make the detail view a
+ * second caller of a table whose only job is to order a write. What is shared
+ * is the source both derive from — `LEVEL_SECTIONS` — so the two cannot
+ * disagree about which headings exist, only about nothing at all.
+ */
+const ALL_HEADINGS: readonly string[] = [...new Set(Object.values(LEVEL_SECTIONS).flat())]
+
+/**
+ * The sections the file holds, paired with what the fields hold under each.
  *
  * `LEVEL_SECTIONS` and `bodyFor` are the same pair `dumpEntity` writes a file
  * from, so the detail shows exactly the headings the file has — blank ones
@@ -215,16 +234,34 @@ function locate(
  * carries the same items parsed: the position is what tells the surface where
  * to put the checkboxes among the prose.
  *
- * Sections this level does not own but which carry content — a `## Rollout`
- * nobody modelled — follow, so a detail never hides prose the file holds.
+ * Then, in `dumpEntity`'s own order, every section the file carries that this
+ * level does not own — first the ones the schema models and the level does not
+ * (a `## Target` on a task, a `## Steps` on a bug, which is exactly what a
+ * legacy bug's `steps:` converts into), then the ones nobody modelled at all.
+ * Both are marked `stray`, because the store spec says one sentence about both:
+ * a key or a section a level does not own "is malformed rather than lost, and
+ * shows up as a finding". The modelled half used to reach neither list — it
+ * lands in a typed field, never in `extraSections` — so the file kept prose
+ * that the one surface built to read it drew nowhere.
  * @param entity - the entity as the store read it.
  * @returns the sections, in the order the file writes them.
  */
-function sectionsOf(entity: Entity): { heading: string; body: string }[] {
+function sectionsOf(entity: Entity): { heading: string; body: string; stray?: boolean }[] {
   const owned = LEVEL_SECTIONS[entity.level]
-  const out = owned.map((heading) => ({ heading, body: bodyFor(entity.fields, heading) }))
+  const out: { heading: string; body: string; stray?: boolean }[] = owned.map((heading) => ({
+    heading,
+    body: bodyFor(entity.fields, heading),
+  }))
+  // A blank one is not carried, for the reason `dumpEntity` does not write it:
+  // an unowned heading is not an invitation, so an empty one is a finding
+  // about nothing.
+  for (const heading of ALL_HEADINGS) {
+    if (owned.includes(heading)) continue
+    const body = bodyFor(entity.fields, heading)
+    if (body.trim() !== '') out.push({ heading, body, stray: true })
+  }
   for (const section of entity.fields.extraSections ?? []) {
-    out.push({ heading: section.heading, body: section.body })
+    out.push({ heading: section.heading, body: section.body, stray: true })
   }
   return out
 }

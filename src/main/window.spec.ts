@@ -170,6 +170,31 @@ describe('the window\'s views', () => {
     expect(preventDefault).toHaveBeenCalled()
   })
 
+  // reason: `will-navigate` covers an ordinary click and the renderer's own
+  // handler covers the anchors it sees, but a cmd-click, a middle-click and a
+  // `target="_blank"` raise a window-open request instead of either — and
+  // Electron's default for one is to make the window. DOMPurify keeps
+  // `target`, so a `.md` an agent wrote is enough, on the view that holds the
+  // preload reaching the filesystem.
+  it('denies a window opened from the pane, and sends an http link to the browser', async () => {
+    const { shell } = await import('electron')
+    const { createWindow } = await import('./window')
+    const views = createWindow(CLOSED)
+    const open = views.pane.webContents.setWindowOpenHandler as unknown as {
+      mock: { calls: [(details: { url: string }) => { action: string }][] }
+    }
+    const handler = open.mock.calls[0][0]
+    expect(handler({ url: 'https://example.com/rfc' })).toEqual({ action: 'deny' })
+    expect(shell.openExternal).toHaveBeenCalledWith('https://example.com/rfc')
+    // Everything else goes nowhere at all rather than to the system handler:
+    // the renderer's click path already refuses the same schemes, and handing
+    // one to the OS is opening it, not declining to.
+    vi.mocked(shell.openExternal).mockClear()
+    expect(handler({ url: 'file:///etc/passwd' })).toEqual({ action: 'deny' })
+    expect(handler({ url: 'javascript:alert(1)' })).toEqual({ action: 'deny' })
+    expect(shell.openExternal).not.toHaveBeenCalled()
+  })
+
   it('starts with both columns hidden and the harness filling what the rail leaves', async () => {
     const { createWindow } = await import('./window')
     createWindow(CLOSED)

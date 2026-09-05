@@ -1,4 +1,4 @@
-import { type DetailActions, renderDetail, tag } from './board-detail.ts'
+import { backButton, type DetailActions, renderDetail, type Surface, tag } from './board-detail.ts'
 import { BOARD_STATUSES, chipOf, groupBoard, statusLabel, type EntityView, type LaneView } from './board-rows.ts'
 import './bridge.ts'
 import type { BoardViewData, EntityDetailView, SuiteView, TestView } from './bridge.ts'
@@ -86,9 +86,36 @@ let revealed: string | undefined
 type Place =
   | { at: 'columns' }
   | { at: 'tests' }
-  | { at: 'detail'; entity: EntityDetailView; under: 'columns' | 'tests' }
+  | { at: 'detail'; entity: EntityDetailView; under: Surface }
 
 let place: Place = { at: 'columns' }
+
+/**
+ * How many times the panel has been sent somewhere.
+ *
+ * A counter rather than a comparison of `place` values, because two of the
+ * reads that end in a place are one await long and the reader can act inside
+ * that await. `refresh` re-reads the open detail; `openDetail` reads the
+ * entity a row named. Both used to assign `place` unconditionally when the
+ * answer landed, so a back press — or a reveal — that happened in between was
+ * silently undone, and a detail the reader had just closed came back on its
+ * own.
+ *
+ * Every gesture that decides where the panel goes bumps this first, and every
+ * read that is about to decide checks that nothing has bumped it since. The
+ * newest gesture wins, which is the reader's most recent instruction; a read
+ * that lost simply draws nothing, because whoever won has already drawn.
+ */
+let moves = 0
+
+/**
+ * Put the panel on a surface, as a gesture rather than as an assignment.
+ * @param next - where the panel now is.
+ */
+function goTo(next: Place): void {
+  place = next
+  moves += 1
+}
 
 /** What the modal is about to create, or undefined when it is closed. */
 let pending: { level: 'task' | 'bug'; parent: string } | undefined
@@ -320,7 +347,7 @@ const detailActions: DetailActions = {
     // lands back on the list it was picked from, and a card's detail lands
     // on the columns because that is where its card was. Which of the two it
     // is was settled when the detail opened; nothing here has to work it out.
-    if (place.at === 'detail') place = { at: place.under }
+    if (place.at === 'detail') goTo({ at: place.under })
     draw()
   },
   open: (folderPath: string) => {
@@ -348,10 +375,11 @@ const detailActions: DetailActions = {
  * @param into - the panel's one container.
  * @param empty - the line that words an absent board, which this surface has none of.
  * @param entity - the entity `place` says is open, passed rather than read back out of it.
+ * @param under - the surface it was opened over, which is what back says and does.
  */
-function drawDetail(into: HTMLElement, empty: HTMLElement, entity: EntityDetailView): void {
+function drawDetail(into: HTMLElement, empty: HTMLElement, entity: EntityDetailView, under: Surface): void {
   empty.hidden = true
-  into.append(renderDetail(entity, detailActions))
+  into.append(renderDetail(entity, detailActions, under))
 }
 
 /**
@@ -434,8 +462,10 @@ function suiteBlock(suite: SuiteView, depth: number): HTMLElement {
  *
  * A test has no status and so no column, which is exactly why this exists: it
  * is the only way to a test that does not require already knowing the test is
- * there. Its own back, drawn as the detail's is, because the two are the same
- * gesture on the same panel and a reader should not have to learn it twice.
+ * there. Its own back is the detail's own control rather than a copy of it,
+ * because the two are the same gesture on the same panel — and two hard-coded
+ * labels a foot apart is how one of them came to name a surface it did not go
+ * to.
  * @param into - the panel's one container.
  * @param empty - the line that words an absent board, which this surface has none of.
  */
@@ -445,12 +475,8 @@ function drawTests(into: HTMLElement, empty: HTMLElement): void {
   box.className = 'board-tests'
   const head = document.createElement('div')
   head.className = 'board-detail-head'
-  const back = document.createElement('button')
-  back.type = 'button'
-  back.className = 'board-detail-back'
-  back.textContent = '← Board'
-  back.addEventListener('click', () => {
-    place = { at: 'columns' }
+  const back = backButton('columns', () => {
+    goTo({ at: 'columns' })
     draw()
   })
   const title = document.createElement('h2')
@@ -512,12 +538,22 @@ function drawColumns(into: HTMLElement, empty: HTMLElement): void {
  * @returns resolution once the panel has been redrawn.
  */
 async function openDetail(folderPath: string): Promise<void> {
-  const next = await window.pane.readTaskDetail(folderPath)
-  // What back will return to: whatever is on screen now, and for a detail
-  // opened from inside another detail, the surface that one was opened over
-  // — a chain of child rows is still one level in from where it started.
+  // What back will return to: whatever is on screen when the row was pressed,
+  // and for a detail opened from inside another detail, the surface that one
+  // was opened over — a chain of child rows is still one level in from where
+  // it started. Read before the await, not after: by the time the answer lands
+  // the panel may be somewhere else entirely.
   const under = place.at === 'detail' ? place.under : place.at
-  place = next === undefined ? { at: under } : { at: 'detail', entity: next, under }
+  // The press is itself a move, decided now even though where it lands is not
+  // known until the read comes back.
+  moves += 1
+  const mine = moves
+  const next = await window.pane.readTaskDetail(folderPath)
+  // Something newer has sent the panel somewhere since — a reveal, a back, a
+  // second row. That instruction is the reader's latest one and it has already
+  // been drawn; this one is stale.
+  if (mine !== moves) return
+  goTo(next === undefined ? { at: under } : { at: 'detail', entity: next, under })
   if (next === undefined) refusal = `${folderPath} is no longer on the board.`
   draw()
 }
@@ -601,7 +637,7 @@ function draw(): void {
   const here = place
   switch (here.at) {
     case 'detail':
-      drawDetail(into, empty, here.entity)
+      drawDetail(into, empty, here.entity, here.under)
       return
     case 'tests':
       drawTests(into, empty)
@@ -682,7 +718,7 @@ async function create(): Promise<void> {
 }
 
 el('board-tests').addEventListener('click', () => {
-  place = { at: 'tests' }
+  goTo({ at: 'tests' })
   draw()
 })
 
@@ -722,7 +758,7 @@ async function refresh(): Promise<void> {
       // Out of the detail and no further: what it walks out to is the Tests
       // list when that is what it was opened over, which survives the change
       // because it names a destination rather than a path.
-      if (place.at === 'detail') place = { at: place.under }
+      if (place.at === 'detail') goTo({ at: place.under })
     }
     latest = next
     trouble = undefined
@@ -733,9 +769,16 @@ async function refresh(): Promise<void> {
     // could not do.
     const open = place
     if (open.at === 'detail') {
+      // Not a move of its own: a re-read is the panel keeping up with the
+      // files, never the panel deciding where the reader is. So it takes the
+      // count as it stands and gives the surface up if anything moves it while
+      // the entity is being read.
+      const mine = moves
       const again = await window.pane.readTaskDetail(open.entity.folderPath)
-      if (again === undefined) refusal = `${open.entity.folderPath} is no longer on the board.`
-      place = again === undefined ? { at: open.under } : { at: 'detail', entity: again, under: open.under }
+      if (mine === moves) {
+        if (again === undefined) refusal = `${open.entity.folderPath} is no longer on the board.`
+        place = again === undefined ? { at: open.under } : { at: 'detail', entity: again, under: open.under }
+      }
     }
   } catch (error) {
     // Nothing on the other side of the bridge rejects today. Without this it
@@ -778,7 +821,7 @@ window.pane.onReveal((folderPath) => {
     // is the previous click outliving this one, which is what the reader
     // finds when they back out of the detail.
     revealed = undefined
-    place = { at: 'columns' }
+    goTo({ at: 'columns' })
     void openDetail(folderPath)
     document.getElementById('tab-board')?.click()
     return
@@ -789,7 +832,7 @@ window.pane.onReveal((folderPath) => {
   // detail, or the Tests list — is precisely what the reader is being taken
   // off, and leaving one up would scroll and mark a surface it is not on,
   // which is what the tab-forward below exists to prevent one level up.
-  place = { at: 'columns' }
+  goTo({ at: 'columns' })
   draw()
   document.getElementById('tab-board')?.click()
   // Whichever of the three the draw above marked, in document order — the

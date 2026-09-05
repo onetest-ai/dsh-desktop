@@ -87,8 +87,14 @@ export interface EntityDetailView {
   parent?: { folderPath: string; name: string }
   /** The lead paragraph. */
   description: string
-  /** `[{ heading, body }]` in the level's own order, blank ones included so the reader sees the shape. */
-  sections: { heading: string; body: string }[]
+  /**
+   * `[{ heading, body }]` in the level's own order, blank ones included so the reader sees the shape.
+   *
+   * `stray` marks a section this level does not own — modelled elsewhere in the
+   * schema, or modelled nowhere. It is drawn with a finding rather than
+   * dropped: the file is the only place it can be fixed.
+   */
+  sections: { heading: string; body: string; stray?: boolean }[]
   criteria: { text: string; done: boolean }[]
   /** Children as rows: tasks, bugs and sub-missions. */
   children: { level: string; folderPath: string; name: string; status: string }[]

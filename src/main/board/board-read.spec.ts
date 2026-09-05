@@ -87,7 +87,7 @@ describe('readBoard', () => {
   })
 
   // reason: a board whose columns are whatever anyone typed is not a board.
-  it('reports a status that is not one of the six', () => {
+  it('reports a status that is not one of the five', () => {
     put('campaigns/q3', 'workitem.md', '---\nname: Q3\nstatus: inprogress\n---\n')
     const board = readBoard(project)
     expect(board.findings.some((f) => f.says.includes('inprogress'))).toBe(true)

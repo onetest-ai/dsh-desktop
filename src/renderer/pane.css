@@ -1566,8 +1566,21 @@ body {
 }
 
 /* A table is why the file format changed, so it is the one thing here with
-   borders: a Steps table drawn without them is the wall of pipes again. */
+   borders: a Steps table drawn without them is the wall of pipes again.
+
+   And the one thing here that can be wider than the measure the comment on
+   `.board-detail` claims nothing is: a test's Test Data table is exactly the
+   case the format change was made for, and columns do not wrap. `display:
+   block` is what gives it a scroll box of its own — a `table` box ignores
+   `overflow` — so the width stays inside the panel instead of adding to the
+   board's own horizontal scroll. `width: max-content` keeps the cells sized to
+   their content rather than stretched to the block's width, which is what a
+   table laid out as a block would otherwise do. */
 .board-detail-prose table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
 }
 

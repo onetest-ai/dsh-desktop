@@ -151,7 +151,16 @@ export function createEntity(project: string, level: EntityLevel, parentFolder: 
     if (resolvedSuite === undefined) {
       return { ok: false, reason: `${suite} is not inside this project's board.` }
     }
-    const resolvedTestsRoot = resolveInBoard(project, TESTS_DIR)!
+    // Asked rather than asserted. `resolveInBoard` answers nothing for a path
+    // that resolves to the board root, and a `tests` symlinked to that root is
+    // exactly such a path — the one input on this function for which the
+    // container does not resolve while the suite still does. Refused by its
+    // own name, because "the suite is not inside the tests container" would
+    // send whoever reads it to look at a suite that is fine.
+    const resolvedTestsRoot = resolveInBoard(project, TESTS_DIR)
+    if (resolvedTestsRoot === undefined) {
+      return { ok: false, reason: `${TESTS_DIR} is not inside this project's board.` }
+    }
     if (resolvedSuite !== resolvedTestsRoot && !resolvedSuite.startsWith(resolvedTestsRoot + sep)) {
       return { ok: false, reason: `${parentFolder} is not inside the tests container.` }
     }
@@ -173,6 +182,14 @@ export function createEntity(project: string, level: EntityLevel, parentFolder: 
     }
     // The odd segments, not a filter on the words: a campaign legitimately
     // slugged `missions` would otherwise be dropped from its children's paths.
+    //
+    // The caller's raw string, unlike the test branch above, which slices the
+    // resolved suite for exactly this reason. It is safe here and the reason is
+    // not local: `findEntity` has already matched this string exactly against
+    // the board's own canonical path, so `./campaigns/q3/missions/m1` and
+    // `campaigns/q3//missions/m1` are both refused two lines up — before any
+    // segment is counted. Move that lookup and this becomes the same bug the
+    // test branch had.
     parts = parentFolder.split('/').filter((_, at) => at % 2 === 1)
   }
   const under =
@@ -236,7 +253,7 @@ export function updateEntity(project: string, folderPath: string, patch: Partial
  * this module writes one — no parent is touched, no child is cascaded to.
  * @param project - the project's root directory.
  * @param folderPath - the entity to move.
- * @param status - one of the six the board knows.
+ * @param status - one of the five the board knows.
  * @returns the folder path, or why nothing moved.
  */
 export function setStatus(project: string, folderPath: string, status: string): WriteResult {
@@ -340,8 +357,15 @@ export function tickCriterion(project: string, folderPath: string, index: number
 export function trashEntity(project: string, folderPath: string): WriteResult {
   const found = open(project, folderPath)
   if (!found.ok) return found
-  const parent = folderPath.slice(0, folderPath.lastIndexOf('/'))
-  const slug = folderPath.slice(folderPath.lastIndexOf('/') + 1)
+  // Split rather than sliced around `lastIndexOf`, which answers `-1` for a
+  // path with no separator in it and turns that into a parent of the path
+  // minus its last character and a slug of the whole path — a destination
+  // nobody meant, under a name nobody wrote. Nothing reaches it today, because
+  // `open` matches the string exactly against a board path and every one of
+  // those has a separator; this way there is no case to reach.
+  const parts = folderPath.split('/')
+  const slug = parts.pop() ?? ''
+  const parent = parts.join('/')
   const trashRoot = join(boardRoot(project), TRASH_DIR)
   // resolveInBoard refuses the trash outright, so it never gets a chance to
   // catch this the way it catches every other destination — the boundary has

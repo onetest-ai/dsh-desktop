@@ -1,5 +1,34 @@
 <!doctype html>
 <meta charset="utf-8">
+<!--
+  What this page may fetch, and from where.
+
+  It is the page that holds the preload reaching the filesystem, and since the
+  board's detail it renders markdown an agent wrote — sanitised, but a
+  sanitiser keeps an `<img src>`, so opening a card used to be enough to make
+  the privileged page issue a request to whatever URL a file named. `default-src
+  'none'` is the answer to that: nothing remote loads here at all, and every
+  directive below names only this app's own two hosts.
+
+  Each one is here because something the pane actually does needs it, and
+  nothing is wider than that thing:
+  - `script-src 'self'` — `pane-bundle.js`, the only script this page has.
+  - `worker-src 'self'` — Monaco's language services are workers, fetched from
+    `app://pane/*.worker.js`; without this the editor loses every one of them,
+    which is the whole reason this page is served from a scheme and not a file.
+  - `style-src` needs `'unsafe-inline'` — Monaco injects a `<style>` element
+    and sets `element.style` on nearly everything it draws. A nonce cannot
+    cover the second of those.
+  - `img-src` needs `data:` for the squiggles and the empty-editor art that
+    `pane-bundle.css` carries as data URIs, and `app://project` for a picture
+    the editor column is showing out of the open project.
+  - `font-src 'self'` — the codicon face esbuild emits beside the bundle.
+  - `media-src` / `object-src` — the same project files, as video, audio, or a
+    PDF in an `<embed>`.
+  - `connect-src 'self'` — nothing here fetches today; main is reached over IPC
+    through the preload, which is not a fetch and is not governed here.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' app://project data:; font-src 'self'; media-src 'self' app://project; object-src app://project; connect-src 'self'; base-uri 'none'; form-action 'none'">
 <title>Editor</title>
 <!-- The harness's own tokens, vendored; see vendor/dsh-theme/README.md. -->
 <link rel="stylesheet" href="theme/base.css">

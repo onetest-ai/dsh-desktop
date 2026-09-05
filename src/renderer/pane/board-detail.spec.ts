@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { type DetailActions, renderDetail } from './board-detail.ts'
+import { type DetailActions, renderDetail, type Surface } from './board-detail.ts'
 import type { EntityDetailView } from './bridge.ts'
 
 /**
@@ -55,10 +55,11 @@ function actions(): DetailActions & { calls: unknown[][] } {
  * Draw one detail into the document, so it can be queried as the panel's is.
  * @param view - the entity to draw.
  * @param on - the recording actions.
+ * @param under - the surface back returns to; the columns unless a case is about it.
  */
-function show(view: EntityDetailView, on: DetailActions): void {
+function show(view: EntityDetailView, on: DetailActions, under: Surface = 'columns'): void {
   document.body.innerHTML = ''
-  document.body.append(renderDetail(view, on))
+  document.body.append(renderDetail(view, on, under))
 }
 
 describe('the detail view', () => {
@@ -87,6 +88,17 @@ describe('the detail view', () => {
     show(detail(), on)
     document.querySelector<HTMLElement>('.board-detail-back')?.click()
     expect(on.calls).toEqual([['back']])
+  })
+
+  // reason: the label used to be a constant here, because `back` is a callback
+  // and a callback cannot be asked where it goes — so a test opened from the
+  // Tests list offered "← Board" and went to Tests. The destination is the
+  // panel's own state, so it has to arrive with the entity.
+  it('labels back with the surface it was told back returns to', () => {
+    show(detail(), actions(), 'tests')
+    expect(document.querySelector('.board-detail-back')?.textContent).toBe('← Tests')
+    show(detail(), actions(), 'columns')
+    expect(document.querySelector('.board-detail-back')?.textContent).toBe('← Board')
   })
 
   // reason: this is the whole reason the file format changed. A test's Steps
@@ -293,10 +305,58 @@ describe('the detail view', () => {
     expect(document.querySelector('.board-detail-tick')).toBeNull()
   })
 
+  // reason: a test's Test Data table is the case the whole format change was
+  // made for, and it can be wider than the detail's 68ch measure — which the
+  // CSS above it asserts nothing is. Without a scroll box of its own it widens
+  // the panel's own horizontal scroll instead. jsdom lays nothing out, so the
+  // stylesheet is the only place a test can read this.
+  it('gives a table in the prose its own horizontal scroll', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const css = readFileSync(join(import.meta.dirname, '..', 'pane.css'), 'utf8')
+    const match = css.match(/\.board-detail-prose table\s*\{([^}]*)\}/)
+    expect(match).not.toBeNull()
+    expect(match?.[1]).toMatch(/overflow-x\s*:\s*auto/)
+    // `overflow` does nothing on a `table` box, so the pair is the fix and
+    // either half alone is not.
+    expect(match?.[1]).toMatch(/display\s*:\s*block/)
+  })
+
   // reason: the level that does own the section draws them there and only
   // there — a second copy under the finding would read as two lists.
   it('draws no stray block when the level owns the section', () => {
     show(detail(), actions())
     expect(document.querySelector('.board-detail-stray')).toBeNull()
+  })
+
+  // reason: `## Target` on a task is written back by every save and was drawn
+  // nowhere, so the file held prose the only surface built to read it hid.
+  // The spec's rule for a section a level does not own is the rule for stray
+  // criteria one field over: reported, never repaired and never hidden.
+  it('draws a section the level does not own under a finding, with its prose', () => {
+    show(
+      detail({
+        criteria: [],
+        sections: [
+          { heading: 'Notes', body: '' },
+          { heading: 'Target', body: 'Ship **it**.', stray: true },
+        ],
+      }),
+      actions(),
+    )
+    const finding = document.querySelector('.board-detail-finding')
+    expect(finding?.textContent).toContain('Target')
+    expect(finding?.textContent).toContain('task')
+    // The prose is still prose: it is the content the reader came for, and a
+    // finding that showed only the heading would name a problem and hide it.
+    expect(document.querySelector('.board-detail-prose strong')?.textContent).toBe('it')
+  })
+
+  // reason: the finding is about where the section sits, so it goes with the
+  // section rather than at the foot of the surface — and the level's own
+  // sections carry none, or every heading would read as a complaint.
+  it('draws no finding beside the level’s own sections', () => {
+    show(detail({ criteria: [], sections: [{ heading: 'Notes', body: 'Fine.' }] }), actions())
+    expect(document.querySelector('.board-detail-finding')).toBeNull()
   })
 })

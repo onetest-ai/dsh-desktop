@@ -12,7 +12,7 @@ import { openMarkdownLink, renderMarkdown } from './markdown.ts'
  * other than the one being drawn — a child, a link, the parent above it.
  */
 export interface DetailActions {
-  /** Leave the detail and put the columns back. */
+  /** Leave the detail for the surface it was opened over, which `renderDetail` is told separately. */
   back: () => void
   /** Open another entity's detail: a child row, a link row, the parent line. */
   open: (folderPath: string) => void
@@ -24,6 +24,46 @@ export interface DetailActions {
   tick: (folderPath: string, index: number, done: boolean) => void
   /** Send a link in the prose where the user's links go, which is not here. */
   openLink: (url: string) => void
+}
+
+/**
+ * The surface a back control returns to.
+ *
+ * The two the panel can leave a detail onto, named rather than described: the
+ * columns a card was on, or the Tests list a test was picked from. It is the
+ * renderer's own state and not the entity's, which is why it arrives beside
+ * `EntityDetailView` rather than inside it — main has no opinion about where
+ * the reader came from.
+ */
+export type Surface = 'columns' | 'tests'
+
+/**
+ * What back says, per surface.
+ *
+ * One table, read by the detail's control and by the Tests list's own, because
+ * the two are the same gesture on the same panel and they were two hard-coded
+ * strings that had already drifted: a test opened from Tests offered "← Board"
+ * and went to Tests.
+ */
+const BACK_LABEL: Record<Surface, string> = { columns: '← Board', tests: '← Tests' }
+
+/**
+ * The control that leaves a surface, labelled with where it goes.
+ *
+ * Exported because the Tests destination draws one too, and a second copy of
+ * five lines is a second place for the label and the class to drift from what
+ * the stylesheet and this table say.
+ * @param to - the surface it returns to.
+ * @param go - what pressing it does.
+ * @returns the control, ready to append.
+ */
+export function backButton(to: Surface, go: () => void): HTMLElement {
+  const back = document.createElement('button')
+  back.type = 'button'
+  back.className = 'board-detail-back'
+  back.textContent = BACK_LABEL[to]
+  back.addEventListener('click', go)
+  return back
 }
 
 /**
@@ -142,17 +182,13 @@ function rowFor(name: string, note: string, failing: boolean, go: () => void): H
  * would be a dead end rather than a place.
  * @param detail - the entity being drawn.
  * @param on - what the surface can do.
+ * @param under - the surface back returns to, which only the panel knows.
  * @returns the header, ready to append.
  */
-function headFor(detail: EntityDetailView, on: DetailActions): HTMLElement {
+function headFor(detail: EntityDetailView, on: DetailActions, under: Surface): HTMLElement {
   const head = document.createElement('div')
   head.className = 'board-detail-head'
-  const back = document.createElement('button')
-  back.type = 'button'
-  back.className = 'board-detail-back'
-  back.textContent = '← Board'
-  back.addEventListener('click', on.back)
-  head.append(back)
+  head.append(backButton(under, on.back))
   const title = document.createElement('h2')
   title.className = 'board-detail-title'
   title.textContent = detail.name
@@ -277,6 +313,25 @@ function strayCriteriaFor(detail: EntityDetailView): HTMLElement | undefined {
 }
 
 /**
+ * The line that says a section is in the wrong place.
+ *
+ * `strayCriteriaFor`'s sentence, one field over and for the same reason: the
+ * board's rule for malformed data is that it is reported rather than repaired
+ * or hidden, and the file is the only place it can be fixed. The prose itself
+ * still follows — a finding that named the heading and swallowed what was
+ * under it would hide the thing it is complaining about.
+ * @param level - what the entity is, since that is what does not own the section.
+ * @param heading - the section that ended up here.
+ * @returns the line, ready to append.
+ */
+function sectionFinding(level: string, heading: string): HTMLElement {
+  const says = document.createElement('p')
+  says.className = 'board-detail-finding'
+  says.textContent = `A ${level} has no ${heading} section, but this file has one. Open the file to move or remove it.`
+  return says
+}
+
+/**
  * Everything that validates this workitem, or — for a test — everything it
  * validates.
  *
@@ -334,12 +389,16 @@ function linksFor(detail: EntityDetailView, on: DetailActions): HTMLElement | un
  * document rather than only the parts somebody has filled in.
  * @param detail - the entity, read the same way the board was.
  * @param on - what the surface can do.
+ * @param under - the surface back returns to. Passed in rather than assumed,
+ *   because it is the one thing the detail says that lives in the panel's own
+ *   state and not in the entity: `back` is a callback and a callback cannot be
+ *   asked where it goes, so a label written here could only ever guess.
  * @returns the detail, ready to put in the panel.
  */
-export function renderDetail(detail: EntityDetailView, on: DetailActions): HTMLElement {
+export function renderDetail(detail: EntityDetailView, on: DetailActions, under: Surface): HTMLElement {
   const box = document.createElement('section')
   box.className = 'board-detail'
-  box.append(headFor(detail, on))
+  box.append(headFor(detail, on, under))
   if (detail.parent !== undefined) {
     const line = document.createElement('p')
     line.className = 'board-detail-parent'
@@ -360,6 +419,10 @@ export function renderDetail(detail: EntityDetailView, on: DetailActions): HTMLE
       box.append(criteriaFor(detail, on))
       continue
     }
+    // A section this level does not own carries no blank case: main sends it
+    // only when it has content, since a heading no level asked for is not an
+    // invitation to fill anything in.
+    if (section.stray === true) box.append(sectionFinding(detail.level, section.heading))
     box.append(section.body.trim() === '' ? blankLine() : prose(section.body, on))
   }
   const stray = strayCriteriaFor(detail)

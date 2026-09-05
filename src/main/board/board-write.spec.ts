@@ -476,6 +476,21 @@ describe('creating a test', () => {
     expect(createEntity(project, 'test', 'tests/', 'Other')).toEqual({ ok: true, folderPath: 'tests/other' })
   })
 
+  // reason: the one non-null assertion on this path that could actually be
+  // undefined — `resolveInBoard` answers nothing for a path that resolves to
+  // the board root, which is exactly what `tests` symlinked to that root is.
+  // The suite still resolves (it is a real directory under the root), so the
+  // container is the only thing missing, and the refusal has to say so: told
+  // instead that the suite "is not inside the tests container", an agent would
+  // go looking at a suite that is fine.
+  it('refuses by name when the tests container itself does not resolve', () => {
+    rmSync(join(project, '.dsh', 'tasks', 'tests'), { recursive: true, force: true })
+    mkdirSync(join(project, '.dsh', 'tasks', 'campaigns'), { recursive: true })
+    symlinkSync(join(project, '.dsh', 'tasks'), join(project, '.dsh', 'tasks', 'tests'))
+    const out = createEntity(project, 'test', 'tests/campaigns', 'Login')
+    expect(out).toEqual({ ok: false, reason: "tests is not inside this project's board." })
+  })
+
   // reason: the folder handed back must be the one board_read reports, or the
   // agent's next board_link call for a test it just created is refused.
   it('creates a test through a symlinked suite at the address board_read will report', () => {

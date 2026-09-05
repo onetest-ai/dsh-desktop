@@ -145,7 +145,7 @@ A write that fails reports the reason the store gave, on the surface that asked 
 
 The pure parts are the ones with the bugs in them, and they test without Electron:
 
-- **Grouping** — turning a `Board` into campaigns, lanes and columns: a mission with no work, a campaign whose only children are bugs, a bug under a campaign versus one under a mission, and an entity whose status is not one of the six.
+- **Grouping** — turning a `Board` into campaigns, lanes and columns: a mission with no work, a campaign whose only children are bugs, a bug under a campaign versus one under a mission, and an entity whose status is not one of the five.
 - **The tree's rows** — nesting, collapse, and what a row shows.
 - **The board's drop** — which entity, which status, and that a refused write puts the card back.
 - **Main's channels**, each gated against the open project, as every board channel already is.
