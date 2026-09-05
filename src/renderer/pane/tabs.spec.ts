@@ -30,3 +30,18 @@ describe('selectTab', () => {
     }
   })
 })
+
+describe('the board tab', () => {
+  it('is one of the pane’s tabs', () => {
+    expect([...PANE_TABS]).toEqual(['editor', 'web', 'board'])
+  })
+
+  // reason: the web view is a WebContentsView stacked over the pane's bounds,
+  // not an element in this document — so any tab but Web must hide it, or it
+  // covers whatever took its place.
+  it('hides the web view when the board is shown', () => {
+    const shown: boolean[] = []
+    selectTab('board', { select: () => {}, reveal: () => {}, showWebView: (visible) => shown.push(visible) })
+    expect(shown).toEqual([false])
+  })
+})

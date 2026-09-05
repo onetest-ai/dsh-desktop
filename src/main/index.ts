@@ -60,6 +60,10 @@ import { setGitPath } from './git-run'
 import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
 import { boardFor, watchBoard } from './board-ipc'
 import { BOARD_DIR, resolveInBoard } from './board/board-paths'
+// `setStatus` is imported under a name of its own: this file already has one,
+// which is about the window's state rather than an entity's.
+import { addCriterion, createEntity, setStatus as setEntityStatus, trashEntity, updateEntity, type WriteResult } from './board/board-write'
+import { ENTITY_LEVELS, type EntityLevel } from './board/entity-schema'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
 import { loadableUrl } from './view-tools'
@@ -2695,6 +2699,62 @@ if (!app.requestSingleInstanceLock()) {
       if (dir === undefined) return
       if (!['workitem.yaml', 'bug.yaml', 'test.yaml'].includes(file)) return
       openInPane(project, join(BOARD_DIR, folderPath, file))
+    })
+    // The board's three writes. Every one of them goes to the store, which
+    // resolves the folder inside the board before it touches anything: a path
+    // from a renderer is a request, not evidence of where it points. Each then
+    // tells both views to read themselves again, since the write is exactly
+    // what made what they are showing stale.
+    ipcMain.handle('tasks:create', (_event, level: string, parent: string, name: string, second: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      if (!(ENTITY_LEVELS as readonly string[]).includes(level)) return { ok: false, reason: `"${level}" is not a level.` }
+      const made = createEntity(project, level as EntityLevel, parent, name)
+      if (!made.ok) return made
+      // The second field, when it was filled in: the criterion that says when
+      // a task is done, or what happened for a bug. A failure here is still
+      // reported — the entity exists either way, and a silent one would leave
+      // the user believing they had written something they had not.
+      let out: WriteResult = made
+      if (second !== '') {
+        out = level === 'bug' ? updateEntity(project, made.folderPath, { description: second })
+          : addCriterion(project, made.folderPath, second)
+      }
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
+    })
+    ipcMain.handle('tasks:set-status', (_event, folderPath: string, status: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      const out = setEntityStatus(project, folderPath, status)
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
+    })
+    // Trash asks first, and it asks here, in main, where a renderer cannot
+    // answer for itself — the way Discard in the git panel does. The panel
+    // never asks a second time: two prompts for one press teach a user to
+    // click through both.
+    ipcMain.handle('tasks:trash', async (_event, folderPath: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      if (views === undefined || views.window.isDestroyed()) return { ok: false, reason: '' }
+      if (resolveInBoard(project, folderPath) === undefined) {
+        return { ok: false, reason: `${folderPath} is not inside this project's board.` }
+      }
+      const { response } = await dialog.showMessageBox(views.window, {
+        type: 'warning',
+        buttons: ['Delete', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        message: `Delete ${folderPath.split('/').pop() ?? folderPath}?`,
+        detail: 'It moves to the board’s trash, with everything under it. Nothing is removed from disk.',
+      })
+      // An empty reason: the user answered, so there is nothing to report back
+      // to them about it.
+      if (response !== 0) return { ok: false, reason: '' }
+      const out = trashEntity(project, folderPath)
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
     })
     // The panel's own read. Nothing about git reaches the renderer but this
     // result: the parsing, the spawning, and the serialisation are all here.

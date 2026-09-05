@@ -65,6 +65,18 @@ export interface BoardViewData {
   findings: { folderPath: string; says: string }[]
 }
 
+/**
+ * What one board write reports back.
+ *
+ * The folder path the store answers with is dropped on the way across: the
+ * board redraws from a fresh read rather than from a write's answer, so a
+ * path here would be a second, staler description of where the entity is.
+ * A refusal carries a reason to show — except when the user answered a
+ * confirmation with Cancel, where the reason is empty because they already
+ * know why nothing happened.
+ */
+export type BoardResult = { ok: true } | { ok: false; reason: string }
+
 /** What an operation on one entry reports back. */
 export type OpResult = { ok: true; relative: string } | { ok: false; reason: string }
 
@@ -151,6 +163,15 @@ declare global {
       // the tree does not — the renderer holds a folder path and nothing else.
       openTaskFile(folderPath: string, file: string): void
       onReveal(listener: (folderPath: string) => void): void
+      // The board's three writes. Each answers with what the store did, and
+      // each leaves the redraw to the `tasks:changed` main sends afterwards:
+      // the panel never moves a card on its own say-so, because the file is
+      // the only thing that knows where a card is.
+      createBoardEntity(level: string, parent: string, name: string, second: string): Promise<BoardResult>
+      setBoardStatus(folderPath: string, status: string): Promise<BoardResult>
+      // Main confirms this one before the store is touched, the way
+      // `git:discard` does, so the panel does not ask a second time.
+      trashBoardEntity(folderPath: string): Promise<BoardResult>
       askTheme(): void
       onTheme(listener: (dark: boolean) => void): void
     }

@@ -131,6 +131,13 @@ contextBridge.exposeInMainWorld('pane', {
   onReveal: (listener: (folderPath: string) => void) => {
     ipcRenderer.on('tasks:reveal', (_event, folderPath: string) => listener(folderPath))
   },
+  // The board's three writes. Invokes, unlike the reveal above: each answers
+  // whether it happened, and a board that assumed it had would be showing a
+  // status that is not in the file.
+  createBoardEntity: (level: string, parent: string, name: string, second: string) =>
+    ipcRenderer.invoke('tasks:create', level, parent, name, second),
+  setBoardStatus: (folderPath: string, status: string) => ipcRenderer.invoke('tasks:set-status', folderPath, status),
+  trashBoardEntity: (folderPath: string) => ipcRenderer.invoke('tasks:trash', folderPath),
   onShowDiff: (listener: (root: string, relative: string, proposed: string) => void) => {
     ipcRenderer.on('pane:diff', (_event, root: string, relative: string, proposed: string) =>
       listener(root, relative, proposed),

@@ -1088,3 +1088,361 @@ body {
   font-weight: 600;
 }
 
+
+/*
+ * The board's tree, in the side column.
+ *
+ * It borrows the file tree's `.row`, `.twisty` and `.name` for its layout,
+ * and adds only what a board row has that a file row does not: a status, and
+ * a count of what is through. Both are drawn as the git panel's tags are, so
+ * the two side columns read as one surface.
+ */
+.tree-row {
+  gap: 6px;
+}
+
+.tree-twisty {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* The status, as the file says it. Dimmed and small: it qualifies the name
+   beside it rather than competing with it, the way `.repo-branch` does. */
+.tree-status {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* A status the board has no column for. Amber rather than red: the file is
+   readable and the row is real — it is the word that is wrong, and it is the
+   user's to correct rather than a failure of this app's. */
+.tree-status-unknown {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--dsh-git-modified);
+  color: var(--dsh-git-modified);
+}
+
+/* How much of a container is through. Last in the row, after the status, and
+   the same size as the section counts in the git panel. */
+.tree-count {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A test carries a count and no status, so the count takes the place the
+   status would have had rather than sitting against the name. */
+.tree-row > .tree-name + .tree-count {
+  margin-left: auto;
+}
+
+/*
+ * The board itself, in the editor column.
+ *
+ * One campaign per group, one lane per mission, and six columns per lane.
+ * The columns scroll sideways inside their own lane rather than the panel
+ * scrolling as a whole: the lane's title has to stay readable while its far
+ * columns are being looked at, and a panel-wide scroll takes it away.
+ */
+.board-group {
+  margin-bottom: 14px;
+}
+
+.board-group-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.board-lane {
+  margin-bottom: 10px;
+  padding: 6px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 8px;
+}
+
+/* The lane the tree asked for. A ring rather than a fill, so the cards inside
+   it are still read against the panel's own background. */
+.board-lane-revealed {
+  box-shadow: inset 0 0 0 2px var(--dsw-alias-interactive-primary, currentColor);
+}
+
+.board-lane-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.board-lane-title {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The lane's own status, which a bug lane does not have. Drawn as the tree's
+   status is, since it says the same thing about the same entity. */
+.board-lane-status {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+/* Creates into this lane and no other, which is what makes it need no picker.
+   Sized and coloured as the tree column's own actions are. */
+.board-lane-add {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.board-lane-add:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.board-columns {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  overflow-x: auto;
+}
+
+/* A fixed width, so an empty column is as wide as a full one: a column that
+   shrank to nothing when its work moved on would stop being a place work can
+   be put back into. */
+.board-column {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  flex-direction: column;
+  width: 140px;
+  min-height: 52px;
+  padding: 4px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-overlay);
+}
+
+.board-column-title {
+  margin: 0 0 2px;
+  padding: 0 2px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+/* The card and its delete share a box so the delete can sit on the card's
+   corner without being inside the card's own button. */
+.board-card-wrap {
+  position: relative;
+}
+
+.board-card {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  width: 100%;
+  padding: 5px 6px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 6px;
+  background: var(--dsw-alias-surface-primary, transparent);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-card:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.board-card-name {
+  overflow: hidden;
+  flex: 1 1 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A bug says so on its face: it sits in the same columns as the work around
+   it, and nothing else about the card would tell them apart. */
+.board-card-kind {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--dsh-git-deleted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.board-card-criteria {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* What the tests that prove this card say. Green while everything holds, and
+   red the moment one does not — the failing one is what is worth seeing from
+   across a board. */
+.board-chip {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--dsh-git-added);
+  font-size: 10px;
+}
+
+.board-chip-failing {
+  color: var(--dsh-git-deleted);
+}
+
+/* Revealed by a right-click on the card and hidden again by the next redraw.
+   Over the card's corner rather than in its row, so it never takes width from
+   the name. */
+.board-card-delete {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsh-git-deleted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/*
+ * The create modal.
+ *
+ * The backdrop takes no pointer events at all: it cannot be clicked through,
+ * and it cannot be clicked on either. A click outside the form is a gesture
+ * with no meaning here, which is the point — the modal is closed by Cancel
+ * and by its close control, and losing a half-typed task to a stray click is
+ * what stops someone trusting a board.
+ */
+.board-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--dsw-alias-bg-mask-drop);
+  pointer-events: none;
+}
+
+.board-modal-form {
+  display: flex;
+  gap: 8px;
+  flex-direction: column;
+  width: 260px;
+  padding: 12px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-overlay);
+  pointer-events: auto;
+}
+
+.board-modal-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.board-modal-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.board-modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.board-modal-close:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.board-modal-field {
+  display: flex;
+  gap: 3px;
+  flex-direction: column;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.board-modal-field input {
+  padding: 4px 6px;
+  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-radius: 6px;
+  background: var(--dsw-alias-surface-primary, transparent);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
+/* Why nothing was created, said where the name that failed still is. */
+.board-modal-error {
+  margin: 0;
+  color: var(--dsh-git-deleted);
+  font-size: 11px;
+}
+
+.board-modal-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.board-modal-button {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}

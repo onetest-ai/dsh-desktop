@@ -12,6 +12,7 @@
   <nav class="tabs" role="tablist" aria-label="Editor column">
     <button type="button" role="tab" id="tab-editor" aria-controls="panel-editor" aria-selected="true" class="tab">Editor</button>
     <button type="button" role="tab" id="tab-web" aria-controls="panel-web" aria-selected="false" tabindex="-1" class="tab">Web</button>
+    <button type="button" role="tab" id="tab-board" aria-controls="panel-board" aria-selected="false" tabindex="-1" class="tab">Board</button>
     <span class="tab-spacer"></span>
     <button type="button" id="close-editor" class="tab-close" aria-label="Close the editor" title="Close">✕</button>
   </nav>
@@ -39,6 +40,32 @@
       <button type="button" id="web-forward" class="chrome" aria-label="Forward" title="Forward">›</button>
       <button type="button" id="web-reload" class="chrome" aria-label="Reload" title="Reload">⟳</button>
       <input id="web-url" type="text" spellcheck="false" autocomplete="off" aria-label="Address" placeholder="example.com">
+    </div>
+  </section>
+  <!-- The board itself, unlike the web page above: a panel of this document,
+       drawn from the same read the tree in the side column uses. -->
+  <section id="panel-board" role="tabpanel" aria-labelledby="tab-board" class="panel">
+    <p class="empty" id="board-empty" hidden></p>
+    <p class="git-note" id="board-note" role="status" hidden></p>
+    <div id="board-groups"></div>
+    <!-- Closed by its own controls and by nothing else; see the spec's
+         "Creating something opens a modal". -->
+    <div id="board-modal" class="board-modal" role="dialog" aria-modal="true" aria-labelledby="board-modal-title" hidden>
+      <form class="board-modal-form" id="board-modal-form">
+        <div class="board-modal-head">
+          <p class="board-modal-title" id="board-modal-title"></p>
+          <!-- An ordinary button, not a backdrop or an Escape handler: a
+               keyboard user leaves the way everyone else does. -->
+          <button type="button" id="board-modal-close" class="board-modal-close" aria-label="Close">✕</button>
+        </div>
+        <label class="board-modal-field"><span>Name</span><input type="text" id="board-modal-name"></label>
+        <label class="board-modal-field"><span id="board-modal-second-label"></span><input type="text" id="board-modal-second"></label>
+        <p class="board-modal-error" id="board-modal-error" role="status" hidden></p>
+        <div class="board-modal-actions">
+          <button type="button" id="board-modal-cancel" class="board-modal-button">Cancel</button>
+          <button type="submit" id="board-modal-create" class="board-modal-button">Create</button>
+        </div>
+      </form>
     </div>
   </section>
 </main>
