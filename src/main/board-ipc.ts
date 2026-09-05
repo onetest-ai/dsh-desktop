@@ -257,6 +257,12 @@ function sectionsOf(entity: Entity): { heading: string; body: string; stray?: bo
   // about nothing.
   for (const heading of ALL_HEADINGS) {
     if (owned.includes(heading)) continue
+    // Except the criteria, which travel as `criteria` and are reported by the
+    // detail's own stray block: sent as a section too, the view would draw
+    // them as the checkboxes a level that owns them gets — a control the store
+    // is guaranteed to refuse — and the block that says so would stand down,
+    // since it defers to any Acceptance Criteria section in the list.
+    if (heading === 'Acceptance Criteria') continue
     const body = bodyFor(entity.fields, heading)
     if (body.trim() !== '') out.push({ heading, body, stray: true })
   }
