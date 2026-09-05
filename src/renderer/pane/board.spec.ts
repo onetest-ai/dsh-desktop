@@ -258,6 +258,35 @@ describe('the board', () => {
     expect(stub.calls).toContainEqual(['trash', 'campaigns/q3/missions/m1/tasks/t1'])
   })
 
+  // reason: main answers a cancelled confirmation with an empty reason, the
+  // way `git:discard` does, and an empty reason is not a refusal — it must
+  // not blank the note or bury the findings count under it.
+  it('leaves the findings line alone when a delete is cancelled', async () => {
+    const stub = bridge(oneMission({ findings: [{ folderPath: 'campaigns/q3', says: 'bad' }] }), {
+      trash: { ok: false, reason: '' },
+    })
+    await load(stub)
+    const card = document.querySelector<HTMLElement>('.board-card')
+    card?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))
+    document.querySelector<HTMLElement>('.board-card-delete')?.click()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    const note = document.getElementById('board-note')
+    expect(note?.hidden).toBe(false)
+    expect(note?.textContent).toContain('1')
+  })
+
+  // reason: same cancel, but on a board with no findings — the note has
+  // nothing to say and must stay hidden rather than show a blank line.
+  it('leaves the note hidden when a delete is cancelled on a clean board', async () => {
+    const stub = bridge(oneMission(), { trash: { ok: false, reason: '' } })
+    await load(stub)
+    const card = document.querySelector<HTMLElement>('.board-card')
+    card?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))
+    document.querySelector<HTMLElement>('.board-card-delete')?.click()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.getElementById('board-note')?.hidden).toBe(true)
+  })
+
   // reason: the board cannot show a finding against the entity it names — a
   // finding's entity is by definition not on the board — so it says how many
   // there are and sends the reader to the tree, which can.

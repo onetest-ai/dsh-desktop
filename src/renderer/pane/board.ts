@@ -246,17 +246,27 @@ function laneFor(lane: LaneView): HTMLElement {
  * back the moment the refusal is cleared. The findings themselves are not
  * listed here: a file the board could not read is an entity that is not on
  * the board, so there is no card to hang it on — the tree has the row.
+ *
+ * An empty refusal is not a refusal: main sends one when the user answered a
+ * confirmation with Cancel, the way `git:discard` already does, and the git
+ * panel's own `say` treats it the same way — there is nothing to tell the
+ * user that they do not already know, so the board falls back to the count
+ * rather than blanking the line.
  */
 function drawNote(): void {
   const note = el('board-note')
-  if (refusal !== undefined) {
+  if (refusal !== undefined && refusal !== '') {
     note.textContent = refusal
     note.hidden = false
     return
   }
   const count = latest?.findings.length ?? 0
+  if (count === 0) {
+    note.hidden = true
+    return
+  }
   note.textContent = `${String(count)} files could not be read. Open the tree to see which.`
-  note.hidden = count === 0
+  note.hidden = false
 }
 
 /**
