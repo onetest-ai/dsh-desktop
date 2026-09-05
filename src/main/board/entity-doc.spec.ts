@@ -220,3 +220,86 @@ describe('a heading whose text is only whitespace', () => {
     expect(splitDoc(written).sections[0].body).toBe('n')
   })
 })
+
+/**
+ * A file whose lines end in a bare `\r` — the classic-Mac ending, and the third
+ * dialect the CRLF fix did not name.
+ *
+ * The damage is the CRLF damage exactly: `startsWith('---\n')` fails, so the
+ * frontmatter is not frontmatter, and the next write re-emits `name` and
+ * `status` as prose inside the description. That it is a dead format is not a
+ * defence — the file is on disk, one write destroys it, and the rule that reads
+ * it is one character wider than the rule that reads CRLF.
+ */
+describe('a document with CR-only line endings', () => {
+  const CR = ['---', 'name: Q3', 'status: idea', '---', '', 'lead', '', '## Notes', '', 'n', ''].join('\r')
+
+  it('reads its frontmatter rather than taking the whole file as body', () => {
+    const doc = splitDoc(CR)
+    expect(doc.front).toEqual({ name: 'Q3', status: 'idea' })
+    expect(doc.lead).toBe('lead')
+  })
+
+  it('finds the headings a bare `\\r` used to hide', () => {
+    const doc = splitDoc(CR)
+    expect(doc.sections).toEqual([{ heading: 'Notes', body: 'n' }])
+  })
+
+  it('is written back with LF throughout, and is byte-stable from then on', () => {
+    const once = joinDoc(splitDoc(CR))
+    expect(once).not.toContain('\r')
+    expect(joinDoc(splitDoc(once))).toBe(once)
+    expect(splitDoc(once)).toEqual(splitDoc(CR))
+  })
+})
+
+/**
+ * A `\r` at the end of a body line, which `splitDoc` itself produces from a file
+ * holding CR CR LF.
+ *
+ * Left alone by the reader it survived the read and not the write: `joinDoc`
+ * appends the body's own `\n` after it, making a `\r\n` that the next read eats.
+ * A document that changes on being written is the invariant failing, however
+ * few bytes it costs — so a bare `\r` ends a line here too, and `normalizeBody`
+ * settles it on the way out rather than leaving it to be eaten on the way back.
+ */
+describe('a body line ending in a bare carriage return', () => {
+  it('is settled by normalizeBody rather than surviving into the document', () => {
+    expect(normalizeBody('the description\r')).toBe('the description')
+    expect(normalizeBody('a\rb')).toBe('a\nb')
+  })
+
+  it('leaves the written document unchanged by a second write', () => {
+    const doc = splitDoc('---\nname: n\n---\n\nthe description\r\r\n\n## Notes\n\nn\n')
+    expect(doc.lead).toBe('the description')
+    const once = joinDoc(doc)
+    expect(splitDoc(once)).toEqual(doc)
+    expect(joinDoc(splitDoc(once))).toBe(once)
+  })
+})
+
+/**
+ * A heading carrying edge whitespace or a line ending of its own.
+ *
+ * Unreachable through `splitDoc`, whose capture is `(\S.*?)` and whose result is
+ * trimmed — but the invariant is stated over documents, not over the documents
+ * one reader happens to produce, and this module's callers are not only that
+ * reader. `## Notes ` reads back as `Notes`, and `## a\rb` was not a heading at
+ * all. So a heading is settled the way a body is: trimmed, and its inner line
+ * endings turned into the space they read as, losing no word.
+ */
+describe('a heading that carries whitespace or a line ending', () => {
+  it('is settled once, and the settled document round-trips', () => {
+    const doc = { front: {}, lead: '', sections: [{ heading: 'Notes ', body: 'x' }] }
+    const once = joinDoc(doc)
+    expect(once).toContain('## Notes\n')
+    expect(splitDoc(once)).toEqual({ ...doc, sections: [{ heading: 'Notes', body: 'x' }] })
+    expect(joinDoc(splitDoc(once))).toBe(once)
+  })
+
+  it('keeps both halves of a heading a line ending ran through', () => {
+    const once = joinDoc({ front: {}, lead: '', sections: [{ heading: 'a\rb', body: 'x' }] })
+    expect(splitDoc(once).sections).toEqual([{ heading: 'a b', body: 'x' }])
+    expect(joinDoc(splitDoc(once))).toBe(once)
+  })
+})

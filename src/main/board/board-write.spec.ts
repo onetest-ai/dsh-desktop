@@ -998,6 +998,97 @@ describe('a campaign whose file was saved with CRLF line endings', () => {
 })
 
 /**
+ * A `.md` on disk whose lines end in a bare `\r`, written through a real
+ * `setStatus`.
+ *
+ * Asserted on the file's **bytes**, because the fields alone understate it: the
+ * whole file failed the frontmatter gate, so `name`, `status` and `validated_by`
+ * were prose, and the write that followed wrote them back as prose — the same
+ * destruction the CRLF case was, in the dialect the CRLF fix did not name.
+ */
+describe('a campaign whose file was saved with CR-only line endings', () => {
+  const CR = [
+    '---',
+    'name: Q3 Campaign',
+    'subtype: campaign',
+    'status: executing',
+    'documents: []',
+    '---',
+    '',
+    'the description',
+    '',
+    '## Target',
+    '',
+    'ship it',
+    '',
+  ].join('\r')
+
+  beforeEach(() => {
+    putLegacy('campaigns/q3', 'workitem.md', CR)
+  })
+
+  it('is read with its name and its sections intact', () => {
+    const campaign = readBoard(project).campaigns[0]
+    expect(campaign.fields.name).toBe('Q3 Campaign')
+    expect(campaign.fields.status).toBe('executing')
+    expect(campaign.fields.target).toBe('ship it')
+    expect(campaign.fields.description).toBe('the description')
+  })
+
+  it('is written back as one document rather than as its own frontmatter twice', () => {
+    expect(setStatus(project, 'campaigns/q3', 'done')).toEqual({ ok: true, folderPath: 'campaigns/q3' })
+    const text = read('campaigns/q3', 'workitem.md')
+    expect(text).not.toContain('\r')
+    // Two `---` lines: the fence. Four would be the frontmatter written twice,
+    // the second copy as prose inside the description.
+    expect(text.match(/^---$/gm)).toHaveLength(2)
+    expect(text).toContain('name: Q3 Campaign')
+    expect(text).toContain('status: done')
+    expect(text.split('\n## Target\n')).toHaveLength(2)
+  })
+
+  it('stops changing after the write that converts its line endings', () => {
+    setStatus(project, 'campaigns/q3', 'done')
+    const once = read('campaigns/q3', 'workitem.md')
+    setStatus(project, 'campaigns/q3', 'done')
+    expect(read('campaigns/q3', 'workitem.md')).toBe(once)
+  })
+})
+
+/**
+ * A body line holding CR CR LF, which is a CRLF file a tool converted twice, or
+ * a Windows tool writing a line whose text already ended in `\r`.
+ *
+ * The reader collapses it to a single trailing `\r`, and the writer used to
+ * append the body's `\n` after that — so the file after write 1 differed from
+ * the file after write 2 by exactly that byte. One byte, converging, but a
+ * settled document that changes on being written is the invariant failing, and
+ * the bytes are where it is provable.
+ */
+describe('a campaign whose body line ends in a bare carriage return', () => {
+  beforeEach(() => {
+    putLegacy(
+      'campaigns/q3',
+      'workitem.md',
+      '---\nname: Q3\nsubtype: campaign\nstatus: executing\n---\n\nthe description\r\r\n\n## Target\n\nship it\n',
+    )
+  })
+
+  it('reads the description without a carriage return hanging off it', () => {
+    expect(readBoard(project).campaigns[0].fields.description).toBe('the description')
+  })
+
+  it('is byte-identical on the second write to what the first write left', () => {
+    setStatus(project, 'campaigns/q3', 'done')
+    const once = read('campaigns/q3', 'workitem.md')
+    setStatus(project, 'campaigns/q3', 'done')
+    expect(read('campaigns/q3', 'workitem.md')).toBe(once)
+    expect(once).not.toContain('\r')
+    expect(readBoard(project).campaigns[0].fields.description).toBe('the description')
+  })
+})
+
+/**
  * `##` followed by nothing but whitespace, in a file somebody edited by hand.
  * The heading pattern matched it and `joinDoc` wrote back a `## ` the pattern
  * does not match, so the block's prose was re-attributed to the next section on

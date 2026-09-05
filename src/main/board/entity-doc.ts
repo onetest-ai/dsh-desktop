@@ -14,8 +14,9 @@
  * rule that closes all three, and argues for it.
  *
  * Every rule in here is a rule about a line, which is why `toLf` runs before any of them: a file
- * whose lines end `\r\n` failed the very first one and lost its frontmatter altogether. The
- * document's line ending is `\n`, and reading a file converts it — the argument is on `toLf`.
+ * whose lines end `\r\n`, or in a bare `\r`, failed the very first one and lost its frontmatter
+ * altogether. The document's line ending is `\n`, and reading a file converts it — the argument is
+ * on `toLf`.
  */
 import { load as yamlLoad, dump as yamlDump, JSON_SCHEMA } from 'js-yaml'
 
@@ -51,11 +52,11 @@ const FENCE_CLOSE = /^(`{3,}|~{3,})\s*$/
 const HEADING_LINE = /^##\s+(\S.*?)\s*$/
 /** A line carrying nothing, for trimming a body's edges without touching its columns. */
 const BLANK_LINE = /^\s*$/
-/** `\r\n`, anywhere — the one thing normalized on the way in. See `toLf`. */
-const CRLF = /\r\n/g
+/** A line ending that is not `\n` — `\r\n` or a bare `\r`. See `toLf`. */
+const FOREIGN_EOL = /\r\n?/g
 
 /**
- * The same text with Windows line endings replaced by the one this module counts in.
+ * The same text with every foreign line ending replaced by the one this module counts in.
  *
  * Every rule here is a rule about a line: the frontmatter fence, its terminator,
  * a `##` heading, a fence marker, a blank edge. All of them were written against
@@ -76,12 +77,31 @@ const CRLF = /\r\n/g
  * conversion is visible in a diff exactly once. The cost is stated: a file a
  * Windows tool wrote comes back with different bytes than it went in with, the
  * same way its `##` inside a body comes back demoted.
+ *
+ * **A bare `\r` is a line ending too**, which is the `?` in the pattern and the
+ * one place this rule went further than CRLF. The narrower `/\r\n/g` left two
+ * holes, both real. A classic-Mac file — `---\rname: Q3\r---\r` — failed the
+ * frontmatter gate exactly as a CRLF file used to, and one write re-emitted its
+ * keys as prose: the format is dead, but the file is on disk and the damage is
+ * total, and one character of pattern is a cheaper answer than a paragraph
+ * explaining why it was left to happen. And a `\r` merely *ending* a line was
+ * not left alone as the narrower rule's comment claimed: `joinDoc` appends the
+ * body's own `\n` after it, making a `\r\n` for the next read to eat, so a
+ * settled document changed on being written — the invariant broken over one
+ * byte.
+ *
+ * What that costs is a lone `\r` in the **middle** of a line, which is now split
+ * into two lines rather than carried through. That is the right reading twice
+ * over: CommonMark, which governs what a body means, counts a bare `\r` as a
+ * line ending, so a renderer was going to break the line whatever this module
+ * did; and in every file that actually contains one, it *is* the line ending.
+ * Preserving it would mean preserving it in the one case where doing so hides a
+ * frontmatter — which is how the CR-only file loses everything.
  * @param text - text as it was found on disk, or as a caller holds it.
- * @returns the same text with `\r\n` as `\n`. A lone `\r` is left alone; it is
- *   not a line ending anything still writes, and `\s`-based matching handles it.
+ * @returns the same text with `\r\n` and `\r` as `\n`.
  */
 function toLf(text: string): string {
-  return text.includes('\r') ? text.replace(CRLF, '\n') : text
+  return text.includes('\r') ? text.replace(FOREIGN_EOL, '\n') : text
 }
 
 /**
@@ -280,6 +300,29 @@ export function splitDoc(raw: string): EntityDoc {
 }
 
 /**
+ * A heading as the document can hold it: what `splitDoc` would read back off the line it is written
+ * on.
+ *
+ * `splitDoc` captures `(\S.*?)` and trims, so a heading it produces never has edge whitespace and
+ * never has a line ending in it. A heading handed in by any other caller can have both, and each
+ * broke the round trip in its own way: `## Notes ` came back as `Notes`, and `## a\rb` — now two
+ * lines — came back as no heading at all, taking its section's body with it into the one above.
+ * Neither is reachable through this module's own reader today, which is the reason to spend six
+ * lines rather than six paragraphs on it: unreachable is a fact about today's callers, and the
+ * invariant is stated over documents.
+ *
+ * Settled the way a body is, and for the same reason — the writer gives way, and no word is lost. A
+ * line ending inside a heading becomes the space it already reads as, rather than truncating there,
+ * because a heading is one line by construction and the text after the break is still the section's
+ * name. Idempotent, so a file stops changing after the write that settles it.
+ * @param heading - the heading as the caller holds it.
+ * @returns the heading as the line will hold it.
+ */
+function settleHeading(heading: string): string {
+  return toLf(heading).split('\n').join(' ').trim()
+}
+
+/**
  * Serialize a document back to file text.
  *
  * The frontmatter fence is always emitted, even for an empty `front`, so a
@@ -290,9 +333,10 @@ export function splitDoc(raw: string): EntityDoc {
  * rather than vanish on the first round-trip.
  *
  * Every body — the lead included — goes through `normalizeBody` on the way out,
- * which is where the format's one rule about what a body may contain is applied
- * and argued. Doing it here rather than at each call site is what makes the rule
- * unavoidable: nothing reaches disk except through this function.
+ * and every heading through `settleHeading`, which is where the format's rules
+ * about what a body and a heading may contain are applied and argued. Doing it
+ * here rather than at each call site is what makes them unavoidable: nothing
+ * reaches disk except through this function.
  * @param doc - the document.
  * @returns the file text.
  */
@@ -302,7 +346,8 @@ export function joinDoc(doc: EntityDoc): string {
   if (lead) out += '\n' + lead + '\n'
   for (const section of doc.sections) {
     const body = normalizeBody(section.body)
-    out += body ? '\n## ' + section.heading + '\n\n' + body + '\n' : '\n## ' + section.heading + '\n'
+    const heading = settleHeading(section.heading)
+    out += body ? '\n## ' + heading + '\n\n' + body + '\n' : '\n## ' + heading + '\n'
   }
   return out
 }
