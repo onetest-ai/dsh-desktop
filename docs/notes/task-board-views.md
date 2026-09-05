@@ -29,7 +29,7 @@ A project with no `.dsh/tasks/` is worded, not repaired, and says how a board ge
 
 **Lanes are missions**, grouped under a campaign heading — including a mission with no work in it yet, which is a lane waiting to be filled rather than a mission that has gone missing. Bugs filed against a campaign rather than a mission get one lane of their own beneath it, so a bug is never homeless and never silently absent.
 
-**Cards are tasks and bugs.** A mission is a lane label carrying its own status chip; a campaign is a heading. Containers are structure here, and their statuses are read rather than dragged — which follows from the store's rule that a status is a claim with an author. A campaign and a task are not comparable units of work, and a board that put them in the same column would stop reading as a board.
+**Cards are task-level workitems and bugs.** A mission is a lane label carrying its own status chip; a campaign is a heading. Containers are structure here, and their statuses are read rather than dragged — which follows from the store's rule that a status is a claim with an author. A campaign and a task are not comparable units of work, and a board that put them in the same column would stop reading as a board.
 
 **Tests are not cards.** They have no status, so there is no column they belong in, and a test is not work in flight — it is what the work is measured with. Instead a card carries a **validation chip**: `3/4 passing`, computed from that workitem's own `validated_by` verdicts. A chip with any failure in it reads as a failure, because one unproven check is the thing worth seeing from across the board. Clicking the chip opens the workitem's file, where the links and their verdicts are.
 
@@ -37,15 +37,15 @@ The tests themselves are browsed in the tree, under their own `tests` root.
 
 ### What a card shows
 
-Its name, its kind when it is a bug, how many of its acceptance criteria are ticked, and its validation chip when anything validates it. Nothing else. A card is scanned, not read; what it is *for* lives in the file, one click away.
+Its name, its type when it is a bug, how many of its acceptance criteria are ticked, and its validation chip when anything validates it. Nothing else. A card is scanned, not read; what it is *for* lives in the file, one click away.
 
 ## Acting
 
 | Gesture | What runs |
 | --- | --- |
 | Drag a card to another column | `setStatus` |
-| `+` on a mission's lane | `createEntity`, kind `task`, under that mission |
-| `+` on a campaign's bug lane | `createEntity`, kind `bug`, under that campaign |
+| `+` on a mission's lane | `createEntity` at level `task`, under that mission |
+| `+` on a campaign's bug lane | `createEntity` at level `bug`, under that campaign |
 | Right-click a card → Delete | `trashEntity`, behind a confirmation naming it |
 | Click a card | opens its `task.yaml` in the editor column |
 
@@ -54,6 +54,23 @@ Every one is a store call that already exists and is tested. The board adds gest
 **Drag writes on drop, not on hover.** A card that changed status while being dragged over a column would write a status nobody chose, and every hover across a board would be a commit in someone's repository.
 
 **Clicking a card opens the file.** There is no detail view. The editor already renders and edits prose well, the YAML is the truth rather than a projection of it, and an agent's edit to that file appears in a tab already open. A read-only detail panel would be a third surface showing what a file shows, kept in step by hand.
+
+### Creating something opens a modal, and only its own controls close it
+
+A `+` opens a small modal over the panel rather than an inline field. A card has a name, and a task should have its first acceptance criterion written while the thought that produced it is still there — two fields is past what an inline row carries well, and a modal is where a form belongs.
+
+**It closes on Cancel and on its close control, and on nothing else.** Not on a click outside it, not on the backdrop. Losing a half-typed task to a stray click is small and infuriating, and it is exactly the kind of thing that stops someone trusting a board with anything they have not already written down elsewhere.
+
+Escape is treated the same as the backdrop and does not close it either. That is a deliberate departure from what a dialog usually does, so both Cancel and Close are ordinary focusable controls reachable by Tab — a keyboard user is never trapped, they simply leave the way everyone else does. A modal that could be dismissed by the key next to the one you were typing in is not meaningfully safer than one dismissed by a click.
+
+**What each `+` offers:**
+
+| Opened from | Creates | Fields |
+| --- | --- | --- |
+| A mission's lane | a task | Name, and a first acceptance criterion |
+| A campaign's bug lane | a bug | Name, and what happened |
+
+The criterion field is not required — validation reports a task without one rather than refusing it, and the modal follows the store rather than inventing a stricter rule. But it is offered, and it is second, because a task whose definition of done is written at the moment it is created is the difference between a board that can gate work and a list of titles.
 
 ### Deliberately not editable here
 
@@ -71,7 +88,7 @@ Because both surfaces read the same channel and hear the same event, they cannot
 
 The store's findings — a file that will not parse, a status the board does not know, a task with no criterion — are already computed on read. The tree shows them against the entity they name. The board cannot — a finding's entity is by definition not on it — so the board carries a line above the columns saying how many files it could not read, which opens the tree. Neither hides an entity it could not read, and neither repairs one.
 
-A write that fails reports the reason the store gave, on the surface that asked for it, in one line. A dragged card whose write failed **returns to the column it came from**: leaving it where it was dropped would show a status that is not in the file.
+A write that fails reports the reason the store gave, on the surface that asked for it, in one line. A dragged card whose write failed **returns to the column it came from**: leaving it where it was dropped would show a status that is not in the file. A modal whose create failed **stays open with what was typed still in it**, and says why — closing it would throw away the work along with the error.
 
 ## Testing
 
