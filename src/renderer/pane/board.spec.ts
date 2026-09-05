@@ -59,7 +59,7 @@ function oneMission(
   } = {},
 ): Record<string, unknown> {
   const task = node('task', 'T1', 'campaigns/q3/missions/m1/tasks/t1', {
-    status: over.taskStatus ?? 'draft',
+    status: over.taskStatus ?? 'idea',
     verdicts: over.verdicts ?? { pass: 0, total: 0 },
   })
   const children: Record<string, unknown>[] = [
@@ -204,7 +204,7 @@ describe('the board', () => {
   it('draws a column for every status, empty ones included', async () => {
     await load(bridge(oneMission()))
     const headings = [...document.querySelectorAll('.board-column-title')].map((node) => node.textContent)
-    expect(headings).toEqual(['draft', 'executing', 'awaitingApproval', 'done', 'failed', 'cancelled'])
+    expect(headings).toEqual(['idea', 'backlog', 'executing', 'validation', 'done'])
   })
 
   it('puts a card in the column its status names', async () => {
@@ -245,7 +245,7 @@ describe('the board', () => {
     await load(stub)
     drop('campaigns/q3/missions/m1/tasks/t1', 'done')
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
-    expect(document.querySelector('.board-column-draft .board-card')?.textContent).toContain('T1')
+    expect(document.querySelector('.board-column-idea .board-card')?.textContent).toContain('T1')
     expect(document.getElementById('board-note')?.textContent).toContain('git said no')
   })
 
