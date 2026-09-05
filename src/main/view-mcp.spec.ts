@@ -594,6 +594,36 @@ describe('the board tools', () => {
     expect(textOf(await callTool(url, 'board_read'))).toContain('no board')
   })
 
+  // reason: a board with nothing on it at all — no campaigns, no tests — is
+  // the only shape that should ever say "empty".
+  it('says the board is empty when it holds nothing at all', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    expect(textOf(await callTool(url, 'board_read'))).toContain('The board is empty.')
+  })
+
+  // reason: this is the bug the reviewer reproduced — a board holding a test
+  // but no campaign must not tell the agent it is empty, or it will recreate
+  // work that already exists.
+  it('does not say the board is empty when it holds a test but no campaigns', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).not.toContain('The board is empty.')
+    expect(text).toContain('tests/login')
+  })
+
+  // reason: the mirror case — campaigns with no tests yet must not claim the
+  // board is empty either.
+  it('does not say the board is empty when it holds campaigns but no tests', async () => {
+    const project = boardFixture({ 'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\n' })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).not.toContain('The board is empty.')
+    expect(text).toContain('Q3')
+  })
+
   it('reads a board, with its statuses and folder paths', async () => {
     const project = boardFixture({
       'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\nstatus: executing\n',
@@ -779,5 +809,50 @@ describe('the board tools', () => {
       result: 'fail',
     })
     expect(out.isError).toBeFalsy()
+  })
+
+  // reason: unlinking is how a test is retired in this model, so it has to
+  // actually remove the verdict rather than just report success.
+  it('unlinks a test, removing its verdict and leaving any others', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Logout' })
+    await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/login', result: 'pass' })
+    await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/logout', result: 'fail', bug: 'campaigns/q3/bugs/b1' })
+    const out = await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/login', unlink: true })
+    expect(out.isError).toBeFalsy()
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).not.toContain('[pass] tests/login')
+    expect(text).toContain('[fail] tests/logout')
+  })
+
+  // reason: an unlink that was never linked is not a no-op success — reporting
+  // it as done would let an agent believe it retired a test it never touched.
+  it('refuses to unlink a test that was never linked', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/login', unlink: true })
+    expect(out.isError).toBe(true)
+    expect(textOf(out)).toContain('does not name')
+  })
+
+  // reason: the handler branches on unlink before it looks at result, so a
+  // result passed alongside unlink is deliberately ignored — this is the
+  // test that says so.
+  it('unlinks and ignores a result passed alongside unlink', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/login', result: 'pass' })
+    const out = await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/login', unlink: true, result: 'fail' })
+    expect(out.isError).toBeFalsy()
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).not.toContain('[pass] tests/login')
+    expect(text).not.toContain('[fail] tests/login')
   })
 })

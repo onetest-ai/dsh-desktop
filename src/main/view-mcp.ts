@@ -187,6 +187,17 @@ function boardProject(project: string | undefined): { ok: true; project: string 
  * `board_criterion` addresses one by that index, and this is the only place
  * an agent can learn it, so leaving criteria out is not a compactness saving,
  * it is a tool an agent cannot actually use.
+ *
+ * Verdicts are rendered inline under the entity they were recorded against,
+ * because a verdict is a claim about that pairing, not a property of the
+ * test — an agent deciding whether a workitem is actually done needs to see
+ * what proved it right there, not go look up a test to find out.
+ *
+ * Tests themselves get their own trailing section instead of being nested
+ * under the workitems that name them: a test can validate more than one
+ * workitem, or none yet, so there is no single place in the workitem tree it
+ * belongs — and a test with no verdict anywhere is still work that exists
+ * and must still be visible, not hidden until something claims it.
  * @param board - the board to render.
  * @returns the text, including findings when there are any.
  */
@@ -211,7 +222,7 @@ function renderBoard(board: Board): string {
     for (const child of entity.children) walk(child, depth + 1)
   }
   for (const campaign of board.campaigns) walk(campaign, 0)
-  if (lines.length === 0) lines.push('The board is empty.')
+  const hadCampaigns = lines.length > 0
   const suites: string[] = []
   const walkSuite = (suite: Suite, depth: number): void => {
     for (const test of suite.tests) suites.push(`${'  '.repeat(depth)}test ${test.name}\n${'  '.repeat(depth)}  ${test.folderPath}`)
@@ -222,6 +233,8 @@ function renderBoard(board: Board): string {
   }
   walkSuite(board.tests, 0)
   if (suites.length > 0) lines.push('', 'Tests:', ...suites)
+  if (!hadCampaigns && suites.length === 0) lines.push('The board is empty.')
+  else if (!hadCampaigns) lines.unshift('No campaigns yet.')
   if (board.findings.length > 0) {
     lines.push('', 'Could not read:')
     for (const finding of board.findings) lines.push(`  ${finding.folderPath}: ${finding.says}`)
