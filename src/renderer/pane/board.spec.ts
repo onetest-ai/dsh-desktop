@@ -426,6 +426,24 @@ describe('the create modal', () => {
     expect(escaped).toBe(false)
   })
 
+  // reason: the test above only proves this page's own listener does not let a
+  // backdrop click through — it says nothing about whether the backdrop can be
+  // clicked at all. That is decided by CSS, not JS: `pointer-events: none` on
+  // an overlay means click-through (the element stops being a hit-test
+  // target, so the click lands on whatever is behind it), which reads as the
+  // opposite of what the property name suggests — an easy mistake to make
+  // twice, and this repo already made it once (see `pane.css`'s comment on
+  // this rule). jsdom does no CSS hit-testing, so no jsdom test can see
+  // `pointer-events` at all; this test reads the stylesheet itself instead.
+  it('keeps the backdrop as a hit-test target (pointer-events is not none)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const css = readFileSync(join(import.meta.dirname, '..', 'pane.css'), 'utf8')
+    const match = css.match(/\.board-modal\s*\{([^}]*)\}/)
+    expect(match).not.toBeNull()
+    expect(match?.[1]).not.toMatch(/pointer-events\s*:\s*none/)
+  })
+
   // reason: losing a half-typed task to a stray click is small and
   // infuriating, and it is what stops someone trusting a board.
   it('does not close on a click outside it, or on Escape', async () => {

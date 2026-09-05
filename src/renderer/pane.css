@@ -1197,6 +1197,12 @@ body {
 
 .board-lane-title {
   overflow: hidden;
+  /* Without this the title's max-content contribution (overflow: hidden does
+     not shrink it) widens `.board-group`, and the ellipsis below never
+     triggers: a long mission or campaign name widens the whole board instead
+     of eliding. */
+  flex: 1;
+  min-width: 0;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
