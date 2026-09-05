@@ -4,7 +4,7 @@
  * folder-derived, so a parent never enumerates them. On-disk keys are snake_case; this module maps
  * them to the camelCase `EntityFields` the rest of the board uses, and back.
  */
-import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
+import { load as yamlLoad, dump as yamlDump, JSON_SCHEMA } from 'js-yaml'
 
 /**
  * What an entity is, at the granularity the file name uses.
@@ -62,6 +62,27 @@ export const ENTITY_STATUSES: readonly EntityStatus[] = [
   'cancelled',
 ]
 
+/** What a test's verdict against one workitem can be. */
+export type LinkResult = 'pass' | 'fail' | 'not_run'
+
+/**
+ * The three verdicts, fixed for the reason the statuses are.
+ *
+ * Kept apart from `ENTITY_STATUSES` deliberately: a status says how far work
+ * has got, a result says whether a check held, and a vocabulary that mixed
+ * them would answer two questions in one field.
+ */
+export const LINK_RESULTS: readonly LinkResult[] = ['pass', 'fail', 'not_run']
+
+/**
+ * How many runs a test keeps.
+ *
+ * Flakiness is visible in a window, git holds everything older, and an
+ * uncapped list makes every run a write to a file that only grows. A number
+ * in one place, so raising it is a decision rather than a refactor.
+ */
+export const RUN_HISTORY = 50
+
 export interface AcceptanceCriterion {
   text: string
   done: boolean
@@ -75,12 +96,53 @@ export interface DocumentLink {
   [extra: string]: unknown
 }
 
+/**
+ * One test, and what happened when it was last run against this workitem.
+ *
+ * The verdict lives on the link rather than on the test because a verdict is
+ * about a pairing: one test can pass for the mission it was written for and
+ * fail for the one that reused it, and both are true at once.
+ */
+export interface TestLink {
+  /** The test's folder path within the board. */
+  test: string
+  /** One of `LINK_RESULTS`; anything else is a finding, not a repair. */
+  result: string
+  /** Why, in the reader's own words. Empty when there is nothing to say. */
+  comment: string
+  /** The defect a failure produced, when one was filed. */
+  bug?: string
+  /** Any other keys found on the entry, carried through untouched. */
+  [extra: string]: unknown
+}
+
+/**
+ * One execution of a test, as the test itself records it.
+ *
+ * A link's verdict answers "does this pass here, now". It cannot answer "does
+ * this test give the same answer twice", and that is the difference between a
+ * real failure and a flaky one.
+ */
+export interface TestRun {
+  /** When it ran. Ordering is by position, so an unparseable date still sorts. */
+  at: string
+  /** The workitem it was run against. */
+  workitem: string
+  result: string
+  /** Any other keys found on the entry, carried through untouched. */
+  [extra: string]: unknown
+}
+
 /** The parsed fields of an entity file; which are present depends on the kind. */
 export interface EntityFields {
   name: string
   description: string
   acceptanceCriteria: AcceptanceCriterion[] // campaign/mission/task
   documents: DocumentLink[] // campaign/mission
+  /** What proves this workitem, and what happened when it was last run. */
+  validatedBy: TestLink[]
+  /** A test's own execution history, capped at `RUN_HISTORY`. */
+  runs: TestRun[]
   /** A workitem's altitude, as its own file records it. Absent on a bug or a test. */
   subtype?: string
   /** What a test says to do. */
@@ -219,14 +281,74 @@ function parseDocuments(v: unknown): DocumentLink[] {
   return out
 }
 
+/**
+ * Read a `validated_by` list.
+ *
+ * An entry with no `test` is dropped: a link that names nothing is not a
+ * link, and keeping it would put a verdict on the board with nothing behind
+ * it. A missing result reads as `not_run` rather than as `pass`, because an
+ * unrun link is the normal state of a test just added and must not be
+ * mistaken for a proof.
+ * @param v - the raw value.
+ * @returns the links, in order.
+ */
+function parseLinks(v: unknown): TestLink[] {
+  if (!Array.isArray(v)) return []
+  const out: TestLink[] = []
+  for (const item of v) {
+    if (item === null || typeof item !== 'object' || !('test' in item)) continue
+    const test = asString((item as { test: unknown }).test)
+    if (test === '') continue
+    const bug = optString((item as { bug?: unknown }).bug)
+    out.push({
+      test,
+      result: optString((item as { result?: unknown }).result) ?? 'not_run',
+      comment: asString((item as { comment?: unknown }).comment),
+      ...(bug === undefined ? {} : { bug }),
+      ...restOf(item, ['test', 'result', 'comment', 'bug']),
+    })
+  }
+  return out
+}
+
+/**
+ * Read a `runs` list, keeping only the most recent `RUN_HISTORY`.
+ *
+ * A run with no `at` is dropped: it cannot be ordered, and an unordered run
+ * in a history whose whole purpose is a sequence is noise.
+ * @param v - the raw value.
+ * @returns the runs, oldest first, capped.
+ */
+function parseRuns(v: unknown): TestRun[] {
+  if (!Array.isArray(v)) return []
+  const out: TestRun[] = []
+  for (const item of v) {
+    if (item === null || typeof item !== 'object' || !('at' in item)) continue
+    const at = asString((item as { at: unknown }).at)
+    if (at === '') continue
+    out.push({
+      at,
+      workitem: asString((item as { workitem?: unknown }).workitem),
+      result: optString((item as { result?: unknown }).result) ?? 'not_run',
+      ...restOf(item, ['at', 'workitem', 'result']),
+    })
+  }
+  return out.slice(-RUN_HISTORY)
+}
+
 /** Parse a `<type>.yaml` file body into typed fields. Missing keys default rather than throw. */
 export function loadEntity(text: string): EntityFields {
-  const raw = (yamlLoad(text) ?? {}) as Record<string, unknown>
+  // JSON_SCHEMA keeps a bare `2026-09-05T09:12:00Z` a string rather than
+  // resolving it to a Date: every field here is read back out as text, and a
+  // run's timestamp must round-trip byte-for-byte to stay comparable.
+  const raw = (yamlLoad(text, { schema: JSON_SCHEMA }) ?? {}) as Record<string, unknown>
   return {
     name: asString(raw.name),
     description: asString(raw.description),
     acceptanceCriteria: parseCriteria(raw.acceptance_criteria),
     documents: parseDocuments(raw.documents),
+    validatedBy: parseLinks(raw.validated_by),
+    runs: parseRuns(raw.runs),
     subtype: optString(raw.subtype),
     steps: optString(raw.steps),
     status: optString(raw.status),
@@ -275,6 +397,12 @@ export function dumpEntity(level: EntityLevel, f: EntityFields): string {
   } else if (type === 'test') {
     o.steps = f.steps ?? ''
     o.expected = f.expected ?? ''
+    o.runs = f.runs.slice(-RUN_HISTORY).map((r) => ({
+      at: r.at,
+      workitem: r.workitem,
+      result: r.result,
+      ...restOf(r, ['at', 'workitem', 'result']),
+    }))
   } else {
     // Spread the item's other keys back out — an agent may annotate a criterion
     // (evidence, who verified it) and a rewrite must not strip that.
@@ -282,6 +410,13 @@ export function dumpEntity(level: EntityLevel, f: EntityFields): string {
       text: c.text,
       done: c.done,
       ...restOf(c, ['text', 'done']),
+    }))
+    o.validated_by = f.validatedBy.map((l) => ({
+      test: l.test,
+      result: l.result,
+      comment: l.comment,
+      ...(l.bug === undefined ? {} : { bug: l.bug }),
+      ...restOf(l, ['test', 'result', 'comment', 'bug']),
     }))
   }
   if (level === 'campaign' || level === 'mission') {
@@ -294,7 +429,11 @@ export function dumpEntity(level: EntityLevel, f: EntityFields): string {
   // key this LEVEL owns — including when it chose to omit one, which is how a
   // field gets cleared.
   for (const [k, v] of Object.entries(f.extra ?? {})) {
-    if (k in o || LEVEL_KEYS[level].includes(k)) continue
+    // validated_by and runs are excluded from the generic safety net, unlike
+    // documents or steps_to_reproduce: those are misplaced data worth keeping,
+    // but a verdict on a bug/test or a run history on a workitem/bug is not a
+    // misplaced fact, it is a claim that does not even parse for that kind.
+    if (k in o || LEVEL_KEYS[level].includes(k) || k === 'validated_by' || k === 'runs') continue
     o[k] = v
   }
   return yamlDump(o, { lineWidth: -1, noRefs: true })

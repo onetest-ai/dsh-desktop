@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dumpEntity, ENTITY_STATUSES, loadEntity, typeOf, WORKITEM_SUBTYPES } from './entity-schema'
+import { dumpEntity, ENTITY_STATUSES, LINK_RESULTS, loadEntity, RUN_HISTORY, typeOf, WORKITEM_SUBTYPES } from './entity-schema'
 import { slugify, uniqueSlug } from './slug'
 
 describe('loadEntity', () => {
@@ -181,5 +181,84 @@ describe('slugify', () => {
 
   it('numbers a slug that is already taken', () => {
     expect(uniqueSlug('m1', new Set(['m1', 'm1-2']))).toBe('m1-3')
+  })
+})
+
+describe('validated_by', () => {
+  it('has exactly the three results a verdict can be', () => {
+    expect([...LINK_RESULTS]).toEqual(['pass', 'fail', 'not_run'])
+  })
+
+  it('reads a link with its verdict, comment and bug', () => {
+    const fields = loadEntity(
+      'name: M\nvalidated_by:\n  - test: tests/auth/login\n    result: fail\n' +
+        "    comment: returns 500\n    bug: campaigns/q3/bugs/login-500\n",
+    )
+    expect(fields.validatedBy).toEqual([
+      { test: 'tests/auth/login', result: 'fail', comment: 'returns 500', bug: 'campaigns/q3/bugs/login-500' },
+    ])
+  })
+
+  // reason: a link that names no test is not a link. Keeping it would put a
+  // verdict on the board with nothing behind it.
+  it('drops an entry that names no test', () => {
+    expect(loadEntity('validated_by:\n  - result: pass\n').validatedBy).toEqual([])
+  })
+
+  // reason: an unrun link is the normal state of a test just added, and it
+  // must read as unrun rather than as passing.
+  it('defaults a missing result to not_run rather than to pass', () => {
+    expect(loadEntity('validated_by:\n  - test: tests/a\n').validatedBy[0].result).toBe('not_run')
+  })
+
+  it('keeps an extra key on a link', () => {
+    const fields = loadEntity('validated_by:\n  - test: tests/a\n    result: pass\n    run_by: ci\n')
+    expect(fields.validatedBy[0].run_by).toBe('ci')
+  })
+
+  it('round-trips a link through a workitem dump', () => {
+    const once = dumpEntity('mission', loadEntity('name: M\nvalidated_by:\n  - test: tests/a\n    result: pass\n'))
+    expect(loadEntity(once).validatedBy[0]).toEqual({ test: 'tests/a', result: 'pass', comment: '' })
+  })
+
+  // reason: a bug and a test do not declare what proves them — a test IS the
+  // proof, and giving it links would ask what proves the proof.
+  it('writes no validated_by for a bug or a test', () => {
+    const fields = loadEntity('name: X\nvalidated_by:\n  - test: tests/a\n')
+    expect(dumpEntity('bug', fields)).not.toContain('validated_by')
+    expect(dumpEntity('test', fields)).not.toContain('validated_by')
+  })
+})
+
+describe('runs', () => {
+  it('reads a run', () => {
+    const fields = loadEntity(
+      'name: T\nruns:\n  - at: 2026-09-05T09:12:00Z\n    workitem: campaigns/q3\n    result: pass\n',
+    )
+    expect(fields.runs).toEqual([{ at: '2026-09-05T09:12:00Z', workitem: 'campaigns/q3', result: 'pass' }])
+  })
+
+  it('drops a run with no timestamp, which cannot be ordered', () => {
+    expect(loadEntity('runs:\n  - workitem: campaigns/q3\n    result: pass\n').runs).toEqual([])
+  })
+
+  // reason: flakiness is visible in a window; git holds everything older, and
+  // an uncapped list makes every run a write to a file that only grows.
+  it('keeps only the most recent RUN_HISTORY runs, dropping the oldest', () => {
+    const many = Array.from(
+      { length: RUN_HISTORY + 10 },
+      (_, at) => `  - at: run-${String(at)}\n    workitem: w\n    result: pass\n`,
+    ).join('')
+    const written = dumpEntity('test', loadEntity(`name: T\nruns:\n${many}`))
+    const kept = loadEntity(written).runs
+    expect(kept).toHaveLength(RUN_HISTORY)
+    expect(kept[0].at).toBe('run-10')
+    expect(kept[RUN_HISTORY - 1].at).toBe(`run-${String(RUN_HISTORY + 9)}`)
+  })
+
+  it('writes no runs for a workitem or a bug', () => {
+    const fields = loadEntity('name: X\nruns:\n  - at: t\n    workitem: w\n    result: pass\n')
+    expect(dumpEntity('task', fields)).not.toContain('runs')
+    expect(dumpEntity('bug', fields)).not.toContain('runs')
   })
 })
