@@ -1,11 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { boardRoot, fileFor, hasBoard, TESTS_DIR, TRASH_DIR } from './board-paths'
+import { boardRoot, fileFor, hasBoard, legacyFileFor, TESTS_DIR, TRASH_DIR } from './board-paths'
 import {
   ENTITY_STATUSES,
   ENTITY_LEVELS,
   LINK_RESULTS,
   loadEntity,
+  loadLegacyEntity,
   typeOf,
   yamlFailureReason,
   type EntityFields,
@@ -26,22 +27,29 @@ function oneLine(v: string): string {
   return v.replace(/\s+/g, ' ').trim()
 }
 
-/** Every file name an entity might be stored under, so a folder holding the wrong one can be named. */
-const ENTITY_FILES: readonly string[] = [...new Set(ENTITY_LEVELS.map(fileFor))]
+/**
+ * Every file name an entity might be stored under — `.md` and the legacy
+ * `.yaml` alike — so a folder holding the wrong one can be named.
+ */
+const ENTITY_FILES: readonly string[] = [
+  ...new Set(ENTITY_LEVELS.flatMap((level) => [fileFor(level), legacyFileFor(level)])),
+]
 
 /**
- * The entity file a folder holds, when it is not the one `level` expected.
+ * The entity file a folder holds, when it is none of the ones `level` expected.
  *
  * A folder with none of these is legitimately empty — a suite, or a child
  * directory nobody has filled in yet. One that holds a different type's file
  * is not empty; it is mislabeled, and that is worth a finding rather than the
- * silent vanishing an absent `fileFor(level)` alone would produce.
+ * silent vanishing an absent `fileFor(level)`/`legacyFileFor(level)` alone
+ * would produce.
  * @param dir - the folder to look in.
- * @param expected - the file this folder's level would hold.
+ * @param expected - the files this folder's level would hold — its `.md` and
+ *   its legacy `.yaml` — so neither reads as mislabeling the other.
  * @returns the file actually found, or nothing when the folder holds none.
  */
-function otherEntityFile(dir: string, expected: string): string | undefined {
-  return ENTITY_FILES.find((candidate) => candidate !== expected && existsSync(join(dir, candidate)))
+function otherEntityFile(dir: string, expected: readonly string[]): string | undefined {
+  return ENTITY_FILES.find((candidate) => !expected.includes(candidate) && existsSync(join(dir, candidate)))
 }
 
 /** One entity, with the children its folder holds. */
@@ -147,23 +155,34 @@ function subdirectories(dir: string): string[] {
 function readEntity(root: string, folderPath: string, level: EntityLevel, findings: Finding[]): Entity | undefined {
   const dir = join(root, folderPath)
   const file = fileFor(level)
+  const legacyFile = legacyFileFor(level)
+  const mdExists = existsSync(join(dir, file))
+  const legacyExists = existsSync(join(dir, legacyFile))
   let text: string
-  try {
+  let legacy = false
+  if (mdExists) {
     text = readFileSync(join(dir, file), 'utf8')
-  } catch {
+    // Both formats present is not an error — a conversion in progress, or one
+    // that stalled — but the board reads only one of them, and a person who
+    // edited the wrong file deserves to be told which one won.
+    if (legacyExists) findings.push({ folderPath, says: `${legacyFile} is ignored; ${file} is what the board reads` })
+  } else if (legacyExists) {
+    text = readFileSync(join(dir, legacyFile), 'utf8')
+    legacy = true
+  } else {
     // Empty is legitimate — a suite, or a child directory nobody has filled
     // in yet — but holding a different type's file is not empty, it is
     // mislabeled, and that is worth saying rather than letting the whole
     // subtree under it vanish with no word.
-    const found = otherEntityFile(dir, file)
+    const found = otherEntityFile(dir, [file, legacyFile])
     if (found !== undefined) {
-      // For a test specifically, this folder does not stop here: holding no
-      // test.yaml is exactly what makes `readSuite` walk it as a suite next.
-      // The finding has to say that, not that it "is a test" — a claim the
-      // walk that follows does not honor.
+      // For a test specifically, this folder does not stop here: holding
+      // neither test.md nor test.yaml is exactly what makes `readSuite` walk
+      // it as a suite next. The finding has to say that, not that it "is a
+      // test" — a claim the walk that follows does not honor.
       const says =
         level === 'test'
-          ? `holds ${found}, not ${file} — read as a suite instead, since it holds no test.yaml.`
+          ? `holds ${found}, not ${file} — read as a suite instead, since it holds no ${file}.`
           : `holds ${found}, not ${file} — this folder is a ${level}.`
       findings.push({ folderPath, says })
     }
@@ -171,11 +190,11 @@ function readEntity(root: string, folderPath: string, level: EntityLevel, findin
   }
   let fields: EntityFields
   try {
-    fields = loadEntity(text)
+    fields = legacy ? loadLegacyEntity(text, level) : loadEntity(text)
   } catch (error) {
     // Reading never repairs: the file stays exactly as it is, and the board
     // says which one it could not read.
-    findings.push({ folderPath, says: `${file} could not be read: ${yamlFailureReason(error)}` })
+    findings.push({ folderPath, says: `${legacy ? legacyFile : file} could not be read: ${yamlFailureReason(error)}` })
     return undefined
   }
   const slug = folderPath.slice(folderPath.lastIndexOf('/') + 1)

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { boardRoot, fileFor, folderFor, hasBoard, resolveInBoard } from './board-paths'
+import { boardRoot, fileFor, folderFor, hasBoard, legacyFileFor, resolveInBoard } from './board-paths'
 
 let project = ''
 beforeEach(() => {
@@ -41,13 +41,25 @@ describe('hasBoard', () => {
 
 describe('fileFor', () => {
   // reason: the file is named for the TYPE while the directory says the
-  // LEVEL. A reader that looked for `mission.yaml` would find nothing.
+  // LEVEL. A reader that looked for `mission.md` would find nothing.
   it('names the file after the type, not the level', () => {
-    expect(fileFor('campaign')).toBe('workitem.yaml')
-    expect(fileFor('mission')).toBe('workitem.yaml')
-    expect(fileFor('task')).toBe('workitem.yaml')
-    expect(fileFor('bug')).toBe('bug.yaml')
-    expect(fileFor('test')).toBe('test.yaml')
+    expect(fileFor('campaign')).toBe('workitem.md')
+    expect(fileFor('mission')).toBe('workitem.md')
+    expect(fileFor('task')).toBe('workitem.md')
+    expect(fileFor('bug')).toBe('bug.md')
+    expect(fileFor('test')).toBe('test.md')
+  })
+})
+
+describe('legacyFileFor', () => {
+  // reason: the board a reader falls back to when there is no `.md` yet is
+  // named the same way `fileFor` is — for the type, not the level.
+  it('names the legacy file after the type, not the level', () => {
+    expect(legacyFileFor('campaign')).toBe('workitem.yaml')
+    expect(legacyFileFor('mission')).toBe('workitem.yaml')
+    expect(legacyFileFor('task')).toBe('workitem.yaml')
+    expect(legacyFileFor('bug')).toBe('bug.yaml')
+    expect(legacyFileFor('test')).toBe('test.yaml')
   })
 })
 

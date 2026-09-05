@@ -41,13 +41,27 @@ export function hasBoard(project: string): boolean {
  * The file inside an entity's folder.
  *
  * Named for the type while the folder says the level, so a campaign, a
- * mission and a task all hold a `workitem.yaml`. A reader looking for
- * `mission.yaml` would find nothing, which is why this is a function and not
+ * mission and a task all hold a `workitem.md`. A reader looking for
+ * `mission.md` would find nothing, which is why this is a function and not
  * a string built at each call site.
  * @param level - the entity's level.
  * @returns the file name, including the extension.
  */
 export function fileFor(level: EntityLevel): string {
+  return `${typeOf(level)}.md`
+}
+
+/**
+ * The file inside an entity's folder, in the format the board shipped before.
+ *
+ * A reader falls back to this when `fileFor(level)` is not there, so a board
+ * nobody has converted yet keeps reading. Kept as its own function for the
+ * same reason `fileFor` is: the type is named for the type, not the level, and
+ * a call site building `mission.yaml` by hand would find nothing.
+ * @param level - the entity's level.
+ * @returns the legacy file name, including the extension.
+ */
+export function legacyFileFor(level: EntityLevel): string {
   return `${typeOf(level)}.yaml`
 }
 
