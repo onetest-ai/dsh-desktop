@@ -1,5 +1,6 @@
-import { watch, type FSWatcher } from 'node:fs'
-import { boardRoot } from './board/board-paths'
+import { existsSync, watch, type FSWatcher } from 'node:fs'
+import { dirname } from 'node:path'
+import { boardRoot, hasBoard } from './board/board-paths'
 import { readBoard, type Entity, type Suite } from './board/board-read'
 
 /** One entity, cut to what the two views draw. */
@@ -131,14 +132,39 @@ export function boardFor(project: string | undefined): BoardViewData {
 }
 
 /**
+ * The deepest directory that exists on the way down to the board.
+ *
+ * A rung of a ladder, not a guess: `.dsh/tasks/` is watched recursively when
+ * it is there, because that is where every write lands. When it is not, the
+ * next directory up is watched for it appearing — and never recursively, since
+ * a project root holds `node_modules` and every build directory on the
+ * machine, and a recursive watch over those would report a rebuild as a board
+ * change thousands of times a second.
+ * @param project - the open project's directory.
+ * @returns where to watch, and whether that watch descends.
+ */
+function watchPoint(project: string): { where: string; recursive: boolean } {
+  const board = boardRoot(project)
+  if (hasBoard(project)) return { where: board, recursive: true }
+  const dsh = dirname(board)
+  if (existsSync(dsh)) return { where: dsh, recursive: false }
+  return { where: project, recursive: false }
+}
+
+/**
  * Watch a project's board and say when it moved.
  *
  * Recursive over `.dsh/tasks/`, which is where every write lands — the
  * panel's own, the agent's through its tools, and a `git checkout`'s. Only the
  * first is observable directly, so the rest are watched for.
  *
- * A project with no board is watched for nothing rather than having one made:
- * the directory appears when something creates it, and the next focus reads it.
+ * A project with no board is watched from as far down as it goes, and the
+ * watch walks down behind whatever creates the rest. Nothing here creates a
+ * directory: the ladder waits, it does not build. Without it a project that
+ * had no board when it was opened would never learn that one appeared, which
+ * is the whole primary path — ask the agent to plan something, and watch it
+ * show up. Once the board exists the recursive watch catches everything, so
+ * the hole was exactly the first create.
  * @param project - the open project's directory, or nothing when none is.
  * @param changed - called on every event; the caller debounces.
  * @returns a function that stops watching.
@@ -146,16 +172,32 @@ export function boardFor(project: string | undefined): BoardViewData {
 export function watchBoard(project: string | undefined, changed: () => void): () => void {
   if (project === undefined) return () => {}
   let watcher: FSWatcher | undefined
-  try {
-    watcher = watch(boardRoot(project), { recursive: true, persistent: false }, () => {
-      changed()
-    })
-  } catch {
-    // No board yet, or a filesystem that cannot watch recursively. Neither is
-    // a failure: the views still re-read on focus and after their own writes.
-    return () => {}
-  }
-  return () => {
+  let stopped = false
+  const arm = (): void => {
+    if (stopped) return
     watcher?.close()
+    watcher = undefined
+    const at = watchPoint(project)
+    try {
+      watcher = watch(at.where, { recursive: at.recursive, persistent: false }, () => {
+        // A non-recursive watch is a rung: the event may well be the one that
+        // created the directory below it, so the watch moves down before the
+        // views are told. The board's own watch is never re-armed — closing
+        // and reopening a recursive watcher for every file an agent writes
+        // would cost more than everything it is watching for.
+        if (!at.recursive) arm()
+        changed()
+      })
+    } catch {
+      // A directory that has gone between the look and the watch, or a
+      // filesystem that cannot watch recursively. Neither is a failure: the
+      // views still re-read on focus and after their own writes.
+    }
+  }
+  arm()
+  return () => {
+    stopped = true
+    watcher?.close()
+    watcher = undefined
   }
 }

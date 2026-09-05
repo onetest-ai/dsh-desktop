@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { boardFor } from './board-ipc'
+import { boardFor, watchBoard } from './board-ipc'
 
 let project = ''
 beforeEach(() => {
@@ -92,5 +92,89 @@ describe('boardFor', () => {
     expect(boardFor(bare).present).toBe(false)
     expect(boardFor(bare).present).toBe(false)
     rmSync(bare, { recursive: true, force: true })
+  })
+})
+
+/**
+ * Wait for the watcher to say something, or fail rather than hang.
+ *
+ * A watcher test that passes without a watcher is worse than no test at all,
+ * so this rejects when nothing arrives: the assertion is that something was
+ * heard, and it can only be made by waiting for it.
+ * A watch is not listening the moment it is armed: on macOS a recursive one
+ * is an FSEvents stream that takes a moment to start, and a write racing it is
+ * a write nobody hears. So the act is delayed rather than the assertion
+ * loosened — a test that tolerated hearing nothing would be the vacuous one.
+ * @param arm - starts watching, given the callback to fire; returns its stopper.
+ * @param act - what to do to the filesystem once the watch is up.
+ * @returns how many times the watcher fired, once it has fired at least once.
+ */
+async function heard(arm: (changed: () => void) => () => void, act: () => void): Promise<number> {
+  let fired = 0
+  let announce: (() => void) | undefined
+  const stop = arm(() => {
+    fired += 1
+    announce?.()
+  })
+  try {
+    await new Promise((settle) => setTimeout(settle, 400))
+    // Whatever the stream replayed as it opened is thrown away: FSEvents hands
+    // a new watch the recent history of the directory it was opened on, and
+    // the count is only evidence of the act if it starts after the watch is
+    // live. The wait for `said` below is what makes it evidence at all.
+    fired = 0
+    const said = new Promise<void>((resolve, reject) => {
+      announce = resolve
+      const giveUp = setTimeout(() => reject(new Error('nothing said the board moved')), 3000)
+      giveUp.unref?.()
+    })
+    act()
+    await said
+  } finally {
+    stop()
+  }
+  return fired
+}
+
+describe('watchBoard', () => {
+  it('reports a write under an existing board', async () => {
+    const fired = await heard(
+      (changed) => watchBoard(project, changed),
+      () => put('campaigns/q3/workitem.yaml', 'name: Q3\nsubtype: campaign\n'),
+    )
+    expect(fired).toBeGreaterThan(0)
+  })
+
+  // reason: "ask the agent to plan something and watch it show up" is the path
+  // this whole feature exists for, and it starts on a project with no board.
+  // Watched for nothing, such a project would never learn one appeared.
+  it('reports a board created after watching started', async () => {
+    const bare = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-board-late-')))
+    try {
+      const fired = await heard(
+        (changed) => watchBoard(bare, changed),
+        () => {
+          mkdirSync(join(bare, '.dsh', 'tasks', 'campaigns', 'q3'), { recursive: true })
+          writeFileSync(join(bare, '.dsh', 'tasks', 'campaigns', 'q3', 'workitem.yaml'), 'name: Q3\n')
+        },
+      )
+      expect(fired).toBeGreaterThan(0)
+    } finally {
+      rmSync(bare, { recursive: true, force: true })
+    }
+  })
+
+  // reason: the ladder waits for the board, it does not build one — the same
+  // rule `boardFor` keeps, and main arms this watch for every project opened.
+  it('creates nothing for a project with no board', () => {
+    const bare = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-board-unwatched-')))
+    const stop = watchBoard(bare, () => {})
+    expect(existsSync(join(bare, '.dsh'))).toBe(false)
+    stop()
+    rmSync(bare, { recursive: true, force: true })
+  })
+
+  it('watches nothing when no project is open', () => {
+    expect(() => watchBoard(undefined, () => {})()).not.toThrow()
   })
 })

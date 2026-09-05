@@ -58,6 +58,8 @@ import { remote, type RemoteOp, type RemoteOutcome } from './git-remote'
 import type { Section } from './git-status'
 import { setGitPath } from './git-run'
 import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
+import { boardFor, watchBoard } from './board-ipc'
+import { BOARD_DIR, resolveInBoard } from './board/board-paths'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
 import { loadableUrl } from './view-tools'
@@ -704,8 +706,11 @@ function showProject(project?: { path: string; title: string }): void {
   if (views === undefined || views.window.isDestroyed()) return
   views.files.webContents.send('pane:project', currentProject)
   // The panel follows the project the tree does; a moved project is a
-  // different set of repositories entirely.
-  if (moved) notifyGitChanged()
+  // different set of repositories entirely — and a different board.
+  if (moved) {
+    notifyGitChanged()
+    notifyTasksChanged()
+  }
 }
 
 /**
@@ -720,6 +725,8 @@ function watchCurrentProject(): void {
   projectWatcher?.close()
   projectWatcher = undefined
   closeGitWatchers()
+  stopBoardWatch?.()
+  stopBoardWatch = undefined
   const root = currentProject?.path
   if (root === undefined) return
   projectWatcher = watchProject(root, (relative) => {
@@ -730,6 +737,7 @@ function watchCurrentProject(): void {
     notifyGitChanged()
   })
   watchRepos(root)
+  stopBoardWatch = watchBoard(root, notifyTasksChanged)
 }
 
 /**
@@ -1181,6 +1189,44 @@ function notifyGitChanged(): void {
   }, GIT_SETTLE_MS)
   gitNotify.unref?.()
 }
+
+/** The pending `tasks:changed`, so a burst of writes arrives as one. */
+let tasksNotify: ReturnType<typeof setTimeout> | undefined
+
+/**
+ * Tell both board views to read themselves again, once the writes have settled.
+ *
+ * An agent planning a campaign writes dozens of files in a second through its
+ * tools; without this, each one is a full re-read and a redraw in two views.
+ *
+ * Both are told unconditionally, unlike `notifyGitChanged`: the tree is in the
+ * side column and the board is in the editor's, so there is no one place to
+ * check for whether anyone is looking — and a view that missed the notice
+ * would show a board that no longer exists until something else moved.
+ */
+function notifyTasksChanged(): void {
+  if (views === undefined || views.window.isDestroyed()) return
+  if (tasksNotify !== undefined) clearTimeout(tasksNotify)
+  tasksNotify = setTimeout(() => {
+    tasksNotify = undefined
+    if (views === undefined || views.window.isDestroyed()) return
+    views.tasks.webContents.send('tasks:changed')
+    views.pane.webContents.send('tasks:changed')
+  }, GIT_SETTLE_MS)
+  tasksNotify.unref?.()
+}
+
+/**
+ * Stops watching the open project's board, or undefined when none is watched.
+ *
+ * Its own watch rather than a second use of the project watcher's: that one
+ * reports the directory each changed file sits in so the file tree can re-list
+ * it, and the board wants only "something under `.dsh/tasks/` moved". It also
+ * walks down to that directory as it appears, which a watch shaped around the
+ * tree could not — a project opened without a board is the case the whole
+ * feature starts from.
+ */
+let stopBoardWatch: (() => void) | undefined
 
 /**
  * Watches over each repository's own `.git`, closed when the project moves.
@@ -2401,6 +2447,8 @@ async function shutdown(): Promise<void> {
   projectWatcher?.close()
   projectWatcher = undefined
   closeGitWatchers()
+  stopBoardWatch?.()
+  stopBoardWatch = undefined
   // The install child is reaped first and unconditionally: it is in neither
   // the lifecycle chain nor `child`, so nothing below would ever find it, and
   // an unreaped `npm` keeps writing into $DSH_HOME after Electron is gone.
@@ -2620,6 +2668,34 @@ if (!app.requestSingleInstanceLock()) {
       toggleSideView('tasks')
     })
     ipcMain.on('shell:toggle-web', toggleWeb)
+    // The board's own read, for both of its views. A full walk of
+    // `.dsh/tasks/` every time and never a cache: the read is milliseconds,
+    // and a cached board is a second thing that can disagree with disk.
+    ipcMain.handle('tasks:read', () => boardFor(currentProject?.path))
+    // The tree names a folder path; main hands it to the board's panel, which
+    // brings its own tab forward. A reveal that scrolled a panel nobody could
+    // see would look like nothing happening.
+    ipcMain.on('tasks:reveal', (_event, folderPath: string) => {
+      if (views === undefined || views.window.isDestroyed()) return
+      if (!columns.editor.open) {
+        setColumn('editor', { open: true })
+        storeColumns()
+      }
+      views.pane.webContents.send('tasks:reveal', folderPath)
+    })
+    // A card's click opens the entity's own YAML. The file name comes from the
+    // level, which only main knows — the renderer holds a folder path and
+    // nothing else, which is what keeps `fileFor` on one side of the bridge.
+    // The folder is resolved inside the board before anything is opened: a
+    // path from a renderer is a request, not evidence of where it points.
+    ipcMain.on('tasks:open-file', (_event, folderPath: string, file: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return
+      const dir = resolveInBoard(project, folderPath)
+      if (dir === undefined) return
+      if (!['workitem.yaml', 'bug.yaml', 'test.yaml'].includes(file)) return
+      openInPane(project, join(BOARD_DIR, folderPath, file))
+    })
     // The panel's own read. Nothing about git reaches the renderer but this
     // result: the parsing, the spawning, and the serialisation are all here.
     ipcMain.handle('git:read', async () => await readCurrentGit())

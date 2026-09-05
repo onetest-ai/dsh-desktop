@@ -1,5 +1,6 @@
 import type { Project, TreeEntry } from './tree.ts'
 import type { BranchRowView, RepoStatusView, RowGroup, StashRowView } from './git-rows.ts'
+import type { EntityView } from './board-rows.ts'
 
 /**
  * What the git panel is showing, or why it is showing nothing.
@@ -25,6 +26,44 @@ export type ProjectGitView =
  * know why nothing happened.
  */
 export type GitResult = { ok: true } | { ok: false; reason: string }
+
+/**
+ * One test, and how much of what it validates passes.
+ *
+ * Declared here rather than imported from main's `board-ipc.ts`, for
+ * `ProjectGitView`'s reason: the renderer never imports from `src/main`, and
+ * this is the shape that crosses the bridge. It is structurally the same as
+ * main's `TestWire`, which is what makes the two ends agree without a
+ * conversion between them.
+ */
+export interface TestView {
+  folderPath: string
+  name: string
+  /** The reverse of a workitem's chip: what this test proves, and how much holds. */
+  validates: { pass: number; total: number }
+}
+
+/** A suite, its sub-suites, and the tests directly inside it. */
+export interface SuiteView {
+  path: string
+  slug: string
+  suites: SuiteView[]
+  tests: TestView[]
+}
+
+/**
+ * The whole board, as both of its views receive it.
+ *
+ * `present` is false for a project with no `.dsh/tasks/` at all, which is a
+ * different thing from a board with nothing in it: one is worth offering to
+ * start, the other is not.
+ */
+export interface BoardViewData {
+  present: boolean
+  campaigns: EntityView[]
+  tests: SuiteView
+  findings: { folderPath: string; says: string }[]
+}
 
 /** What an operation on one entry reports back. */
 export type OpResult = { ok: true; relative: string } | { ok: false; reason: string }
@@ -103,6 +142,15 @@ declare global {
       onDiffTexts(
         listener: (root: string, relative: string, original: string, modified: string, inline: boolean) => void,
       ): void
+      readTasks(): Promise<BoardViewData>
+      onTasksChanged(listener: () => void): void
+      // The tree names a folder and main does the rest: which tab comes
+      // forward and where the board scrolls to are main's, not this page's.
+      revealOnBoard(folderPath: string): void
+      // The file name comes from the entity's level, which the card knows and
+      // the tree does not — the renderer holds a folder path and nothing else.
+      openTaskFile(folderPath: string, file: string): void
+      onReveal(listener: (folderPath: string) => void): void
       askTheme(): void
       onTheme(listener: (dark: boolean) => void): void
     }
