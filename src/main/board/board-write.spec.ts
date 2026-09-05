@@ -274,6 +274,32 @@ describe('creating a test', () => {
   it('refuses a suite path outside the tests container', () => {
     expect(createEntity(project, 'test', 'campaigns/q3', 'Login').ok).toBe(false)
   })
+
+  // reason: `tests/../campaigns` textually starts with `tests/`, so a lexical
+  // check would wave it through — only a resolved comparison catches that it
+  // actually names a directory outside the tests container.
+  it('refuses a suite path that lexically starts with the tests container but resolves outside it', () => {
+    expect(createEntity(project, 'test', 'tests/../campaigns', 'Sneaky').ok).toBe(false)
+  })
+
+  // reason: `tests-evil` is a sibling of `tests`, not a child of it, so a bare
+  // prefix check must not admit it — the boundary is a path separator, not a
+  // shared string prefix.
+  it('refuses a suite path that is merely a sibling with a shared prefix', () => {
+    expect(createEntity(project, 'test', 'tests-evil/x', 'Sneaky').ok).toBe(false)
+  })
+
+  // reason: the tests root itself, named explicitly, is the container and
+  // must be accepted just as the empty parent is.
+  it('accepts the bare tests root as a suite path', () => {
+    expect(createEntity(project, 'test', 'tests', 'Login')).toEqual({ ok: true, folderPath: 'tests/login' })
+  })
+
+  // reason: a genuinely nested suite is the ordinary case and must keep
+  // working once the check is resolved rather than lexical.
+  it('accepts a genuine nested suite path', () => {
+    expect(createEntity(project, 'test', 'tests/auth', 'Login')).toEqual({ ok: true, folderPath: 'tests/auth/login' })
+  })
 })
 
 describe('linkTest', () => {

@@ -82,11 +82,13 @@ export function createEntity(project: string, level: EntityLevel, parentFolder: 
     // A suite is a directory and nothing else, so there is no entity to look
     // up — only a path to check. An empty parent means the tests root.
     const suite = parentFolder === '' ? TESTS_DIR : parentFolder
-    if (suite !== TESTS_DIR && !suite.startsWith(`${TESTS_DIR}/`)) {
-      return { ok: false, reason: `${parentFolder} is not inside the tests container.` }
-    }
-    if (resolveInBoard(project, suite) === undefined) {
+    const resolvedSuite = resolveInBoard(project, suite)
+    if (resolvedSuite === undefined) {
       return { ok: false, reason: `${suite} is not inside this project's board.` }
+    }
+    const resolvedTestsRoot = resolveInBoard(project, TESTS_DIR)!
+    if (resolvedSuite !== resolvedTestsRoot && !resolvedSuite.startsWith(resolvedTestsRoot + sep)) {
+      return { ok: false, reason: `${parentFolder} is not inside the tests container.` }
     }
     parts = suite === TESTS_DIR ? [] : suite.slice(TESTS_DIR.length + 1).split('/')
   } else if (level === 'campaign') {
