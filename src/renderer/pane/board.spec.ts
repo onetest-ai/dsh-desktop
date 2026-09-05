@@ -255,9 +255,34 @@ describe('the board', () => {
     expect(document.querySelectorAll('.board-column-validation').length).toBe(1)
   })
 
+  // reason: the lane tag was the last status on this surface drawn raw, so
+  // one board read `Executing` as a heading and `executing` on the lane
+  // beside it — the same value, two ways, a foot apart.
+  it('draws a lane’s own status as a label too', async () => {
+    await load(bridge(oneMission()))
+    expect(document.querySelector('.board-lane-status')?.textContent).toBe('Idea')
+  })
+
   it('puts a card in the column its status names', async () => {
     await load(bridge(oneMission({ taskStatus: 'done' })))
     expect(document.querySelector('.board-column-done .board-card')?.textContent).toContain('T1')
+  })
+
+  // reason: the spec says a name wraps to two lines and then ellipses, and a
+  // name with no space in it — a slug, a path, an identifier — has no break
+  // to take. Without a rule letting it break anywhere, such a token overflows
+  // the column and is cut mid-letter by `overflow: hidden`, with nothing
+  // saying it was cut. jsdom lays nothing out and so can never see this: like
+  // the backdrop's `pointer-events`, it is decided by CSS, and the stylesheet
+  // is the only place a test can read it.
+  it('lets a card’s name break so the clamp can ellipse it', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const css = readFileSync(join(import.meta.dirname, '..', 'pane.css'), 'utf8')
+    const match = css.match(/\.board-card-name\s*\{([^}]*)\}/)
+    expect(match).not.toBeNull()
+    expect(match?.[1]).toMatch(/overflow-wrap\s*:\s*anywhere/)
+    expect(match?.[1]).not.toMatch(/white-space\s*:\s*nowrap/)
   })
 
   // reason: a test has no status, so there is no column it belongs in — the
@@ -764,7 +789,9 @@ describe('the Tests destination', () => {
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
     document.querySelector<HTMLElement>('.board-detail-back')?.click()
     expect(document.querySelector('.board-tests-row')).not.toBeNull()
-    document.querySelector<HTMLElement>('.board-tests-back')?.click()
+    // The surfaces are exclusive, so the back inside the Tests destination is
+    // the destination's own — it needs no class of its own to be told apart.
+    document.querySelector<HTMLElement>('.board-tests .board-detail-back')?.click()
     expect(document.querySelector('.board-column')).not.toBeNull()
   })
 
@@ -792,13 +819,79 @@ describe('the Tests destination', () => {
     expect(document.querySelector('.board-tests')?.textContent).toContain('No tests yet')
   })
 
-  // reason: the header is the columns' own chrome. Left up behind a detail it
-  // would offer a second way out beside the one that surface already carries.
+  // reason: the header is the columns' own chrome. Left up behind either
+  // destination it would offer a second way out beside the one that surface
+  // already carries — and it has to come back when the columns do, or the
+  // Tests control is a door that closes behind you.
   it('hides the header while a destination is open', async () => {
     const stub = bridge(withTests(), { detail: detail() })
     await load(stub)
+    document.getElementById('board-tests')?.click()
+    expect(document.getElementById('board-head')?.hidden).toBe(true)
+    document.querySelector<HTMLElement>('.board-tests .board-detail-back')?.click()
+    expect(document.getElementById('board-head')?.hidden).toBe(false)
     document.querySelector<HTMLElement>('.board-card')?.click()
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
     expect(document.getElementById('board-head')?.hidden).toBe(true)
+  })
+
+  // reason: a reveal names a card, a lane or a heading, and all three are on
+  // the columns. Left on the Tests list there is nothing for the mark to land
+  // on and nothing to scroll, and the tab is brought forward on the surface
+  // the reader was already looking at — a click that reads as doing nothing.
+  it('leaves the destination when the tree reveals a card', async () => {
+    const stub = bridge(withTests())
+    await load(stub)
+    document.getElementById('board-tests')?.click()
+    stub.reveal('campaigns/q3/missions/m1/tasks/t1')
+    expect(document.querySelector('.board-tests')).toBeNull()
+    expect(document.querySelector('.board-card-revealed')?.textContent).toContain('T1')
+  })
+
+  // reason: the mark says what the tree has selected now. A test named after
+  // a card is a new selection, so the card's highlight is the previous one —
+  // and backing out of the test's detail is where it would be seen, on a
+  // board marking a row nothing points at any more.
+  it('drops the previous mark when the tree names a test', async () => {
+    const stub = bridge(withTests(), { detail: detail({ level: 'test', status: '' }) })
+    await load(stub)
+    stub.reveal('campaigns/q3/missions/m1/tasks/t1')
+    expect(document.querySelector('.board-card-revealed')).not.toBeNull()
+    stub.reveal('tests/auth/login')
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    document.querySelector<HTMLElement>('.board-detail-back')?.click()
+    expect(document.querySelector('.board-column')).not.toBeNull()
+    expect(document.querySelector('.board-card-revealed')).toBeNull()
+  })
+
+  // reason: this destination names something every board has rather than a
+  // path, so unlike the detail and the highlight it means the same thing in
+  // the next repository — closing it on a project change would be the panel
+  // deciding the reader is done here.
+  it('stays open when the project changes', async () => {
+    const stub = bridge(withTests())
+    await load(stub)
+    document.getElementById('board-tests')?.click()
+    stub.readTasks = async () => withTests({ project: '/p/other' })
+    stub.fire()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.board-tests-row')).not.toBeNull()
+    expect(document.querySelector('.board-column')).toBeNull()
+  })
+
+  // reason: the same rule the tree applies to the same tree — a heading with
+  // nothing under it is a section the reader has to open to find out it is
+  // empty, and nesting is where that is easiest to get wrong.
+  it('drops a suite with no test anywhere beneath it', async () => {
+    const board = withTests()
+    ;(board.tests as { suites: unknown[] }).suites.push({
+      path: 'tests/spare',
+      slug: 'spare',
+      suites: [{ path: 'tests/spare/deeper', slug: 'deeper', suites: [], tests: [] }],
+      tests: [],
+    })
+    await load(bridge(board))
+    document.getElementById('board-tests')?.click()
+    expect([...document.querySelectorAll('.board-tests-suite')].map((node) => node.textContent)).toEqual(['auth'])
   })
 })

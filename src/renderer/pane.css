@@ -1309,11 +1309,18 @@ body {
    most real names off after three words — `Define First Deliver…` — and a
    card that cannot say what it is called is the thing the original columns
    got wrong. The clamp is what still bounds a card's height, so a lane of
-   long names does not become a lane of paragraphs. */
+   long names does not become a lane of paragraphs.
+
+   `overflow-wrap` is what makes the ellipsis reachable at all for a name with
+   no space in it — a slug, a path, a long identifier. Without it a single
+   token wider than the column has no break to take, so it overflows into the
+   `overflow: hidden` above and is cut mid-letter with nothing saying it was
+   cut. The clamp elides where a line ends; this is what lets a line end. */
 .board-card-name {
   display: -webkit-box;
   overflow: hidden;
   flex: 1 1 100%;
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;

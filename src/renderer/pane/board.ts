@@ -54,34 +54,41 @@ let refusal: string | undefined
 let revealed: string | undefined
 
 /**
- * The entity whose detail is on screen, or undefined when the columns are.
+ * Where the panel is: which of its three surfaces is on screen, and — for the
+ * detail — which one it was opened over.
  *
- * The whole detail rather than the folder path it was opened from: it is what
- * `draw` renders, and holding only the path would mean either a read inside
- * `draw` — which is synchronous and called from every redraw — or a second
- * copy of the entity kept somewhere else. Re-read in `refresh` alongside the
- * board, from the same walk of the same files, so the detail and the card it
- * was opened from cannot disagree.
+ * One value rather than a nullable detail beside a Tests flag. Two variables
+ * could say things the panel has no way to be: a detail open *and* the Tests
+ * list standing behind it was the shape that let a reveal clear the detail,
+ * leave the flag, and land the reader back on the list it was taking them
+ * off. A surface that is not on screen cannot be forgotten about here,
+ * because there is nowhere to forget it.
  *
- * Not remembered across a session, and cleared with the project: a panel that
- * reopened on the task you were reading last Tuesday has decided something
- * for you.
+ * The detail carries the whole entity rather than the folder path it was
+ * opened from: it is what `draw` renders, and holding only the path would
+ * mean either a read inside `draw` — which is synchronous and called from
+ * every redraw — or a second copy of the entity kept somewhere else. Re-read
+ * in `refresh` alongside the board, from the same walk of the same files, so
+ * the detail and the card it was opened from cannot disagree.
+ *
+ * It carries `under` because back walks out one level and the two destinations
+ * stack: a test opened from the Tests list returns to the list, a card's
+ * detail returns to the columns. That history is one field of the state it is
+ * about, rather than something inferred from what else happens to be set.
+ *
+ * A project change walks out of a detail and keeps the Tests list, which is
+ * one rule and not two: an open detail and `revealed` both name a path, and a
+ * path means something else in the next repository, while Tests names a
+ * destination every board has. Nothing here is remembered across a session
+ * either — a panel that reopened on the task you were reading last Tuesday
+ * has decided something for you.
  */
-let detail: EntityDetailView | undefined
+type Place =
+  | { at: 'columns' }
+  | { at: 'tests' }
+  | { at: 'detail'; entity: EntityDetailView; under: 'columns' | 'tests' }
 
-/**
- * Whether the Tests destination is the surface behind whatever is on screen.
- *
- * A second flag rather than a third value of one, because the two stack: a
- * test opened from here puts its detail over this, and back walks out the way
- * it came — to the list, and only then to the columns. One enum would make
- * that history a thing to remember somewhere else.
- *
- * Not cleared when the project changes, unlike `detail` and `revealed`: those
- * name a path, and a path means something else in the next repository. This
- * names a destination every board has.
- */
-let tests = false
+let place: Place = { at: 'columns' }
 
 /** What the modal is about to create, or undefined when it is closed. */
 let pending: { level: 'task' | 'bug'; parent: string } | undefined
@@ -242,7 +249,10 @@ function laneFor(lane: LaneView): HTMLElement {
   title.className = 'board-lane-title'
   title.textContent = lane.title
   head.append(title)
-  if (lane.status !== '') head.append(tag('board-lane-status', lane.status))
+  // The label, as the column heading beside it reads: the same status on the
+  // same screen, drawn twice, should not read as `executing` in one place and
+  // Executing in the other.
+  if (lane.status !== '') head.append(tag('board-lane-status', statusLabel(lane.status)))
   const add = document.createElement('button')
   add.type = 'button'
   add.className = 'board-lane-add'
@@ -298,21 +308,6 @@ function drawNote(): void {
 }
 
 /**
- * Which of the panel's surfaces is on screen.
- *
- * One decision, made in one place, so the panel cannot show two at once —
- * they share `#board-groups`, and a second container would let a detail and
- * the columns both be in the document with only CSS keeping them apart. A
- * further destination is a further case here and a further `draw*` beside
- * the two below, not a rewrite of either.
- * @returns the surface `draw` should put in the container.
- */
-function surface(): 'columns' | 'detail' | 'tests' {
-  if (detail !== undefined) return 'detail'
-  return tests ? 'tests' : 'columns'
-}
-
-/**
  * What every control in a detail does.
  *
  * Built once rather than per draw: none of them closes over the entity being
@@ -323,8 +318,9 @@ const detailActions: DetailActions = {
   back: () => {
     // One level, not all the way out: a test opened from the Tests list
     // lands back on the list it was picked from, and a card's detail lands
-    // on the columns because that is where its card was.
-    detail = undefined
+    // on the columns because that is where its card was. Which of the two it
+    // is was settled when the detail opened; nothing here has to work it out.
+    if (place.at === 'detail') place = { at: place.under }
     draw()
   },
   open: (folderPath: string) => {
@@ -351,14 +347,11 @@ const detailActions: DetailActions = {
  * Draw the open entity in place of the columns.
  * @param into - the panel's one container.
  * @param empty - the line that words an absent board, which this surface has none of.
+ * @param entity - the entity `place` says is open, passed rather than read back out of it.
  */
-function drawDetail(into: HTMLElement, empty: HTMLElement): void {
-  // Narrowing, not a case: `surface()` answered `detail` because this is set,
-  // and a module-level `let` does not stay narrowed across a call. Nothing
-  // reaches here with it unset, so there is no state for this line to word.
-  if (detail === undefined) return
+function drawDetail(into: HTMLElement, empty: HTMLElement, entity: EntityDetailView): void {
   empty.hidden = true
-  into.append(renderDetail(detail, detailActions))
+  into.append(renderDetail(entity, detailActions))
 }
 
 /**
@@ -454,10 +447,10 @@ function drawTests(into: HTMLElement, empty: HTMLElement): void {
   head.className = 'board-detail-head'
   const back = document.createElement('button')
   back.type = 'button'
-  back.className = 'board-detail-back board-tests-back'
+  back.className = 'board-detail-back'
   back.textContent = '← Board'
   back.addEventListener('click', () => {
-    tests = false
+    place = { at: 'columns' }
     draw()
   })
   const title = document.createElement('h2')
@@ -520,7 +513,11 @@ function drawColumns(into: HTMLElement, empty: HTMLElement): void {
  */
 async function openDetail(folderPath: string): Promise<void> {
   const next = await window.pane.readTaskDetail(folderPath)
-  detail = next
+  // What back will return to: whatever is on screen now, and for a detail
+  // opened from inside another detail, the surface that one was opened over
+  // — a chain of child rows is still one level in from where it started.
+  const under = place.at === 'detail' ? place.under : place.at
+  place = next === undefined ? { at: under } : { at: 'detail', entity: next, under }
   if (next === undefined) refusal = `${folderPath} is no longer on the board.`
   draw()
 }
@@ -561,6 +558,12 @@ async function flip(folderPath: string, index: number, done: boolean): Promise<v
  * surface is showing: no project, no board, and a read that failed are all
  * answers to "is there anything here at all", and none of the surfaces has
  * anything to draw once one of them is true.
+ *
+ * Which surface goes into the container is one decision made in one place, so
+ * the panel cannot show two at once — they share `#board-groups`, and a second
+ * container would let a detail and the columns both be in the document with
+ * only CSS keeping them apart. A further destination is a further case here
+ * and a further `draw*` beside the three below, not a rewrite of any.
  */
 function draw(): void {
   const into = el('board-groups')
@@ -593,9 +596,12 @@ function draw(): void {
     empty.hidden = false
     return
   }
-  switch (surface()) {
+  // Read out once, so the switch below narrows the union it is switching on
+  // and the detail's entity comes from the same value that chose the case.
+  const here = place
+  switch (here.at) {
     case 'detail':
-      drawDetail(into, empty)
+      drawDetail(into, empty, here.entity)
       return
     case 'tests':
       drawTests(into, empty)
@@ -676,7 +682,7 @@ async function create(): Promise<void> {
 }
 
 el('board-tests').addEventListener('click', () => {
-  tests = true
+  place = { at: 'tests' }
   draw()
 })
 
@@ -713,18 +719,23 @@ async function refresh(): Promise<void> {
     if (latest !== undefined && next.project !== latest.project) {
       refusal = undefined
       revealed = undefined
-      detail = undefined
+      // Out of the detail and no further: what it walks out to is the Tests
+      // list when that is what it was opened over, which survives the change
+      // because it names a destination rather than a path.
+      if (place.at === 'detail') place = { at: place.under }
     }
     latest = next
     trouble = undefined
     // The open detail, re-read beside the board rather than kept from the
     // read that opened it: an agent's edit lands on both surfaces at once,
     // and an entity deleted while its detail was open falls back to the
-    // columns with a line, which is the one thing a stale copy could not do.
-    if (detail !== undefined) {
-      const again = await window.pane.readTaskDetail(detail.folderPath)
-      if (again === undefined) refusal = `${detail.folderPath} is no longer on the board.`
-      detail = again
+    // surface it was opened over, with a line — the one thing a stale copy
+    // could not do.
+    const open = place
+    if (open.at === 'detail') {
+      const again = await window.pane.readTaskDetail(open.entity.folderPath)
+      if (again === undefined) refusal = `${open.entity.folderPath} is no longer on the board.`
+      place = again === undefined ? { at: open.under } : { at: 'detail', entity: again, under: open.under }
     }
   } catch (error) {
     // Nothing on the other side of the bridge rejects today. Without this it
@@ -762,17 +773,23 @@ window.pane.onReveal((folderPath) => {
   // row — and the answer for one is the detail, the same surface a card's
   // click opens.
   if (isTest(latest?.tests, folderPath)) {
-    tests = false
+    // The mark goes with it. It says which row the tree has selected, and the
+    // tree has just selected this test — a card still highlighted underneath
+    // is the previous click outliving this one, which is what the reader
+    // finds when they back out of the detail.
+    revealed = undefined
+    place = { at: 'columns' }
     void openDetail(folderPath)
     document.getElementById('tab-board')?.click()
     return
   }
   revealed = folderPath
-  // A reveal always lands on the board: it names a card, a lane or a heading,
-  // and all three are on the columns. Marking one behind an open detail would
-  // scroll a surface nobody can see, which is the thing the tab-forward below
-  // exists to prevent one level up.
-  detail = undefined
+  // A reveal always lands on the columns: it names a card, a lane or a
+  // heading, and all three are drawn there. Whatever stood over them — a
+  // detail, or the Tests list — is precisely what the reader is being taken
+  // off, and leaving one up would scroll and mark a surface it is not on,
+  // which is what the tab-forward below exists to prevent one level up.
+  place = { at: 'columns' }
   draw()
   document.getElementById('tab-board')?.click()
   // Whichever of the three the draw above marked, in document order — the
