@@ -119,6 +119,9 @@ contextBridge.exposeInMainWorld('pane', {
   // The board's own read, for both of its views. Nothing about `.dsh/tasks/`
   // reaches either page but this result: the parsing and the walk are main's.
   readTasks: () => ipcRenderer.invoke('tasks:read'),
+  // One entity, read the same way the board is. Answers undefined for a
+  // folder path the board no longer has.
+  readTaskDetail: (folderPath: string) => ipcRenderer.invoke('tasks:detail', folderPath),
   // Sends rather than invokes: main owns which column is open and where the
   // board scrolls to, and there is no answer for a view to wait on.
   revealOnBoard: (folderPath: string) => ipcRenderer.send('tasks:reveal', folderPath),

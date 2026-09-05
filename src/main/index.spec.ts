@@ -2908,6 +2908,35 @@ describe('the board channels', () => {
     expect(board.project).toBeUndefined()
   })
 
+  // reason: the detail is a second surface on the same files, and it is gated
+  // on the open project exactly as the read is. A detail answered from a board
+  // no project is open on would be drawing the last project's work.
+  it('answers the detail with one entity of the open project’s board', async () => {
+    await bootWithBoard()
+    const detail = (await fake.sendIpc('tasks:detail', task)) as {
+      level: string
+      name: string
+      parent?: { folderPath: string }
+      file: string
+    }
+    expect(detail.level).toBe('task')
+    expect(detail.name).toBe('Fix the login timeout')
+    expect(detail.parent?.folderPath).toBe(mission)
+    expect(detail.file).toBe('workitem.md')
+  })
+
+  it('answers the detail with nothing when no project is open, or the path is not on the board', async () => {
+    readWorkspacesMock.mockReturnValue([])
+    await bootReady()
+    expect(await fake.sendIpc('tasks:detail', task)).toBeUndefined()
+    readWorkspacesMock.mockReturnValue([
+      { path: project, title: 'board', file: join(project, '.dsh', 'mcp.json'), declared: false, servers: [] },
+    ])
+    fake.sendIpc('harness:workspace', project)
+    await settle()
+    expect(await fake.sendIpc('tasks:detail', 'campaigns/nope')).toBeUndefined()
+  })
+
   it('forwards a reveal to the board’s panel', async () => {
     await bootWithBoard()
     fake.views.pane.webContents.send.mockClear()

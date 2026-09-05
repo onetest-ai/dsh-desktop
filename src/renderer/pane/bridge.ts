@@ -70,6 +70,37 @@ export interface BoardViewData {
 }
 
 /**
+ * One entity, with everything a detail draws.
+ *
+ * Declared here rather than imported from main's `board-ipc.ts`, for
+ * `TestView`'s reason: the renderer never imports from `src/main`, and this is
+ * the shape that crosses the bridge. It is structurally the same as main's
+ * `EntityDetailWire`, which is what makes the two ends agree without a
+ * conversion between them.
+ */
+export interface EntityDetailView {
+  level: string
+  folderPath: string
+  name: string
+  status: string
+  /** The parent's folder path and name, for the line under the heading. Absent for a campaign and a test. */
+  parent?: { folderPath: string; name: string }
+  /** The lead paragraph. */
+  description: string
+  /** `[{ heading, body }]` in the level's own order, blank ones included so the reader sees the shape. */
+  sections: { heading: string; body: string }[]
+  criteria: { text: string; done: boolean }[]
+  /** Children as rows: tasks, bugs and sub-missions. */
+  children: { level: string; folderPath: string; name: string; status: string }[]
+  /** What validates this workitem. `name` is the test's own name, resolved in main. */
+  links: { test: string; name: string; result: string; comment: string; bug?: string }[]
+  /** For a test: which workitems point at it, and with what verdict. */
+  validates: { folderPath: string; name: string; result: string }[]
+  /** The file to hand the editor when Open file is pressed. */
+  file: string
+}
+
+/**
  * What one board write reports back.
  *
  * The folder path the store answers with is dropped on the way across: the
@@ -159,6 +190,10 @@ declare global {
         listener: (root: string, relative: string, original: string, modified: string, inline: boolean) => void,
       ): void
       readTasks(): Promise<BoardViewData>
+      // One entity, read the same way the board is — so a detail and the card
+      // it was opened from cannot disagree. Undefined when the board no
+      // longer has that folder path, which is the detail's cue to fall back.
+      readTaskDetail(folderPath: string): Promise<EntityDetailView | undefined>
       onTasksChanged(listener: () => void): void
       // The tree names a folder and main does the rest: which tab comes
       // forward and where the board scrolls to are main's, not this page's.

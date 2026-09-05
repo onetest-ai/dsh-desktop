@@ -58,7 +58,7 @@ import { remote, type RemoteOp, type RemoteOutcome } from './git-remote'
 import type { Section } from './git-status'
 import { setGitPath } from './git-run'
 import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
-import { boardFor, watchBoard } from './board-ipc'
+import { boardFor, detailFor, watchBoard } from './board-ipc'
 import { BOARD_DIR, resolveInBoard } from './board/board-paths'
 // `setStatus` is imported under a name of its own: this file already has one,
 // which is about the window's state rather than an entity's.
@@ -2680,6 +2680,13 @@ if (!app.requestSingleInstanceLock()) {
     // place that does not exist, and one that could not tell one project from
     // the next would keep the last one's highlights and folds over it.
     ipcMain.handle('tasks:read', () => ({ ...boardFor(currentProject?.path), project: currentProject?.path }))
+    // One entity, for the panel's detail view — read the same way, from the
+    // same walk of the same files, so a detail and the card it was opened
+    // from cannot disagree. A folder path the board does not have answers
+    // nothing: the path came from a view holding a board it read a moment
+    // ago, and an entity deleted since is a fall back to the board rather
+    // than a failure.
+    ipcMain.handle('tasks:detail', (_event, folderPath: string) => detailFor(currentProject?.path, folderPath))
     // The tree names a folder path; main hands it to the board's panel, which
     // brings its own tab forward. A reveal that scrolled a panel nobody could
     // see would look like nothing happening.

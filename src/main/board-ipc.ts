@@ -1,7 +1,8 @@
 import { existsSync, watch, type FSWatcher } from 'node:fs'
-import { dirname } from 'node:path'
-import { boardRoot, hasBoard } from './board/board-paths'
-import { readBoard, type Entity, type Suite } from './board/board-read'
+import { dirname, join } from 'node:path'
+import { boardRoot, fileFor, hasBoard, legacyFileFor } from './board/board-paths'
+import { findTest, readBoard, type Entity, type Suite } from './board/board-read'
+import { bodyFor, LEVEL_SECTIONS } from './board/entity-schema'
 
 /** One entity, cut to what the two views draw. */
 export interface EntityWire {
@@ -96,15 +97,32 @@ function wireSuite(suite: Suite, links: { test: string; result: string }[]): Sui
   }
 }
 
-/** Every link on the board, so a test's count is one pass rather than a walk per test. */
-function allLinks(entities: Entity[]): { test: string; result: string }[] {
-  const out: { test: string; result: string }[] = []
-  const stack = [...entities]
-  while (stack.length > 0) {
-    const entity = stack.pop()!
-    stack.push(...entity.children)
-    for (const link of entity.fields.validatedBy) out.push({ test: link.test, result: link.result })
+/** One `validated_by` entry, and the workitem that made it. */
+interface BoardLink {
+  test: string
+  result: string
+  /** Who points at that test. The reverse direction, which only the whole board knows. */
+  from: { folderPath: string; name: string }
+}
+
+/**
+ * Every link on the board, so a test's count is one pass rather than a walk per test.
+ *
+ * In reading order — a campaign, then everything under it — rather than in
+ * whatever order a stack happens to pop, because a test's detail lists these
+ * back to a person and a list that reordered itself between two reads of the
+ * same board would be one nobody could scan twice.
+ * @param entities - the campaigns, walked in full.
+ * @returns every link, each carrying the workitem it was written on.
+ */
+function allLinks(entities: Entity[]): BoardLink[] {
+  const out: BoardLink[] = []
+  const walk = (entity: Entity): void => {
+    const from = { folderPath: entity.folderPath, name: entity.name }
+    for (const link of entity.fields.validatedBy) out.push({ test: link.test, result: link.result, from })
+    for (const child of entity.children) walk(child)
   }
+  for (const entity of entities) walk(entity)
   return out
 }
 
@@ -128,6 +146,172 @@ export function boardFor(project: string | undefined): BoardViewData {
     campaigns: board.campaigns.map(wire),
     tests: wireSuite(board.tests, links),
     findings: board.findings,
+  }
+}
+
+/**
+ * One entity, with everything a detail draws — the only place fields cross the bridge.
+ *
+ * Deliberately fatter than `EntityWire`, and deliberately for one entity at a
+ * time. The board's wire carries counts because it draws hundreds of cards on
+ * every redraw and reads none of the prose; a detail is one entity a person
+ * opened on purpose, and the prose is the whole reason they opened it.
+ */
+export interface EntityDetailWire {
+  level: string
+  folderPath: string
+  name: string
+  status: string
+  /** The parent's folder path and name, for the line under the heading. Absent for a campaign and a test. */
+  parent?: { folderPath: string; name: string }
+  /** The lead paragraph. */
+  description: string
+  /** `[{ heading, body }]` in the level's own order, blank ones included so the reader sees the shape. */
+  sections: { heading: string; body: string }[]
+  criteria: { text: string; done: boolean }[]
+  /** Children as rows: tasks, bugs and sub-missions. */
+  children: { level: string; folderPath: string; name: string; status: string }[]
+  /** What validates this workitem. `name` is the test's own name, resolved here. */
+  links: { test: string; name: string; result: string; comment: string; bug?: string }[]
+  /** For a test: which workitems point at it, and with what verdict. */
+  validates: { folderPath: string; name: string; result: string }[]
+  /** The file to hand the editor when Open file is pressed. */
+  file: string
+}
+
+/**
+ * The entity at one folder path, and the entity that owns it.
+ *
+ * A walk that remembers where it came from, rather than a second index keyed
+ * by path: the parent is not on `Entity` — children are folder-derived and
+ * nothing points back up — so the only place it exists is in the walk that
+ * found the child.
+ * @param entities - the entities to search, at one level.
+ * @param folderPath - the path to find.
+ * @param parent - what owns `entities`, or nothing at the top of the board.
+ * @returns the entity and its parent, or nothing when none of them is it.
+ */
+function locate(
+  entities: Entity[],
+  folderPath: string,
+  parent?: Entity,
+): { entity: Entity; parent?: Entity } | undefined {
+  for (const entity of entities) {
+    if (entity.folderPath === folderPath) return { entity, parent }
+    const found = locate(entity.children, folderPath, entity)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+/**
+ * The level's own sections, paired with what the fields hold under each.
+ *
+ * `LEVEL_SECTIONS` and `bodyFor` are the same pair `dumpEntity` writes a file
+ * from, so the detail shows exactly the headings the file has — blank ones
+ * included, because a heading with nothing under it is an invitation to fill
+ * it in and one the detail dropped would be a field the reader never learns
+ * exists. `Acceptance Criteria` stays in the list even though `criteria`
+ * carries the same items parsed: the position is what tells the surface where
+ * to put the checkboxes among the prose.
+ *
+ * Sections this level does not own but which carry content — a `## Rollout`
+ * nobody modelled — follow, so a detail never hides prose the file holds.
+ * @param entity - the entity as the store read it.
+ * @returns the sections, in the order the file writes them.
+ */
+function sectionsOf(entity: Entity): { heading: string; body: string }[] {
+  const owned = LEVEL_SECTIONS[entity.level]
+  const out = owned.map((heading) => ({ heading, body: bodyFor(entity.fields, heading) }))
+  for (const section of entity.fields.extraSections ?? []) {
+    out.push({ heading: section.heading, body: section.body })
+  }
+  return out
+}
+
+/**
+ * The file an entity is actually stored in, for Open file.
+ *
+ * `fileFor` names the format the board writes, and that is the answer for
+ * every entity anybody has touched since the conversion. A board nobody has
+ * converted still reads, though — `readEntity` falls back to the `.yaml` —
+ * and handing the editor a `.md` that is not there would make Open file do
+ * nothing at all on exactly those entities.
+ * @param project - the open project's directory.
+ * @param entity - the entity as the store read it.
+ * @returns the file name within the entity's folder.
+ */
+function fileOf(project: string, entity: Entity): string {
+  const file = fileFor(entity.level)
+  if (existsSync(join(boardRoot(project), entity.folderPath, file))) return file
+  const legacy = legacyFileFor(entity.level)
+  return existsSync(join(boardRoot(project), entity.folderPath, legacy)) ? legacy : file
+}
+
+/**
+ * Read one entity's detail, for the panel's detail view.
+ *
+ * A full read every time, and never a cache — `boardFor`'s rule, for
+ * `boardFor`'s reason, and here it buys one more thing: a detail and a card
+ * are cut from the same walk of the same files, so they cannot disagree about
+ * a name, a status or a verdict. Every link's test name is resolved out of
+ * that same board rather than by opening the test's own file, which is the
+ * same rule applied one level down.
+ *
+ * An unknown folder path answers nothing, rather than throwing or inventing an
+ * empty entity: the path came from a renderer holding a board it read a moment
+ * ago, and an entity an agent deleted in between is a fallback to the board,
+ * not a failure. An empty shell would draw as a real entity with no name.
+ * @param project - the open project's directory, or nothing when none is.
+ * @param folderPath - the entity's path within the board.
+ * @returns the entity as a detail draws it, or nothing when the board has none there.
+ */
+export function detailFor(project: string | undefined, folderPath: string): EntityDetailWire | undefined {
+  if (project === undefined) return undefined
+  const board = readBoard(project)
+  if (!board.present) return undefined
+  const found = locate(board.campaigns, folderPath)
+  const entity = found?.entity ?? findTest(board.tests, folderPath)
+  if (entity === undefined) return undefined
+  const links = allLinks(board.campaigns)
+  return {
+    level: entity.level,
+    folderPath: entity.folderPath,
+    name: entity.name,
+    status: entity.status,
+    // A campaign has nothing above it and a test hangs off no workitem at
+    // all, so neither gets a line naming something that is not there.
+    ...(found?.parent === undefined
+      ? {}
+      : { parent: { folderPath: found.parent.folderPath, name: found.parent.name } }),
+    description: entity.fields.description,
+    sections: sectionsOf(entity),
+    criteria: entity.fields.acceptanceCriteria.map((one) => ({ text: one.text, done: one.done })),
+    children: entity.children.map((child) => ({
+      level: child.level,
+      folderPath: child.folderPath,
+      name: child.name,
+      status: child.status,
+    })),
+    links: entity.fields.validatedBy.map((link) => ({
+      test: link.test,
+      // A link naming a test that is not on the board is a finding, not a
+      // repair — and the row still has to draw, so it falls back to the path
+      // it named rather than to a blank the reader could not act on.
+      name: findTest(board.tests, link.test)?.name ?? link.test,
+      result: link.result,
+      comment: link.comment,
+      ...(link.bug === undefined ? {} : { bug: link.bug }),
+    })),
+    // The reverse direction, which exists nowhere in the test's own file
+    // because the verdict lives on the link. Only the whole board knows it.
+    validates:
+      entity.level !== 'test'
+        ? []
+        : links
+            .filter((link) => link.test === entity.folderPath)
+            .map((link) => ({ folderPath: link.from.folderPath, name: link.from.name, result: link.result })),
+    file: fileOf(project, entity),
   }
 }
 

@@ -671,11 +671,17 @@ export function loadLegacyEntity(text: string, level: EntityLevel): EntityFields
  * `Acceptance Criteria` is the exception the format makes on purpose: it is
  * serialised as a checklist rather than written out verbatim, because the board
  * counts and ticks it.
+ *
+ * Exported because the detail view pairs `LEVEL_SECTIONS` with the fields to
+ * draw a level's sections, which is the same pairing `dumpEntity` makes to
+ * write them. A second copy of the heading-to-field table would be a second
+ * chance for a section to be read under one spelling and written under
+ * another.
  * @param f - the entity's typed fields.
  * @param heading - a heading from `ALL_HEADINGS`.
  * @returns the body to write under it; `''` when there is nothing.
  */
-function bodyFor(f: EntityFields, heading: string): string {
+export function bodyFor(f: EntityFields, heading: string): string {
   if (heading === 'Acceptance Criteria') return dumpChecklist(f.acceptanceCriteria)
   const found = SECTION_FIELDS.find(([h]) => h === heading)
   return found ? (f[found[1]] ?? '') : ''

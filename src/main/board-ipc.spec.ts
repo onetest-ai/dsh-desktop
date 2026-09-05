@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { boardFor, watchBoard } from './board-ipc'
+import { boardFor, detailFor, watchBoard } from './board-ipc'
 
 let project = ''
 beforeEach(() => {
@@ -92,6 +92,148 @@ describe('boardFor', () => {
     expect(boardFor(bare).present).toBe(false)
     expect(boardFor(bare).present).toBe(false)
     rmSync(bare, { recursive: true, force: true })
+  })
+})
+
+describe('detailFor', () => {
+  /** A campaign, a mission under it, a task and a bug under that, and two tests. */
+  function aBoard(): void {
+    put('tests/login/test.md', '---\nname: Login\n---\n\nProves sign-in.\n\n## Steps\n\n1. Type it\n')
+    put('tests/logout/test.md', '---\nname: Logout\n---\n')
+    put('campaigns/q3/workitem.md', '---\nname: Q3\nsubtype: campaign\nstatus: executing\n---\n')
+    put(
+      'campaigns/q3/missions/m1/workitem.md',
+      '---\nname: M1\nsubtype: mission\nstatus: validation\n' +
+        'validated_by:\n  - test: tests/login\n    result: pass\n    comment: held\n' +
+        '  - test: tests/logout\n    result: fail\n    comment: broke\n    bug: campaigns/q3/missions/m1/bugs/b1\n' +
+        '---\n\nThe login work.\n\n## Acceptance Criteria\n\n- [x] a\n- [ ] b\n',
+    )
+    put('campaigns/q3/missions/m1/tasks/t1/workitem.md', '---\nname: T1\nsubtype: task\nstatus: done\n---\n\n## Acceptance Criteria\n\n- [x] a\n')
+    put('campaigns/q3/missions/m1/bugs/b1/bug.md', '---\nname: B1\nstatus: backlog\n---\n')
+  }
+
+  it('answers nothing when no project is open', () => {
+    expect(detailFor(undefined, 'campaigns/q3')).toBeUndefined()
+  })
+
+  // reason: the folder path arrives from a renderer holding a board it read a
+  // moment ago, and an entity an agent deleted in between is exactly the case
+  // the detail has to fall back from. An empty shell would draw as a real
+  // entity with no name.
+  it('answers nothing for a folder path the board does not have', () => {
+    aBoard()
+    expect(detailFor(project, 'campaigns/q3/missions/nope')).toBeUndefined()
+    expect(detailFor(project, '')).toBeUndefined()
+  })
+
+  it('carries a mission’s parent, description, criteria and file', () => {
+    aBoard()
+    const detail = detailFor(project, 'campaigns/q3/missions/m1')!
+    expect(detail.level).toBe('mission')
+    expect(detail.name).toBe('M1')
+    expect(detail.status).toBe('validation')
+    expect(detail.parent).toEqual({ folderPath: 'campaigns/q3', name: 'Q3' })
+    expect(detail.description).toBe('The login work.')
+    expect(detail.criteria).toEqual([
+      { text: 'a', done: true },
+      { text: 'b', done: false },
+    ])
+    expect(detail.file).toBe('workitem.md')
+  })
+
+  // reason: a campaign is the top of the board and a test hangs off no
+  // workitem at all, so a parent line under either heading would be naming
+  // something that is not there.
+  it('carries no parent for a campaign or a test', () => {
+    aBoard()
+    expect(detailFor(project, 'campaigns/q3')!.parent).toBeUndefined()
+    expect(detailFor(project, 'tests/login')!.parent).toBeUndefined()
+  })
+
+  it('carries a mission’s tasks and bugs as rows', () => {
+    aBoard()
+    expect(detailFor(project, 'campaigns/q3/missions/m1')!.children).toEqual([
+      { level: 'task', folderPath: 'campaigns/q3/missions/m1/tasks/t1', name: 'T1', status: 'done' },
+      { level: 'bug', folderPath: 'campaigns/q3/missions/m1/bugs/b1', name: 'B1', status: 'backlog' },
+    ])
+  })
+
+  // reason: the detail is drawn from the same read the board is, so a link's
+  // test name is resolved out of that read rather than by opening the test's
+  // own file. Two reads are two chances to disagree about what a test is
+  // called.
+  it('resolves each link’s test name from the same board', () => {
+    aBoard()
+    expect(detailFor(project, 'campaigns/q3/missions/m1')!.links).toEqual([
+      { test: 'tests/login', name: 'Login', result: 'pass', comment: 'held' },
+      {
+        test: 'tests/logout',
+        name: 'Logout',
+        result: 'fail',
+        comment: 'broke',
+        bug: 'campaigns/q3/missions/m1/bugs/b1',
+      },
+    ])
+  })
+
+  // reason: a link naming a test that is not on the board is a finding, not a
+  // repair — and the row still has to draw, so it falls back to the path it
+  // named rather than to a blank.
+  it('names an unresolvable link by the path it points at', () => {
+    put('campaigns/q3/workitem.md', '---\nname: Q3\nsubtype: campaign\nvalidated_by:\n  - test: tests/gone\n    result: not_run\n---\n')
+    expect(detailFor(project, 'campaigns/q3')!.links[0].name).toBe('tests/gone')
+  })
+
+  // reason: the reverse direction — which workitems a test proves — exists
+  // nowhere in the file the test itself holds, because the verdict lives on
+  // the link. It can only be computed from the whole board.
+  it('carries, for a test, the workitems that point at it', () => {
+    aBoard()
+    const detail = detailFor(project, 'tests/login')!
+    expect(detail.level).toBe('test')
+    expect(detail.status).toBe('')
+    expect(detail.file).toBe('test.md')
+    expect(detail.validates).toEqual([
+      { folderPath: 'campaigns/q3/missions/m1', name: 'M1', result: 'pass' },
+    ])
+    expect(detailFor(project, 'tests/logout')!.validates).toEqual([
+      { folderPath: 'campaigns/q3/missions/m1', name: 'M1', result: 'fail' },
+    ])
+  })
+
+  it('carries no validates for a workitem, and no links for a test', () => {
+    aBoard()
+    expect(detailFor(project, 'campaigns/q3/missions/m1')!.validates).toEqual([])
+    expect(detailFor(project, 'tests/login')!.links).toEqual([])
+  })
+
+  // reason: a heading with nothing under it is an invitation to fill it in.
+  // A detail that dropped a level's empty sections would be a surface where
+  // the reader cannot see the shape of what is missing.
+  it('carries a level’s own sections, blank ones included, in the level’s order', () => {
+    aBoard()
+    expect(detailFor(project, 'campaigns/q3/missions/m1')!.sections.map((one) => one.heading)).toEqual([
+      'Acceptance Criteria',
+      'Notes',
+    ])
+    const test = detailFor(project, 'tests/login')!.sections
+    expect(test.map((one) => one.heading)).toEqual([
+      'Preconditions',
+      'Test Data',
+      'Steps',
+      'Expected Final State',
+      'Teardown',
+      'Notes',
+    ])
+    expect(test.find((one) => one.heading === 'Steps')?.body.trim()).toBe('1. Type it')
+    expect(test.find((one) => one.heading === 'Teardown')?.body).toBe('')
+  })
+
+  // reason: a board nobody has converted still reads, so Open file on one of
+  // its entities has to hand over the file that is actually there.
+  it('names the legacy file for an entity still stored as yaml', () => {
+    put('campaigns/q3/workitem.yaml', 'name: Q3\nsubtype: campaign\n')
+    expect(detailFor(project, 'campaigns/q3')!.file).toBe('workitem.yaml')
   })
 })
 
