@@ -210,7 +210,7 @@ The tools go in `src/main/view-mcp.ts`, beside the ones that open a file and dri
 | --- | --- |
 | `board_read` | The whole board, as structure |
 | `board_create` | A workitem of a given subtype, a bug, or a test |
-| `board_update` | Name, description, notes, and the per-type fields |
+| `board_update` | Name, description, notes, and the per-type fields — for a test, `preconditions`, `test_data`, `steps`, `expected_final_state` and `teardown` |
 | `board_status` | Move an entity to a status |
 | `board_criterion` | Add a criterion, or tick one |
 | `board_link` | Link a test to a workitem, record a verdict, or unlink it |
@@ -218,6 +218,8 @@ The tools go in `src/main/view-mcp.ts`, beside the ones that open a file and dri
 | `board_delete` | To the trash |
 
 **Every path argument is checked against the project roots**, exactly as `view-mcp.ts` already does for every file it opens. An agent naming a directory is not evidence the project holds it.
+
+An entity is a markdown document, not a form, so an agent filling in a test's `steps` or its `expected_final_state` is writing markdown — a numbered list, a fenced code block, whatever reads back as instructions — and an agent filling in `test_data` writes a table, because a table is a table whether a person typed it or an agent did.
 
 Tool descriptions carry the rules the schema enforces — a task needs a criterion, the status set is fixed, children are folder-derived, a workitem declares what validates it — because the tool description is where an agent learns how to use a board, and a rule discovered through a rejection is a rule learned expensively.
 

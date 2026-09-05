@@ -657,7 +657,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
     {
       title: 'Read the project board',
       description:
-        "The whole board for the open project: campaigns, their missions, the tasks and bugs under them, each with its status and folder path — plus the tests container, its suites at any depth, and each test's own run history. A workitem's verdicts are shown inline under it, naming the test and the result from the last time it was linked. The board is YAML files under `.dsh/tasks/`, committed with the code. Read this before planning work, and read it again before claiming any of it is done — someone else may have moved it. Every other board tool addresses an entity by the folder path this returns.",
+        "The whole board for the open project: campaigns, their missions, the tasks and bugs under them, each with its status and folder path — plus the tests container, its suites at any depth, and each test's own run history. A workitem's verdicts are shown inline under it, naming the test and the result from the last time it was linked. The board is `<type>.md` files — markdown with a YAML frontmatter block — under `.dsh/tasks/`, committed with the code. Read this before planning work, and read it again before claiming any of it is done — someone else may have moved it. Every other board tool addresses an entity by the folder path this returns.",
       inputSchema: {},
     },
     () => {
@@ -699,7 +699,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
     {
       title: 'Edit an entity on the board',
       description:
-        "Change an entity's name, description or notes, and its per-level fields: `role` (task), `target` (campaign), for a bug `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment`, and for a test `steps` and `expected` — the two things that make a test repeatable by someone who did not write it. Notes are free-form prose for decisions, rationale and sign-offs — appended reasoning that outlives the conversation it was decided in. This does not change status: use board_status for that.",
+        "Change an entity's name, description or notes, and its per-level fields: `role` (task), `target` (campaign), for a bug `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment`, and for a test `preconditions`, `test_data`, `steps`, `expected_final_state` and `teardown` — what a test needs, does, and leaves behind, so it is repeatable by someone who did not write it. Notes are free-form prose for decisions, rationale and sign-offs — appended reasoning that outlives the conversation it was decided in. This does not change status: use board_status for that.",
       inputSchema: {
         folder: z.string().describe('The folder path from board_read.'),
         name: z.string().optional().describe('A new display name. The folder does not move.'),
@@ -710,13 +710,35 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
         severity: z.string().optional().describe('How bad this bug is. Bug only.'),
         steps_to_reproduce: z.string().optional().describe('How to make the bug happen. Bug only.'),
         steps: z.string().optional().describe('What to do to run this test. Test only.'),
-        expected: z.string().optional().describe('What should have happened (bug), or what a passing run looks like (test).'),
+        expected: z.string().optional().describe('What should have happened instead. Bug only — a test records this as `expected_final_state`.'),
         actual: z.string().optional().describe('What happened instead. Bug only.'),
         rca: z.string().optional().describe('Root cause, once known. Bug only.'),
         environment: z.string().optional().describe('Where the bug was seen. Bug only.'),
+        preconditions: z.string().optional().describe('What must already be true before this test runs. Test only.'),
+        test_data: z.string().optional().describe('The fixtures this test runs against, such as a table of inputs. Test only.'),
+        expected_final_state: z.string().optional().describe('What a passing run leaves true. Test only.'),
+        teardown: z.string().optional().describe("How to undo this test's setup once it has run. Test only."),
       },
     },
-    ({ folder, name, description, notes, role, target, severity, steps_to_reproduce, steps, expected, actual, rca, environment }) => {
+    ({
+      folder,
+      name,
+      description,
+      notes,
+      role,
+      target,
+      severity,
+      steps_to_reproduce,
+      steps,
+      expected,
+      actual,
+      rca,
+      environment,
+      preconditions,
+      test_data,
+      expected_final_state,
+      teardown,
+    }) => {
       const project = boardProject(deps.project())
       if (!project.ok) return refuse(project.reason)
       const patch = {
@@ -732,6 +754,10 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
         ...(actual !== undefined && { actual }),
         ...(rca !== undefined && { rca }),
         ...(environment !== undefined && { environment }),
+        ...(preconditions !== undefined && { preconditions }),
+        ...(test_data !== undefined && { testData: test_data }),
+        ...(expected_final_state !== undefined && { expectedFinalState: expected_final_state }),
+        ...(teardown !== undefined && { teardown }),
       }
       if (Object.keys(patch).length === 0) return refuse('Name at least one field to change.')
       const out = updateEntity(project.project, folder, patch)

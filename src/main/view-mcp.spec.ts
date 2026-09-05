@@ -740,13 +740,13 @@ describe('the board tools', () => {
       environment: 'macOS 15',
     })
     expect(out.isError).toBeFalsy()
-    const text = readFileSync(join(project, '.dsh', 'tasks', 'campaigns', 'q3', 'bugs', 'crash', 'bug.yaml'), 'utf8')
+    const text = readFileSync(join(project, '.dsh', 'tasks', 'campaigns', 'q3', 'bugs', 'crash', 'bug.md'), 'utf8')
     expect(text).toContain('severity: blocker')
-    expect(text).toContain('steps_to_reproduce: open the app')
-    expect(text).toContain('expected: it opens')
-    expect(text).toContain('actual: it crashes')
-    expect(text).toContain('rca: null pointer')
-    expect(text).toContain('environment: macOS 15')
+    expect(text).toContain('## Steps to Reproduce\n\nopen the app')
+    expect(text).toContain('## Expected\n\nit opens')
+    expect(text).toContain('## Actual\n\nit crashes')
+    expect(text).toContain('## RCA\n\nnull pointer')
+    expect(text).toContain('## Environment\n\nmacOS 15')
   })
 
   it('offers the two link tools alongside the rest', async () => {
@@ -856,22 +856,44 @@ describe('the board tools', () => {
     expect(text).not.toContain('[fail] tests/login')
   })
 
-  // reason: `board_update` had no `steps` input at all, so a test's two
-  // fields — "the two things that make a test repeatable by someone who did
-  // not write it" — could only ever be blank once created.
-  it("fills a test's steps and expected through board_update and reads them back", async () => {
+  // reason: a test's file has five sections an agent must be able to write —
+  // preconditions, test data, steps, expected final state, teardown — "the
+  // things that make a test repeatable by someone who did not write it".
+  // `steps` already existed as an input, but six write paths could not reach
+  // a test at all until recently, so it is asserted here alongside the rest
+  // rather than assumed still to work.
+  it("fills a test's sections through board_update and reads them back", async () => {
     const project = boardFixture({})
     const url = await serve(deps({ project: () => project }), 'editor')
     await callTool(url, 'board_create', { level: 'test', name: 'Login' })
     const out = await callTool(url, 'board_update', {
       folder: 'tests/login',
+      preconditions: 'a user account exists',
+      test_data: '| user | pass |\n| a@b.com | secret |',
       steps: 'go to /login, submit valid creds',
-      expected: 'redirected to /dashboard',
+      expected_final_state: 'redirected to /dashboard',
+      teardown: 'delete the session',
     })
     expect(out.isError).toBeFalsy()
-    const text = readFileSync(join(project, '.dsh', 'tasks', 'tests', 'login', 'test.yaml'), 'utf8')
-    expect(text).toContain('steps: go to /login, submit valid creds')
-    expect(text).toContain('expected: redirected to /dashboard')
+    const text = readFileSync(join(project, '.dsh', 'tasks', 'tests', 'login', 'test.md'), 'utf8')
+    expect(text).toContain('## Preconditions\n\na user account exists')
+    expect(text).toContain('## Test Data\n\n| user | pass |\n| a@b.com | secret |')
+    expect(text).toContain('## Steps\n\ngo to /login, submit valid creds')
+    expect(text).toContain('## Expected Final State\n\nredirected to /dashboard')
+    expect(text).toContain('## Teardown\n\ndelete the session')
+  })
+
+  // reason: `steps` already existed as an input before the other four
+  // section fields did, and the write path that reaches a test is shared —
+  // this pins that a lone `steps` update still lands, on its own.
+  it("writes a test's steps through board_update on their own", async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_update', { folder: 'tests/login', steps: 'go to /login' })
+    expect(out.isError).toBeFalsy()
+    const text = readFileSync(join(project, '.dsh', 'tasks', 'tests', 'login', 'test.md'), 'utf8')
+    expect(text).toContain('## Steps\n\ngo to /login')
   })
 
   // reason: `open()` used to require `findEntity`, which walks campaigns
@@ -924,6 +946,19 @@ describe('the board tools', () => {
     const boardRead = tools.find((t) => t.name === 'board_read')
     expect(boardRead?.description).toContain('tests')
     expect(boardRead?.description).toContain('verdict')
+  })
+
+  // reason: an entity file has been `<type>.md` with YAML frontmatter since
+  // the schema moved off all-YAML — a description still calling the board
+  // "YAML files" describes the format the board no longer writes.
+  it('names workitem.md rather than workitem.yaml wherever board_read names a file', async () => {
+    const url = await serve(deps(), 'editor')
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
+    const tools = (answer.result as { tools: { name: string; description: string }[] }).tools ?? []
+    const boardRead = tools.find((t) => t.name === 'board_read')
+    expect(boardRead?.description).not.toContain('.yaml')
+    expect(boardRead?.description).toContain('.md')
   })
 
   it('mentions that children are folder-derived in board_create', async () => {
