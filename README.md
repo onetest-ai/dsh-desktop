@@ -232,10 +232,11 @@ There are two browsers in reach, and their tools carry the same names: these dri
 Every path argument is checked against the projects the harness has opened, and a path outside them is refused with a reason the model can read. Nothing is written to `mcp.json`: the server entry is built per launch, so it cannot linger when the app is not running. Switch the whole thing off on the **MCP** tab.
 
 The agent can also keep a board. `.dsh/tasks/` holds campaigns, missions,
-tasks and bugs as YAML files, committed alongside the code — so a plan is
-diffable, survives the conversation it was made in, and merges when two agents
-work on different branches. Nothing infers a status: a mission is done when
-someone says so, never because its last task finished.
+tasks, bugs and the tests that prove them as YAML files, committed alongside
+the code — so a plan is diffable, survives the conversation it was made in,
+and merges when two agents work on different branches. Nothing infers a
+status: a mission is done when someone says so, never because its last task
+finished.
 
 ## Development
 

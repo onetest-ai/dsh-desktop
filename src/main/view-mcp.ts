@@ -2,9 +2,19 @@ import { createServer, type Server } from 'node:http'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
-import { readBoard, type Board, type Entity } from './board/board-read'
-import { addCriterion, createEntity, setStatus, tickCriterion, trashEntity, updateEntity } from './board/board-write'
-import { ENTITY_STATUSES } from './board/entity-schema'
+import { readBoard, type Board, type Entity, type Suite } from './board/board-read'
+import {
+  addCriterion,
+  createEntity,
+  linkTest,
+  recordRun,
+  setStatus,
+  tickCriterion,
+  trashEntity,
+  unlinkTest,
+  updateEntity,
+} from './board/board-write'
+import { ENTITY_STATUSES, LINK_RESULTS } from './board/entity-schema'
 import type { ActionResult } from './browser-actions'
 import type { ConsoleEntry, DialogRecord, Evaluated, NavigationRecord } from './browser-cdp'
 import { loadableUrl, locate } from './view-tools'
@@ -189,15 +199,29 @@ function renderBoard(board: Board): string {
     const criteria = entity.fields.acceptanceCriteria
     const ticked = criteria.filter((c) => c.done).length
     const criteriaCount = criteria.length > 0 ? `  (${String(ticked)}/${String(criteria.length)} criteria)` : ''
-    lines.push(`${indent}[${entity.status}] ${entity.kind} ${entity.name}${children}${criteriaCount}`)
+    lines.push(`${indent}[${entity.status}] ${entity.level} ${entity.name}${children}${criteriaCount}`)
     lines.push(`${indent}  ${entity.folderPath}`)
     criteria.forEach((c, index) => {
       lines.push(`${indent}  [${c.done ? 'x' : ' '}] ${String(index)}. ${c.text}`)
     })
+    for (const link of entity.fields.validatedBy) {
+      const bug = link.bug === undefined ? '' : `  bug: ${link.bug}`
+      lines.push(`${'  '.repeat(depth)}  [${link.result}] ${link.test}${bug}`)
+    }
     for (const child of entity.children) walk(child, depth + 1)
   }
   for (const campaign of board.campaigns) walk(campaign, 0)
   if (lines.length === 0) lines.push('The board is empty.')
+  const suites: string[] = []
+  const walkSuite = (suite: Suite, depth: number): void => {
+    for (const test of suite.tests) suites.push(`${'  '.repeat(depth)}test ${test.name}\n${'  '.repeat(depth)}  ${test.folderPath}`)
+    for (const child of suite.suites) {
+      suites.push(`${'  '.repeat(depth)}suite ${child.slug}`)
+      walkSuite(child, depth + 1)
+    }
+  }
+  walkSuite(board.tests, 0)
+  if (suites.length > 0) lines.push('', 'Tests:', ...suites)
   if (board.findings.length > 0) {
     lines.push('', 'Could not read:')
     for (const finding of board.findings) lines.push(`  ${finding.folderPath}: ${finding.says}`)
@@ -616,17 +640,24 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
     {
       title: 'Add something to the project board',
       description:
-        "Create a campaign, mission, task or bug. A campaign is an outcome; a mission is an independently shippable slice of it; a task is one small verifiable unit; a bug is a defect. A mission goes under a campaign, a task under a mission, and a bug under either. Give `parent` the folder path from board_read — omit it only for a campaign. A task should be given at least one acceptance criterion with board_criterion: a task with no checkable definition of done cannot be gated.",
+        "Create something on the board. A campaign, mission and task are workitems at three altitudes: a campaign is an outcome, a mission an independently shippable slice of it, a task one small verifiable unit. A mission goes under a campaign, a task under a mission, and a bug under either. A test is different — it lives in the tests container rather than under any workitem, because a test is not work in flight but the instrument work is measured with; give `parent` a suite path like `tests/auth` to file it in one, and suites are created as needed. Give a task at least one acceptance criterion with board_criterion, and say what proves a workitem with board_link.",
       inputSchema: {
-        kind: z.enum(['campaign', 'mission', 'task', 'bug']).describe('What to create.'),
+        level: z
+          .enum(['campaign', 'mission', 'task', 'bug', 'test'])
+          .describe('What to create. A campaign, mission and task are workitems at three altitudes.'),
         name: z.string().describe('The display name. The folder is named after it.'),
-        parent: z.string().optional().describe("The parent's folder path from board_read. Omit for a campaign."),
+        parent: z
+          .string()
+          .optional()
+          .describe(
+            "The parent's folder path from board_read. Omit for a campaign, and for a test at the root of the tests container; for a test inside a suite, give the suite's path.",
+          ),
       },
     },
-    ({ kind, name, parent }) => {
+    ({ level, name, parent }) => {
       const project = boardProject(deps.project())
       if (!project.ok) return refuse(project.reason)
-      const out = createEntity(project.project, kind, parent ?? '', name)
+      const out = createEntity(project.project, level, parent ?? '', name)
       return out.ok ? done(`Created ${out.folderPath}.`) : refuse(out.reason)
     },
   )
@@ -679,7 +710,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
     {
       title: 'Move an entity to a status',
       description:
-        `Set one entity's status to one of: ${ENTITY_STATUSES.join(', ')}. Nothing else changes it — a mission does not become done because its last task did, and a campaign does not start because a mission did. A status is a claim, so make it deliberately, and only for the entity you are actually talking about.`,
+        `Set one entity's status to one of: ${ENTITY_STATUSES.join(', ')}. Nothing else changes it — a mission does not become done because its last task did, and a campaign does not start because a mission did. A status is a claim, so make it deliberately, and only for the entity you are actually talking about. A test has no status — it is not work in flight. Use board_link to record what a test proved.`,
       inputSchema: {
         folder: z.string().describe('The folder path from board_read.'),
         status: z.string().describe(`One of: ${ENTITY_STATUSES.join(', ')}.`),
@@ -738,6 +769,53 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
       if (!project.ok) return refuse(project.reason)
       const out = trashEntity(project.project, folder)
       return out.ok ? done(`Moved ${folder} to the board's trash.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_link',
+    {
+      title: 'Say a test proves a workitem, and what it did',
+      description:
+        `Record that a test validates a workitem, with the verdict from the last time it ran: ${LINK_RESULTS.join(', ')}. The verdict lives on the workitem rather than on the test, because it is about the pairing — one test can pass for the mission it was written for and fail for the one that reused it. Linking the same test again replaces the verdict rather than adding a second. A failing verdict should name the bug it produced; a failure with no bug is reported as a gap. To stop claiming a test proves something, pass \`unlink\` — that is also how a test is retired, since validation is the link.`,
+      inputSchema: {
+        folder: z.string().describe('The workitem being proved, by folder path.'),
+        test: z.string().describe("The test's folder path from board_read."),
+        result: z.string().optional().describe(`One of: ${LINK_RESULTS.join(', ')}.`),
+        comment: z.string().optional().describe('Why, in your own words.'),
+        bug: z.string().optional().describe('The folder path of the bug a failure produced.'),
+        unlink: z.boolean().optional().describe('True to remove the link instead of recording one.'),
+      },
+    },
+    ({ folder, test, result, comment, bug, unlink }) => {
+      const project = boardProject(deps.project())
+      if (!project.ok) return refuse(project.reason)
+      if (unlink === true) {
+        const gone = unlinkTest(project.project, folder, test)
+        return gone.ok ? done(`${folder} no longer names ${test}.`) : refuse(gone.reason)
+      }
+      const out = linkTest(project.project, folder, test, result ?? 'not_run', comment ?? '', bug)
+      return out.ok ? done(`${test} now records ${result ?? 'not_run'} against ${folder}.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_run',
+    {
+      title: 'Record that a test ran',
+      description:
+        `Append one execution to a test's own history: when it ran, what it ran against, and what came out. This does NOT change the verdict on any workitem — a verdict is a claim somebody makes, a run is a thing that happened, and the two disagreeing is the signal that a verdict has gone stale. Use board_link to change a verdict. The history is what makes a flaky test visible, and is capped at the most recent runs.`,
+      inputSchema: {
+        test: z.string().describe("The test's folder path from board_read."),
+        workitem: z.string().describe('The workitem it was run against, by folder path.'),
+        result: z.string().describe(`One of: ${LINK_RESULTS.join(', ')}.`),
+      },
+    },
+    ({ test, workitem, result }) => {
+      const project = boardProject(deps.project())
+      if (!project.ok) return refuse(project.reason)
+      const out = recordRun(project.project, test, workitem, result)
+      return out.ok ? done(`Recorded ${result} for ${test}.`) : refuse(out.reason)
     },
   )
 
