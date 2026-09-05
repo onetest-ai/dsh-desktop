@@ -12,6 +12,10 @@
  * `splitDoc` — a `##` inside one became a section of its own, a fence nobody closed swallowed every
  * heading below it, and a body's leading indentation was trimmed away. `normalizeBody` states the
  * rule that closes all three, and argues for it.
+ *
+ * Every rule in here is a rule about a line, which is why `toLf` runs before any of them: a file
+ * whose lines end `\r\n` failed the very first one and lost its frontmatter altogether. The
+ * document's line ending is `\n`, and reading a file converts it — the argument is on `toLf`.
  */
 import { load as yamlLoad, dump as yamlDump, JSON_SCHEMA } from 'js-yaml'
 
@@ -31,10 +35,54 @@ export interface EntityDoc {
 const FENCE_OPEN = /^(`{3,}|~{3,})/
 /** A line that closes one: the same character, at least as many of it, and nothing but space after. */
 const FENCE_CLOSE = /^(`{3,}|~{3,})\s*$/
-/** A `##` heading line — exactly two hashes, so `###` and deeper stay inside the section they sit in. */
-const HEADING_LINE = /^##\s+(.+?)\s*$/
+/**
+ * A `##` heading line — exactly two hashes, so `###` and deeper stay inside the section they sit in,
+ * and at least one non-space character of text, so a heading always has something to be called.
+ *
+ * The `\S` is the whole of the second requirement and it is not cosmetic. With a
+ * plain `.+?` capture, `##` followed by two spaces and a tab matched, trimmed to
+ * a heading of `''`, and `joinDoc` wrote back a bare `## ` — which this pattern
+ * does not match. That is the round-trip invariant broken literally: the block's
+ * prose came back attached to whatever heading stood above it, and a `## `
+ * re-emitted after the owned sections silently handed it to the next field
+ * instead. A line that names no section is not a section; it stays prose, where
+ * it round-trips as the bytes it is.
+ */
+const HEADING_LINE = /^##\s+(\S.*?)\s*$/
 /** A line carrying nothing, for trimming a body's edges without touching its columns. */
 const BLANK_LINE = /^\s*$/
+/** `\r\n`, anywhere — the one thing normalized on the way in. See `toLf`. */
+const CRLF = /\r\n/g
+
+/**
+ * The same text with Windows line endings replaced by the one this module counts in.
+ *
+ * Every rule here is a rule about a line: the frontmatter fence, its terminator,
+ * a `##` heading, a fence marker, a blank edge. All of them were written against
+ * `\n`, and a file saved with `\r\n` failed the very first of them — `splitDoc`
+ * gated the frontmatter on `startsWith('---\n')`, so a CRLF file had no
+ * frontmatter at all and its keys became prose on the next write. A Windows
+ * checkout, `core.autocrlf=true` or a `.gitattributes` saying `* text eol=crlf`
+ * is enough to produce that, and this app ships on all three platforms.
+ *
+ * **A CRLF file is normalized to LF rather than kept as it was found**, and the
+ * reason is that keeping it is not actually available. `joinDoc` writes the
+ * frontmatter fence itself and gets the frontmatter body from `yamlDump`, both
+ * of which are unconditionally LF; a document that preserved CRLF in its bodies
+ * would be written back with mixed endings, which is worse than either. The
+ * alternative — teaching every emitter the file's dialect — buys a byte back and
+ * costs a per-document mode that every future rule would have to remember. So
+ * the format's line ending is LF, one write converts a file to it, and the
+ * conversion is visible in a diff exactly once. The cost is stated: a file a
+ * Windows tool wrote comes back with different bytes than it went in with, the
+ * same way its `##` inside a body comes back demoted.
+ * @param text - text as it was found on disk, or as a caller holds it.
+ * @returns the same text with `\r\n` as `\n`. A lone `\r` is left alone; it is
+ *   not a line ending anything still writes, and `\s`-based matching handles it.
+ */
+function toLf(text: string): string {
+  return text.includes('\r') ? text.replace(CRLF, '\n') : text
+}
 
 /**
  * Which lines sit inside a fenced code block, and whether a fence was left open.
@@ -50,26 +98,53 @@ const BLANK_LINE = /^\s*$/
  * A toggle would have made one stray ``` swallow every heading below it, which
  * `dumpEntity` then re-emits after the swallowed body, for the next read to
  * swallow again — the file gaining a heading set per write, forever.
+ *
+ * **Answered in one backward pass, not by searching forward from each opener.**
+ * The obvious spelling — for each opener, scan on until a closer matches — is
+ * O(lines × openers), and while a realistic file never notices (a 297 KB body
+ * with a fence every ten lines splits in under two milliseconds), a file of ten
+ * thousand unmatched fence-ish lines cost three quarters of a second per
+ * `splitDoc`, once per entity on every `readBoard`. Walking the lines backward
+ * and remembering, per marker character and per length, the nearest closer seen
+ * so far answers the same question — the *first* closer after `i` that is the
+ * same character and at least as long — in constant time per opener. Resolving a
+ * line before recording it as a closer is what keeps that "after `i`": a fence
+ * line is both, and a ``` cannot close itself.
  * @param lines - the body, already split on newlines.
  * @returns a flag per line, and the marker of the first fence nobody closed.
  */
 function scanFences(lines: string[]): { fenced: boolean[]; unclosed: string | null } {
   const fenced = new Array<boolean>(lines.length).fill(false)
+  // The nearest closer at or below each length, one array per marker character.
+  // Sized by the longest run of that character anywhere, because an opener
+  // longer than every closer in the file can only be unclosed.
+  const longest = { '`': 0, '~': 0 }
+  const trimmed = lines.map((l) => l.trim())
+  const markers = trimmed.map((l) => l.match(FENCE_OPEN)?.[1] ?? '')
+  for (const marker of markers) {
+    if (marker) longest[marker[0] as '`' | '~'] = Math.max(longest[marker[0] as '`' | '~'], marker.length)
+  }
+  const nearest = {
+    '`': new Int32Array(longest['`'] + 1).fill(-1),
+    '~': new Int32Array(longest['~'] + 1).fill(-1),
+  }
+  const closeAt = new Int32Array(lines.length).fill(-1)
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const marker = markers[i]
+    if (!marker) continue
+    const char = marker[0] as '`' | '~'
+    if (marker.length <= longest[char]) closeAt[i] = nearest[char][marker.length]
+    if (!FENCE_CLOSE.test(trimmed[i])) continue
+    // A closer of length M answers every opener of length M or less, and the
+    // one being recorded now is nearer than whatever was recorded before it.
+    for (let len = 3; len <= marker.length; len += 1) nearest[char][len] = i
+  }
   let unclosed: string | null = null
   for (let i = 0; i < lines.length; i += 1) {
-    const opener = lines[i].trim().match(FENCE_OPEN)
-    if (!opener) continue
-    const marker = opener[1]
-    let close = -1
-    for (let j = i + 1; j < lines.length; j += 1) {
-      const candidate = lines[j].trim().match(FENCE_CLOSE)
-      if (candidate && candidate[1][0] === marker[0] && candidate[1].length >= marker.length) {
-        close = j
-        break
-      }
-    }
+    if (!markers[i]) continue
+    const close = closeAt[i]
     if (close === -1) {
-      if (unclosed === null) unclosed = marker
+      if (unclosed === null) unclosed = markers[i]
       continue
     }
     for (let k = i; k <= close; k += 1) fenced[k] = true
@@ -127,7 +202,7 @@ function stripBlankEdges(lines: string[]): string[] {
  * @returns the body as the document will hold it.
  */
 export function normalizeBody(text: string): string {
-  let lines = stripBlankEdges(text.split('\n'))
+  let lines = stripBlankEdges(toLf(text).split('\n'))
   const first = scanFences(lines)
   // Closed before anything is demoted, so a heading that turns out to sit inside
   // the reopened block is left exactly as its writer typed it.
@@ -153,7 +228,12 @@ export function normalizeBody(text: string): string {
  * @param text - the full file contents.
  * @returns the parsed document.
  */
-export function splitDoc(text: string): EntityDoc {
+export function splitDoc(raw: string): EntityDoc {
+  // Normalized once, here, rather than at each of the five places below that
+  // ask a question about a line. A `\r` left on a body reaches the panel and the
+  // agent as part of a field's value — `target` read back as `"ship it\r"` — and
+  // a `\r` left on the frontmatter fence hid the frontmatter entirely.
+  const text = toLf(raw)
   let front: Record<string, unknown> = {}
   let body = text
   if (text.startsWith('---\n')) {

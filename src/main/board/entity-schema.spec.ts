@@ -716,3 +716,87 @@ describe('converting legacy prose that holds markdown of its own', () => {
     expect(back).toEqual({ ...legacy, extra: { ...legacy.extra, status: 'backlog', severity: 'critical' } })
   })
 })
+
+/**
+ * The same entity, saved by an editor that writes Windows line endings.
+ *
+ * A read that misses the frontmatter fence reads every key as prose, and the
+ * write that follows re-emits those keys inside the description — the entity's
+ * name, its links and its documents demoted from data to text, permanently.
+ * Asked here at the layer that owns the mapping, and again on disk in
+ * `board-write.spec.ts`, because a field that reads correctly and is written
+ * wrong is the shape the damage actually took.
+ */
+describe('an entity file saved with CRLF line endings', () => {
+  const CRLF = [
+    '---',
+    'name: Q3 Campaign',
+    'subtype: campaign',
+    'status: executing',
+    'documents: []',
+    'validated_by:',
+    '  - test: tests/login',
+    '    result: pass',
+    "    comment: ''",
+    '---',
+    '',
+    'the description',
+    '',
+    '## Target',
+    '',
+    'ship it',
+    '',
+    '## Notes',
+    '',
+    'n',
+    '',
+  ].join('\r\n')
+
+  it('reads every frontmatter key as data rather than as prose', () => {
+    const fields = loadEntity(CRLF)
+    expect(fields.name).toBe('Q3 Campaign')
+    expect(fields.status).toBe('executing')
+    expect(fields.validatedBy).toEqual([{ test: 'tests/login', result: 'pass', comment: '' }])
+    expect(fields.description).toBe('the description')
+  })
+
+  it('leaves no carriage return on a section body', () => {
+    const fields = loadEntity(CRLF)
+    expect(fields.target).toBe('ship it')
+    expect(fields.notes).toBe('n')
+  })
+
+  it('survives a read-modify-write cycle, and is byte-stable after the first', () => {
+    const once = dumpEntity('campaign', { ...loadEntity(CRLF), status: 'done' })
+    expect(once).not.toContain('\r')
+    expect(once).toContain('name: Q3 Campaign')
+    expect(once).toContain('status: done')
+    expect(once).toContain('- test: tests/login')
+    // The damage was the frontmatter arriving in the body: one fence, and the
+    // description is still one line of prose.
+    expect(once.match(/^---$/gm)).toHaveLength(2)
+    expect(loadEntity(once).description).toBe('the description')
+    const twice = dumpEntity('campaign', loadEntity(once))
+    expect(twice).toBe(once)
+  })
+
+  it('converts a legacy yaml saved with CRLF to the same document', () => {
+    const legacy = [
+      'name: Crash',
+      'severity: critical',
+      'description: |',
+      '  intro line',
+      '',
+      '  ## Design',
+      '  deep stuff',
+      'expected: it opens',
+      '',
+    ].join('\r\n')
+    const fields = loadLegacyEntity(legacy, 'bug')
+    const text = dumpEntity('bug', fields)
+    expect(text).not.toContain('\r')
+    expect(loadEntity(text).description).toBe('intro line\n\n### Design\ndeep stuff')
+    expect(loadEntity(text).expected).toBe('it opens')
+    expect(dumpEntity('bug', loadEntity(text))).toBe(text)
+  })
+})

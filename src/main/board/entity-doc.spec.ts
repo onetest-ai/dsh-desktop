@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dumpChecklist, joinDoc, parseChecklist, sectionOf, splitDoc } from './entity-doc'
+import { dumpChecklist, joinDoc, normalizeBody, parseChecklist, sectionOf, splitDoc } from './entity-doc'
 
 describe('splitDoc', () => {
   it('reads the frontmatter, the lead, and each section in file order', () => {
@@ -128,4 +128,95 @@ describe('the round-trip invariant', () => {
       expect(joinDoc(doc)).toBe(text)
     })
   }
+})
+
+/**
+ * A file saved with Windows line endings, which a cross-platform Electron app
+ * gets for free from a Windows checkout, `core.autocrlf=true`, or a
+ * `.gitattributes` saying `* text eol=crlf`.
+ *
+ * The gate on the frontmatter fence was `startsWith('---\n')`, which a `---\r\n`
+ * file fails — so the whole file, frontmatter included, became the body, and the
+ * next write re-emitted the entity's own keys as prose. Every line-oriented rule
+ * in the module reads the same way, so each is asked here separately.
+ */
+describe('a document with CRLF line endings', () => {
+  const CRLF = [
+    '---',
+    'name: Q3 Campaign',
+    'subtype: campaign',
+    'status: executing',
+    '---',
+    '',
+    'the description',
+    '',
+    '## Target',
+    '',
+    'ship it',
+    '',
+    '## Notes',
+    '',
+    '```',
+    '## not a heading',
+    '```',
+    '',
+  ].join('\r\n')
+
+  it('reads its frontmatter rather than taking the whole file as body', () => {
+    const doc = splitDoc(CRLF)
+    expect(doc.front).toEqual({ name: 'Q3 Campaign', subtype: 'campaign', status: 'executing' })
+    expect(doc.lead).toBe('the description')
+  })
+
+  it('finds every heading, and leaves no carriage return on a body', () => {
+    const doc = splitDoc(CRLF)
+    expect(doc.sections.map((s) => s.heading)).toEqual(['Target', 'Notes'])
+    expect(doc.sections[0].body).toBe('ship it')
+    expect(CRLF).toContain('\r')
+    expect(JSON.stringify(doc)).not.toContain('\\r')
+  })
+
+  it('still refuses to split on a heading inside a fence written with CRLF', () => {
+    expect(splitDoc(CRLF).sections[1].body).toBe('```\n## not a heading\n```')
+  })
+
+  it('answers with an empty front for a CRLF file whose frontmatter is empty', () => {
+    expect(splitDoc('---\r\n---\r\nBody.\r\n').front).toEqual({})
+  })
+
+  it('normalizes a CRLF body to the line endings the document writes', () => {
+    expect(normalizeBody('a\r\n\r\n## Design\r\nb')).toBe('a\n\n### Design\nb')
+  })
+
+  it('is written back with LF throughout, and is byte-stable from then on', () => {
+    const once = joinDoc(splitDoc(CRLF))
+    expect(once).not.toContain('\r')
+    expect(joinDoc(splitDoc(once))).toBe(once)
+    expect(splitDoc(once)).toEqual(splitDoc(CRLF))
+  })
+})
+
+/**
+ * `## ` followed by nothing but whitespace. The heading pattern matched it and
+ * trimmed the capture to `''`, and `joinDoc` then wrote `## `, which the same
+ * pattern does not match — the literal counterexample to
+ * `splitDoc(joinDoc(doc))` being `doc`, with the block's prose re-attributed to
+ * whatever heading stood above it on the next read.
+ */
+describe('a heading whose text is only whitespace', () => {
+  const HAND_EDITED = '---\nname: Q3\n---\n\nlead\n\n##  \t\nkept prose\n\n## Notes\n\nn\n'
+
+  it('is not a heading, so nothing is split on it', () => {
+    const doc = splitDoc(HAND_EDITED)
+    expect(doc.sections.map((s) => s.heading)).toEqual(['Notes'])
+    expect(doc.lead).toBe('lead\n\n##  \t\nkept prose')
+  })
+
+  it('round-trips, and the prose under it is not re-attributed', () => {
+    const doc = splitDoc(HAND_EDITED)
+    const written = joinDoc(doc)
+    expect(splitDoc(written)).toEqual(doc)
+    expect(joinDoc(splitDoc(written))).toBe(written)
+    expect(splitDoc(written).sections[0].body).toBe('n')
+  })
 })

@@ -927,3 +927,92 @@ describe('a body that holds markdown of its own', () => {
     expect(has('campaigns/q3/bugs/crash', 'bug.yaml')).toBe(false)
   })
 })
+
+/**
+ * A `.md` on disk with Windows line endings, written through a real
+ * `setStatus`.
+ *
+ * The assertion is on the file's **bytes**, not only on the fields read back,
+ * because that is where the damage showed: `readBoard` merely reported an empty
+ * name, and the write that followed made it permanent by re-emitting the
+ * frontmatter as prose inside the description — 206 bytes becoming 304, with
+ * `validated_by` and `documents` gone as data.
+ */
+describe('a campaign whose file was saved with CRLF line endings', () => {
+  const CRLF = [
+    '---',
+    'name: Q3 Campaign',
+    'subtype: campaign',
+    'status: executing',
+    'documents: []',
+    'validated_by:',
+    '  - test: tests/login',
+    '    result: pass',
+    "    comment: ''",
+    '---',
+    '',
+    'the description',
+    '',
+    '## Target',
+    '',
+    'ship it',
+    '',
+    '## Notes',
+    '',
+    'n',
+    '',
+  ].join('\r\n')
+
+  beforeEach(() => {
+    putLegacy('campaigns/q3', 'workitem.md', CRLF)
+    putLegacy('tests/login', 'test.md', '---\nname: Login\n---\n')
+  })
+
+  it('is read with its name and its links intact', () => {
+    const campaign = readBoard(project).campaigns[0]
+    expect(campaign.fields.name).toBe('Q3 Campaign')
+    expect(campaign.fields.validatedBy).toEqual([{ test: 'tests/login', result: 'pass', comment: '' }])
+    expect(campaign.fields.target).toBe('ship it')
+  })
+
+  it('is written back as one document rather than as its own frontmatter twice', () => {
+    expect(setStatus(project, 'campaigns/q3', 'done')).toEqual({ ok: true, folderPath: 'campaigns/q3' })
+    const text = read('campaigns/q3', 'workitem.md')
+    expect(text).not.toContain('\r')
+    // Two `---` lines: the fence. Four would be the frontmatter written twice,
+    // the second copy as prose.
+    expect(text.match(/^---$/gm)).toHaveLength(2)
+    expect(text).toContain('name: Q3 Campaign')
+    expect(text).toContain('status: done')
+    expect(text).toContain('- test: tests/login')
+    expect(text.split('\n## Target\n')).toHaveLength(2)
+  })
+
+  it('stops changing after the write that converts its line endings', () => {
+    setStatus(project, 'campaigns/q3', 'done')
+    const once = read('campaigns/q3', 'workitem.md')
+    setStatus(project, 'campaigns/q3', 'done')
+    setStatus(project, 'campaigns/q3', 'done')
+    expect(read('campaigns/q3', 'workitem.md')).toBe(once)
+  })
+})
+
+/**
+ * `##` followed by nothing but whitespace, in a file somebody edited by hand.
+ * The heading pattern matched it and `joinDoc` wrote back a `## ` the pattern
+ * does not match, so the block's prose was re-attributed to the next section on
+ * the following read — the same silent re-attribution the format's demotion
+ * rule exists to prevent.
+ */
+describe('a hand-edited file holding a heading with no text', () => {
+  it('keeps the prose under it where it was written, across repeated writes', () => {
+    putLegacy('campaigns/q3', 'workitem.md', '---\nname: Q3\nsubtype: campaign\nstatus: idea\n---\n\nlead\n\n##  \t\nkept prose\n\n## Notes\n\nn\n')
+    setStatus(project, 'campaigns/q3', 'done')
+    const once = read('campaigns/q3', 'workitem.md')
+    const campaign = readBoard(project).campaigns[0]
+    expect(campaign.fields.description).toBe('lead\n\n##  \t\nkept prose')
+    expect(campaign.fields.notes).toBe('n')
+    setStatus(project, 'campaigns/q3', 'done')
+    expect(read('campaigns/q3', 'workitem.md')).toBe(once)
+  })
+})
