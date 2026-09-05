@@ -1,15 +1,23 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { boardRoot, hasBoard, TRASH_DIR } from './board-paths'
-import { ENTITY_STATUSES, loadEntity, type EntityFields, type EntityKind } from './entity-schema'
+import { boardRoot, fileFor, hasBoard, TESTS_DIR, TRASH_DIR } from './board-paths'
+import {
+  ENTITY_STATUSES,
+  LINK_RESULTS,
+  loadEntity,
+  typeOf,
+  type EntityFields,
+  type EntityLevel,
+} from './entity-schema'
 
 /** One entity, with the children its folder holds. */
 export interface Entity {
-  kind: EntityKind
+  level: EntityLevel
   /** Its path within the board, which is also its identity. */
   folderPath: string
   slug: string
   name: string
+  /** '' for a test, which has none. */
   status: string
   fields: EntityFields
   /** Missions and bugs under a campaign; tasks and bugs under a mission. */
@@ -31,23 +39,40 @@ export interface Finding {
   says: string
 }
 
+/**
+ * A directory under `tests/` that groups other tests.
+ *
+ * A suite has a slug and nothing else — no file, no status, no description —
+ * because grouping is all it does, and a type that existed only to hold other
+ * things is a type whose file nobody would ever fill in.
+ */
+export interface Suite {
+  /** Its path within the board; `tests` for the root. */
+  path: string
+  slug: string
+  suites: Suite[]
+  tests: Entity[]
+}
+
 /** The whole board, and what could not be read of it. */
 export interface Board {
   /** False when the project has no `.dsh/tasks/` at all — a state, not a failure. */
   present: boolean
   campaigns: Entity[]
+  /** The tests container. Always present, empty when there are none. */
+  tests: Suite
   findings: Finding[]
 }
 
-/** Which directory holds each kind's children, and what kind those are. */
-const CHILDREN: Partial<Record<EntityKind, { dir: string; kind: EntityKind }[]>> = {
+/** Which directory holds each level's children, and what level those are. */
+const CHILDREN: Partial<Record<EntityLevel, { dir: string; level: EntityLevel }[]>> = {
   campaign: [
-    { dir: 'missions', kind: 'mission' },
-    { dir: 'bugs', kind: 'bug' },
+    { dir: 'missions', level: 'mission' },
+    { dir: 'bugs', level: 'bug' },
   ],
   mission: [
-    { dir: 'tasks', kind: 'task' },
-    { dir: 'bugs', kind: 'bug' },
+    { dir: 'tasks', level: 'task' },
+    { dir: 'bugs', level: 'bug' },
   ],
 }
 
@@ -74,22 +99,23 @@ function subdirectories(dir: string): string[] {
 /**
  * Read one entity's folder, its file, and everything under it.
  *
- * Returns nothing for a folder with no `<kind>.yaml` in it. Children are
+ * Returns nothing for a folder with no entity file in it. Children are
  * folder-derived, so a directory is a candidate rather than a declaration —
  * and a candidate that holds no entity file is not an entity. Inventing an
  * empty one named after its slug would put a thing on the board that nobody
  * created.
  * @param root - the board root.
  * @param folderPath - this entity's path within it.
- * @param kind - the kind its file must be.
+ * @param level - the level its folder says it is.
  * @param findings - collected, appended to.
  * @returns the entity, or nothing when the folder holds none.
  */
-function readEntity(root: string, folderPath: string, kind: EntityKind, findings: Finding[]): Entity | undefined {
+function readEntity(root: string, folderPath: string, level: EntityLevel, findings: Finding[]): Entity | undefined {
   const dir = join(root, folderPath)
+  const file = fileFor(level)
   let text: string
   try {
-    text = readFileSync(join(dir, `${kind}.yaml`), 'utf8')
+    text = readFileSync(join(dir, file), 'utf8')
   } catch {
     return undefined
   }
@@ -99,26 +125,35 @@ function readEntity(root: string, folderPath: string, kind: EntityKind, findings
   } catch (error) {
     // Reading never repairs: the file stays exactly as it is, and the board
     // says which one it could not read.
-    findings.push({ folderPath, says: `${kind}.yaml could not be read: ${(error as Error).message}` })
+    findings.push({ folderPath, says: `${file} could not be read: ${(error as Error).message}` })
     return undefined
   }
   const slug = folderPath.slice(folderPath.lastIndexOf('/') + 1)
-  const status = fields.status ?? 'draft'
-  if (!(ENTITY_STATUSES as readonly string[]).includes(status)) {
+  // A test has no status: it is not work in flight, it is the instrument the
+  // work is measured with. An empty string rather than a default, so nothing
+  // downstream can mistake it for a position on the board.
+  const status = level === 'test' ? '' : (fields.status ?? 'draft')
+  if (level !== 'test' && !(ENTITY_STATUSES as readonly string[]).includes(status)) {
     findings.push({ folderPath, says: `status "${status}" is not one the board knows.` })
   }
-  if (kind === 'task' && fields.acceptanceCriteria.length === 0) {
+  // The path decides, because the path is what this walk followed. The key is
+  // what the file claims, and a claim that disagrees is worth saying out loud
+  // rather than quietly overruling.
+  if (typeOf(level) === 'workitem' && fields.subtype !== undefined && fields.subtype !== level) {
+    findings.push({ folderPath, says: `subtype says "${fields.subtype}" but this sits at ${level}.` })
+  }
+  if (level === 'task' && fields.acceptanceCriteria.length === 0) {
     findings.push({ folderPath, says: 'this task has no acceptance criterion, so nothing can gate it.' })
   }
   const children: Entity[] = []
-  for (const under of CHILDREN[kind] ?? []) {
+  for (const under of CHILDREN[level] ?? []) {
     for (const name of subdirectories(join(dir, under.dir))) {
-      const child = readEntity(root, `${folderPath}/${under.dir}/${name}`, under.kind, findings)
+      const child = readEntity(root, `${folderPath}/${under.dir}/${name}`, under.level, findings)
       if (child !== undefined) children.push(child)
     }
   }
   return {
-    kind,
+    level,
     folderPath,
     slug,
     name: fields.name === '' ? slug : fields.name,
@@ -126,6 +161,75 @@ function readEntity(root: string, folderPath: string, kind: EntityKind, findings
     fields,
     children,
     progress: { done: children.filter((child) => child.status === 'done').length, total: children.length },
+  }
+}
+
+/**
+ * Read one directory under `tests/`, and everything below it.
+ *
+ * A directory holding a `test.yaml` is a test; one that does not is a suite,
+ * and is walked. That rule is what makes a suite free: nothing declares one,
+ * and a suite that stops holding tests stops existing without anybody
+ * deleting a file.
+ * @param root - the board root.
+ * @param path - this directory's path within the board.
+ * @param slug - its own name.
+ * @param findings - collected, appended to.
+ * @returns the suite, with its tests and sub-suites.
+ */
+function readSuite(root: string, path: string, slug: string, findings: Finding[]): Suite {
+  const suite: Suite = { path, slug, suites: [], tests: [] }
+  for (const name of subdirectories(join(root, path))) {
+    const under = `${path}/${name}`
+    const test = readEntity(root, under, 'test', findings)
+    if (test !== undefined) suite.tests.push(test)
+    else suite.suites.push(readSuite(root, under, name, findings))
+  }
+  return suite
+}
+
+/**
+ * Every test on the board, by folder path.
+ *
+ * Flattened once per read rather than searched per link: a workitem with ten
+ * links would otherwise walk the whole tests tree ten times. Exported because
+ * the writer needs the same answer before it records a verdict, and two
+ * flatteners over one tree are two chances to disagree about what a test is.
+ * @param suite - the suite to flatten.
+ * @param into - the set to add to.
+ */
+export function collectTests(suite: Suite, into: Set<string>): void {
+  for (const test of suite.tests) into.add(test.folderPath)
+  for (const child of suite.suites) collectTests(child, into)
+}
+
+/**
+ * Check every workitem's links against the tests that exist.
+ *
+ * Three ways a link goes wrong, and each is reported rather than repaired: it
+ * names a test that is not there, its verdict is not one of the three, or it
+ * failed and nobody filed the bug. The last is the one worth having — a
+ * failure nobody wrote down should not read as fine.
+ * @param entities - the campaigns, walked in full.
+ * @param tests - every test's folder path.
+ * @param findings - collected, appended to.
+ */
+function checkLinks(entities: Entity[], tests: Set<string>, findings: Finding[]): void {
+  const stack = [...entities]
+  while (stack.length > 0) {
+    const entity = stack.pop()!
+    stack.push(...entity.children)
+    for (const link of entity.fields.validatedBy) {
+      if (!tests.has(link.test)) {
+        findings.push({ folderPath: entity.folderPath, says: `validated_by names ${link.test}, which is not on the board.` })
+      }
+      if (!(LINK_RESULTS as readonly string[]).includes(link.result)) {
+        findings.push({ folderPath: entity.folderPath, says: `result "${link.result}" is not one of pass, fail, not_run.` })
+      }
+      if (link.result === 'fail' && (link.bug ?? '') === '') {
+        findings.push({ folderPath: entity.folderPath, says: `${link.test} failed and no bug was filed against it.` })
+      }
+    }
   }
 }
 
@@ -138,10 +242,12 @@ function readEntity(root: string, folderPath: string, kind: EntityKind, findings
  * is built to keep. If a board ever grows large enough for this to hurt, that
  * is a measurement to act on, not a prediction to design around.
  * @param project - the project's root directory.
- * @returns the campaigns and what could not be read.
+ * @returns the campaigns, the tests, and what could not be read.
  */
 export function readBoard(project: string): Board {
-  if (!hasBoard(project)) return { present: false, campaigns: [], findings: [] }
+  if (!hasBoard(project)) {
+    return { present: false, campaigns: [], tests: { path: TESTS_DIR, slug: TESTS_DIR, suites: [], tests: [] }, findings: [] }
+  }
   const root = boardRoot(project)
   const findings: Finding[] = []
   const campaigns: Entity[] = []
@@ -149,7 +255,11 @@ export function readBoard(project: string): Board {
     const campaign = readEntity(root, `campaigns/${name}`, 'campaign', findings)
     if (campaign !== undefined) campaigns.push(campaign)
   }
-  return { present: true, campaigns, findings }
+  const tests = readSuite(root, TESTS_DIR, TESTS_DIR, findings)
+  const known = new Set<string>()
+  collectTests(tests, known)
+  checkLinks(campaigns, known, findings)
+  return { present: true, campaigns, tests, findings }
 }
 
 /**
@@ -157,7 +267,8 @@ export function readBoard(project: string): Board {
  *
  * A walk rather than an index: the board is already in memory and small, and a
  * second structure keyed by path is a second thing that can disagree with the
- * first.
+ * first. Tests are not searched; they are addressed by path through the
+ * board's tests container.
  * @param board - the board to search.
  * @param folderPath - the path to find.
  * @returns the entity, or nothing when the board has none there.
