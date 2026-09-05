@@ -166,6 +166,41 @@ describe('criteria', () => {
   it('refuses a blank criterion, which cannot be checked', () => {
     expect(addCriterion(project, 'campaigns/q3/missions/m1/tasks/t1', '  ').ok).toBe(false)
   })
+
+  // reason: `dumpEntity`'s test branch emits no `acceptance_criteria` at all,
+  // so a write here would be silently dropped on the way to disk while the
+  // caller was told `{ ok: true }` — a refusal converted into a false success.
+  it('refuses to add a criterion to a test, with a reason', () => {
+    createEntity(project, 'test', '', 'Login')
+    const out = addCriterion(project, 'tests/login', 'it works')
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.reason).toContain('proof')
+    expect(read('tests/login', 'test.yaml')).not.toContain('acceptance_criteria')
+  })
+
+  // reason: a bug's file emits no `acceptance_criteria` either, so the same
+  // lie is possible for it — this is not a test-specific guard.
+  it('refuses to add a criterion to a bug, with a reason', () => {
+    createEntity(project, 'bug', 'campaigns/q3', 'Crash')
+    const out = addCriterion(project, 'campaigns/q3/bugs/crash', 'it works')
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.reason).toContain('defect report')
+    expect(read('campaigns/q3/bugs/crash', 'bug.yaml')).not.toContain('acceptance_criteria')
+  })
+
+  it('still adds a criterion to a task', () => {
+    expect(addCriterion(project, 'campaigns/q3/missions/m1/tasks/t1', 'it works').ok).toBe(true)
+  })
+
+  it('refuses to tick a criterion on a test', () => {
+    createEntity(project, 'test', '', 'Login')
+    expect(tickCriterion(project, 'tests/login', 0, true).ok).toBe(false)
+  })
+
+  it('refuses to tick a criterion on a bug', () => {
+    createEntity(project, 'bug', 'campaigns/q3', 'Crash')
+    expect(tickCriterion(project, 'campaigns/q3/bugs/crash', 0, true).ok).toBe(false)
+  })
 })
 
 describe('trashEntity', () => {

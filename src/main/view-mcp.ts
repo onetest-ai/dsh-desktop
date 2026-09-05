@@ -699,7 +699,7 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
     {
       title: 'Edit an entity on the board',
       description:
-        "Change an entity's name, description or notes, and its per-kind fields: `role` (task), `target` (campaign), for a bug `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment`, and for a test `steps` and `expected` — the two things that make a test repeatable by someone who did not write it. Notes are free-form prose for decisions, rationale and sign-offs — appended reasoning that outlives the conversation it was decided in. This does not change status: use board_status for that.",
+        "Change an entity's name, description or notes, and its per-level fields: `role` (task), `target` (campaign), for a bug `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment`, and for a test `steps` and `expected` — the two things that make a test repeatable by someone who did not write it. Notes are free-form prose for decisions, rationale and sign-offs — appended reasoning that outlives the conversation it was decided in. This does not change status: use board_status for that.",
       inputSchema: {
         folder: z.string().describe('The folder path from board_read.'),
         name: z.string().optional().describe('A new display name. The folder does not move.'),

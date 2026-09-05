@@ -12,6 +12,20 @@ import {
   type EntityLevel,
 } from './entity-schema'
 
+/**
+ * Collapse a file-derived value to one line.
+ *
+ * `Finding.says` is documented as one line, and most findings are built from
+ * fixed words that can never break that. These few interpolate a raw field
+ * straight from the file, and a value like `status: "one\ntwo"` would turn one
+ * finding into two lines an agent reads as two findings.
+ * @param v - the raw value, as read from the file.
+ * @returns it, with all whitespace collapsed to single spaces and trimmed.
+ */
+function oneLine(v: string): string {
+  return v.replace(/\s+/g, ' ').trim()
+}
+
 /** Every file name an entity might be stored under, so a folder holding the wrong one can be named. */
 const ENTITY_FILES: readonly string[] = [...new Set(ENTITY_LEVELS.map(fileFor))]
 
@@ -143,7 +157,15 @@ function readEntity(root: string, folderPath: string, level: EntityLevel, findin
     // subtree under it vanish with no word.
     const found = otherEntityFile(dir, file)
     if (found !== undefined) {
-      findings.push({ folderPath, says: `holds ${found}, not ${file} — this folder is a ${level}.` })
+      // For a test specifically, this folder does not stop here: holding no
+      // test.yaml is exactly what makes `readSuite` walk it as a suite next.
+      // The finding has to say that, not that it "is a test" — a claim the
+      // walk that follows does not honor.
+      const says =
+        level === 'test'
+          ? `holds ${found}, not ${file} — read as a suite instead, since it holds no test.yaml.`
+          : `holds ${found}, not ${file} — this folder is a ${level}.`
+      findings.push({ folderPath, says })
     }
     return undefined
   }
@@ -162,19 +184,19 @@ function readEntity(root: string, folderPath: string, level: EntityLevel, findin
   // downstream can mistake it for a position on the board.
   const status = level === 'test' ? '' : (fields.status ?? 'draft')
   if (level !== 'test' && !(ENTITY_STATUSES as readonly string[]).includes(status)) {
-    findings.push({ folderPath, says: `status "${status}" is not one the board knows.` })
+    findings.push({ folderPath, says: `status "${oneLine(status)}" is not one the board knows.` })
   }
   if (level === 'test' && fields.status !== undefined) {
-    findings.push({ folderPath, says: `has a status field ("${fields.status}"), but a test has no status.` })
+    findings.push({ folderPath, says: `has a status field ("${oneLine(fields.status)}"), but a test has no status.` })
   }
   // The path decides, because the path is what this walk followed. The key is
   // what the file claims, and a claim that disagrees is worth saying out loud
   // rather than quietly overruling.
   if (typeOf(level) === 'workitem' && fields.subtype !== undefined && fields.subtype !== level) {
-    findings.push({ folderPath, says: `subtype says "${fields.subtype}" but this sits at ${level}.` })
+    findings.push({ folderPath, says: `subtype says "${oneLine(fields.subtype)}" but this sits at ${level}.` })
   }
   if (typeOf(level) !== 'workitem' && fields.subtype !== undefined) {
-    findings.push({ folderPath, says: `has a subtype field ("${fields.subtype}"), which only a workitem uses.` })
+    findings.push({ folderPath, says: `has a subtype field ("${oneLine(fields.subtype)}"), which only a workitem uses.` })
   }
   if (level === 'task' && fields.acceptanceCriteria.length === 0) {
     findings.push({ folderPath, says: 'this task has no acceptance criterion, so nothing can gate it.' })

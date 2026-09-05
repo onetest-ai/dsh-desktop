@@ -93,6 +93,43 @@ describe('readBoard', () => {
     expect(board.findings.some((f) => f.says.includes('inprogress'))).toBe(true)
   })
 
+  // reason: `status` and `subtype` are interpolated straight from the file, so
+  // a value carrying a newline would turn one finding into two lines an agent
+  // reads as two findings — the same one-line promise `yamlFailureReason`
+  // already guarantees for a parse failure.
+  it('keeps a bad-status finding to one line, even when the status itself has a newline', () => {
+    put('campaigns/q3', 'workitem.yaml', 'name: Q3\nstatus: "one\\ntwo"\n')
+    const board = readBoard(project)
+    const finding = board.findings.find((f) => f.folderPath === 'campaigns/q3')
+    expect(finding).toBeDefined()
+    expect(finding?.says).not.toContain('\n')
+  })
+
+  it('keeps a stray-status-on-a-test finding to one line', () => {
+    put('tests/login', 'test.yaml', 'name: Login\nstatus: "one\\ntwo"\n')
+    const board = readBoard(project)
+    const finding = board.findings.find((f) => f.folderPath === 'tests/login')
+    expect(finding).toBeDefined()
+    expect(finding?.says).not.toContain('\n')
+  })
+
+  it('keeps a mismatched-subtype finding to one line', () => {
+    put('campaigns/q3', 'workitem.yaml', 'name: Q3\nsubtype: "one\\ntwo"\n')
+    const board = readBoard(project)
+    const finding = board.findings.find((f) => f.folderPath === 'campaigns/q3' && f.says.includes('subtype'))
+    expect(finding).toBeDefined()
+    expect(finding?.says).not.toContain('\n')
+  })
+
+  it('keeps a stray-subtype-on-a-bug finding to one line', () => {
+    put('campaigns/q3', 'workitem.yaml', 'name: Q3\n')
+    put('campaigns/q3/bugs/b1', 'bug.yaml', 'name: B1\nsubtype: "one\\ntwo"\n')
+    const board = readBoard(project)
+    const finding = board.findings.find((f) => f.folderPath === 'campaigns/q3/bugs/b1' && f.says.includes('subtype'))
+    expect(finding).toBeDefined()
+    expect(finding?.says).not.toContain('\n')
+  })
+
   // reason: a task with no checkable definition of done cannot be gated, and
   // gating is the point. Reported, never refused.
   it('reports a task with no acceptance criteria, and still reads it', () => {
@@ -181,13 +218,19 @@ describe('a folder holding the wrong type of file', () => {
   })
 
   // reason: readSuite falls through the same readEntity check, so a directory
-  // holding a workitem.yaml under tests/ must not be silently reclassified as
-  // a suite and walked.
-  it('reports a tests folder holding a workitem.yaml instead of a test.yaml', () => {
+  // holding a workitem.yaml under tests/ is not a test — `readSuite` walks it
+  // as a suite instead, and the finding has to say that rather than claiming
+  // "this folder is a test", which the walk that follows does not honor.
+  it('reports a tests folder holding a workitem.yaml instead of a test.yaml, and walks it as a suite', () => {
     put('tests/login', 'workitem.yaml', 'name: Login\n')
     const board = readBoard(project)
     expect(board.tests.tests).toEqual([])
-    expect(board.findings.some((f) => f.folderPath === 'tests/login' && f.says.includes('workitem.yaml'))).toBe(true)
+    expect(board.tests.suites.some((s) => s.slug === 'login')).toBe(true)
+    expect(
+      board.findings.some(
+        (f) => f.folderPath === 'tests/login' && f.says.includes('workitem.yaml') && f.says.includes('suite'),
+      ),
+    ).toBe(true)
   })
 
   // reason: "holds a test.yaml is a test, full stop" must not also make the

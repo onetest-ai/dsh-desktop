@@ -6,6 +6,7 @@ import { collectTests, findEntity, findTest, readBoard } from './board-read'
 import {
   dumpEntity,
   ENTITY_STATUSES,
+  LEVEL_KEYS,
   LINK_RESULTS,
   loadEntity,
   typeOf,
@@ -195,9 +196,28 @@ export function setStatus(project: string, folderPath: string, status: string): 
 }
 
 /**
+ * Why a level refuses an acceptance criterion, when it does.
+ *
+ * Driven by `LEVEL_KEYS` rather than a hard-coded list of levels, so a level
+ * later added to the schema without `acceptance_criteria` is caught here too,
+ * instead of silently reintroducing the write-that-lies this guards against.
+ * @param level - the level asked to carry a criterion.
+ * @returns why it cannot, or nothing when it can.
+ */
+function whyNoCriteria(level: EntityLevel): string | undefined {
+  if (LEVEL_KEYS[level].includes('acceptance_criteria')) return undefined
+  if (level === 'test') return 'a test is proof that work was done, not a plan for doing it'
+  if (level === 'bug') return 'a bug is a defect report, not a plan'
+  return `a ${level} carries no acceptance criteria`
+}
+
+/**
  * Add an acceptance criterion, unticked.
  *
  * Unticked always: a criterion created as already met is one nobody checked.
+ * Refused for a level whose file emits no `acceptance_criteria` at all — a
+ * test or a bug — rather than written and silently dropped by `dumpEntity`,
+ * which is a refusal turned into a false success.
  * @param project - the project's root directory.
  * @param folderPath - the entity to add it to.
  * @param text - what has to be true.
@@ -207,6 +227,8 @@ export function addCriterion(project: string, folderPath: string, text: string):
   if (text.trim() === '') return { ok: false, reason: 'A criterion with no text cannot be checked.' }
   const found = open(project, folderPath)
   if (!found.ok) return found
+  const why = whyNoCriteria(found.level)
+  if (why !== undefined) return { ok: false, reason: `${folderPath} is a ${found.level}: ${why}, so it has no acceptance criteria.` }
   const criteria = [...found.fields.acceptanceCriteria, { text: text.trim(), done: false }]
   save(found.dir, found.level, { ...found.fields, acceptanceCriteria: criteria })
   return { ok: true, folderPath }
@@ -228,6 +250,8 @@ export function addCriterion(project: string, folderPath: string, text: string):
 export function tickCriterion(project: string, folderPath: string, index: number, done: boolean): WriteResult {
   const found = open(project, folderPath)
   if (!found.ok) return found
+  const why = whyNoCriteria(found.level)
+  if (why !== undefined) return { ok: false, reason: `${folderPath} is a ${found.level}: ${why}, so it has no acceptance criteria.` }
   const criteria = found.fields.acceptanceCriteria
   if (!Number.isInteger(index) || index < 0 || index >= criteria.length) {
     return { ok: false, reason: `${folderPath} has ${String(criteria.length)} criteria, so there is none at ${String(index)}.` }
