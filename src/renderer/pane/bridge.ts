@@ -225,13 +225,22 @@ declare global {
       // the list the store parsed out of the same file — a text would be a
       // second way to name the same line, and the two could disagree.
       tickCriterion(folderPath: string, index: number, done: boolean): Promise<BoardResult>
-      // The detail's editable prose. `description` and `notes` map straight to
-      // their fields; a `section` names a heading the level owns and main
-      // translates it to the field it fills — a heading the level does not own
-      // patches nothing, since a stray section is fixed in the file, not here.
+      // The detail's editable prose, and a campaign or mission's document links.
+      // `description` and `notes` map straight to their fields; a `section` names
+      // a heading the level owns and main translates it to the field it fills — a
+      // heading the level does not own patches nothing, since a stray section is
+      // fixed in the file, not here. `documents` is the whole list to write, not
+      // a delta: the detail reads the current links and hands back the new array,
+      // so there is one shape for an add, a rename and a removal alike and main
+      // never has to reconcile a partial change against what is on disk.
       updateBoardEntity(
         folderPath: string,
-        patch: { description?: string; notes?: string; section?: { heading: string; body: string } },
+        patch: {
+          description?: string
+          notes?: string
+          section?: { heading: string; body: string }
+          documents?: { label: string; target: string }[]
+        },
       ): Promise<BoardResult>
       // Appends one acceptance criterion, unticked. The store refuses a level
       // whose document has no `## Acceptance Criteria` section.

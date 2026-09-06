@@ -413,6 +413,9 @@ const detailActions: DetailActions = {
   linkTest: (folderPath, test, comment) => {
     void linkTest(folderPath, test, comment)
   },
+  attachDoc: (folderPath, label, target) => {
+    void attachDoc(folderPath, label, target)
+  },
 }
 
 /**
@@ -676,6 +679,33 @@ async function addCriterion(folderPath: string, text: string): Promise<void> {
  */
 async function linkTest(folderPath: string, test: string, comment: string): Promise<void> {
   const out = await window.pane.linkBoardTest(folderPath, test, comment)
+  refusal = out.ok ? undefined : out.reason
+  drawNote()
+}
+
+/**
+ * Attach one document link to the open entity, and say so only when the store would not.
+ *
+ * `edit`'s shape and `edit`'s reason for what it draws — a refusal shows the
+ * note over a detail left standing, a success leaves the redraw to the write's
+ * own `tasks:changed`. What is its own is where the new list comes from: the
+ * bridge's documents seam takes the whole array, not a delta, so the current
+ * links are read off the open detail and the typed pair is appended to them. A
+ * blank label is named after its target, since the store keeps whatever label
+ * it is given and an empty one on the card would read as a link the file failed
+ * to name. The list is read only when a detail is what is open — the control
+ * that calls this is drawn nowhere else — so any other place is a no-op rather
+ * than a write against a list this surface does not hold.
+ * @param folderPath - the campaign or mission being attached to.
+ * @param label - what to call the link; empty falls back to the target.
+ * @param target - where it points, already known non-empty by the control.
+ * @returns resolution once the answer has been shown.
+ */
+async function attachDoc(folderPath: string, label: string, target: string): Promise<void> {
+  if (place.at !== 'detail') return
+  const current = place.entity.documents
+  const documents = [...current, { label: label === '' ? target : label, target }]
+  const out = await window.pane.updateBoardEntity(folderPath, { documents })
   refusal = out.ok ? undefined : out.reason
   drawNote()
 }

@@ -3081,6 +3081,21 @@ describe('the board channels', () => {
     expect(detail.sections.find((one) => one.heading === 'Notes')?.body).toBe('A decision.')
   })
 
+  // reason: a campaign owns a `documents` key, so a documents patch maps
+  // straight to the field with no per-level translation, and a fresh detail
+  // reads the links back. The renderer builds the full array from the current
+  // one; main writes what it is handed.
+  it('updates the documents it was given', async () => {
+    await bootWithBoard()
+    expect(
+      fake.sendIpc('tasks:update', campaign, { documents: [{ label: 'The spec', target: 'docs/spec.md' }] }),
+    ).toEqual({ ok: true })
+    const detail = (await fake.sendIpc('tasks:detail', campaign)) as {
+      documents: { label: string; target: string }[]
+    }
+    expect(detail.documents).toEqual([{ label: 'The spec', target: 'docs/spec.md' }])
+  })
+
   // reason: the detail appends criteria one at a time, and the store refuses a
   // level whose document has no `## Acceptance Criteria` section — a task has
   // one, so this lands.

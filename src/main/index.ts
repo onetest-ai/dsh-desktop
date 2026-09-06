@@ -2766,25 +2766,35 @@ if (!app.requestSingleInstanceLock()) {
       notifyTasksChanged()
       return out.ok ? { ok: true } : out
     })
-    // The detail's editable prose. `description` and `notes` are fields in
-    // their own right; a `section` names a heading whose field only the schema
-    // knows, so `patchForSection` translates it from the entity's level — read
-    // here from the store, since a heading owned by one level is a stray on
-    // another and stays out of the write. The store resolves the folder inside
-    // the board before it touches anything, so a path outside it is refused
-    // there, exactly as `tasks:tick` is.
+    // The detail's editable prose, and a campaign or mission's document links.
+    // `description` and `notes` are fields in their own right; a `section` names
+    // a heading whose field only the schema knows, so `patchForSection`
+    // translates it from the entity's level — read here from the store, since a
+    // heading owned by one level is a stray on another and stays out of the
+    // write. `documents` needs no such translation: it is a field the schema
+    // names directly on the two levels that own it, and the store's own write
+    // refuses a level that does not — so the whole list the detail built maps
+    // straight in. The store resolves the folder inside the board before it
+    // touches anything, so a path outside it is refused there, exactly as
+    // `tasks:tick` is.
     ipcMain.handle(
       'tasks:update',
       (
         _event,
         folderPath: string,
-        patch: { description?: string; notes?: string; section?: { heading: string; body: string } },
+        patch: {
+          description?: string
+          notes?: string
+          section?: { heading: string; body: string }
+          documents?: { label: string; target: string }[]
+        },
       ) => {
         const project = currentProject?.path
         if (project === undefined) return { ok: false, reason: 'No project is open.' }
         const built: Partial<EntityFields> = {}
         if (patch?.description !== undefined) built.description = patch.description
         if (patch?.notes !== undefined) built.notes = patch.notes
+        if (patch?.documents !== undefined) built.documents = patch.documents
         if (patch?.section !== undefined) {
           // The level says which headings are the entity's own; a detail read
           // is the same walk the panel drew from, so the two cannot disagree

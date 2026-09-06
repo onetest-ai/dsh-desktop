@@ -37,6 +37,14 @@ export interface DetailActions {
   addCriterion: (folderPath: string, text: string) => void
   /** Declare that a test proves this workitem; a freshly declared link is unrun until something runs it. */
   linkTest: (folderPath: string, test: string, comment: string) => void
+  /**
+   * Attach one document link to a campaign or a mission. The label is what to
+   * call it and may be empty; the target is where it points and may not. Only
+   * the two typed values cross — the caller reads the current list off the open
+   * detail and builds the whole new array, so this surface never has to hold or
+   * reconcile a documents list of its own.
+   */
+  attachDoc: (folderPath: string, label: string, target: string) => void
 }
 
 /**
@@ -307,36 +315,79 @@ function addTestFor(detail: EntityDetailView, on: DetailActions): HTMLElement {
 }
 
 /**
- * The linked documents a campaign or a mission carries.
+ * The control that attaches one document link.
  *
- * Read-only, and that is a stated gap rather than an oversight: a document
- * lives in a `documents:` frontmatter key, and the bridge's `updateBoardEntity`
- * patches `description`, `notes` and one section — it has no documents seam.
- * Reaching around the store with a filesystem write of our own is the one thing
- * this surface never does, so the list is shown and an attach control is not;
- * attaching a document waits on a store write of its own. Drawn only for the
- * two levels that own the key, since every other level carries `[]` and a
- * heading over nothing would read as a field the file failed to fill rather
- * than one it never has.
+ * `addTestFor`'s shape and for its reason: a link is a pairing, not a line of
+ * prose, so two fields and a submit rather than `editField`'s one value — a
+ * label to call it by, and the target it points at. The label may be empty and
+ * the target may not, so an empty target submits nothing; when a label is not
+ * given the store side names the link after its target, so this surface hands
+ * the label through as typed and does not guess. Only the two values cross:
+ * `attachDoc` reads the current list off the open detail and builds the whole
+ * new array, so a partial change never has to be reconciled here. The board's
+ * re-read redraws the list with the new row and empties the fields, so there is
+ * no separate step that clears them — the redraw is it.
  * @param detail - the entity being drawn.
+ * @param on - what the surface can do.
+ * @returns the control, ready to append under the documents list.
+ */
+function attachDocFor(detail: EntityDetailView, on: DetailActions): HTMLElement {
+  const form = document.createElement('form')
+  form.className = 'board-detail-attach-doc'
+  const label = document.createElement('input')
+  label.type = 'text'
+  label.className = 'board-detail-add-input'
+  label.placeholder = 'What to call it'
+  const target = document.createElement('input')
+  target.type = 'text'
+  target.className = 'board-detail-add-input'
+  target.placeholder = 'Where it points'
+  const submit = document.createElement('button')
+  submit.type = 'submit'
+  submit.className = 'board-detail-add-button'
+  submit.textContent = 'Attach document'
+  form.append(label, target, submit)
+  form.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const where = target.value.trim()
+    if (where === '') return
+    on.attachDoc(detail.folderPath, label.value.trim(), where)
+  })
+  return form
+}
+
+/**
+ * The linked documents a campaign or a mission carries, and the control to
+ * attach one.
+ *
+ * A document lives in a `documents:` frontmatter key, which only a campaign and
+ * a mission own — so the section is drawn for those two levels alone, since
+ * every other level carries `[]` and a heading over nothing would read as a
+ * field the file failed to fill rather than one it never has. The attach control
+ * goes through the store's own `updateBoardEntity` documents seam, the same way
+ * every other write on this surface does: reaching around the store with a
+ * filesystem write of our own is the one thing this surface never does.
+ * @param detail - the entity being drawn.
+ * @param on - what the surface can do.
  * @returns the section, or nothing for a level that owns no documents.
  */
-function documentsFor(detail: EntityDetailView): HTMLElement | undefined {
+function documentsFor(detail: EntityDetailView, on: DetailActions): HTMLElement | undefined {
   if (detail.level !== 'campaign' && detail.level !== 'mission') return undefined
   const box = document.createElement('section')
   box.className = 'board-detail-docs'
   box.append(heading('Documents'))
   if (detail.documents.length === 0) {
     box.append(blankLine())
-    return box
+  } else {
+    for (const doc of detail.documents) {
+      const row = document.createElement('div')
+      row.className = 'board-detail-doc'
+      row.append(tag('board-detail-doc-label', doc.label))
+      row.append(tag('board-detail-doc-target', doc.target))
+      box.append(row)
+    }
   }
-  for (const doc of detail.documents) {
-    const row = document.createElement('div')
-    row.className = 'board-detail-doc'
-    row.append(tag('board-detail-doc-label', doc.label))
-    row.append(tag('board-detail-doc-target', doc.target))
-    box.append(row)
-  }
+  box.append(attachDocFor(detail, on))
   return box
 }
 
@@ -680,7 +731,7 @@ export function renderDetail(detail: EntityDetailView, on: DetailActions, under:
   }
   const stray = strayCriteriaFor(detail)
   if (stray !== undefined) box.append(stray)
-  const docs = documentsFor(detail)
+  const docs = documentsFor(detail, on)
   if (docs !== undefined) box.append(docs)
   if (detail.children.length > 0) {
     const kids = document.createElement('section')

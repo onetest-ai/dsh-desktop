@@ -52,6 +52,7 @@ function actions(): DetailActions & { calls: unknown[][] } {
     edit: (folderPath, patch) => calls.push(['edit', folderPath, patch]),
     addCriterion: (folderPath, text) => calls.push(['addCriterion', folderPath, text]),
     linkTest: (folderPath, test, comment) => calls.push(['linkTest', folderPath, test, comment]),
+    attachDoc: (folderPath, label, target) => calls.push(['attachDoc', folderPath, label, target]),
   }
 }
 
@@ -506,10 +507,11 @@ describe('the detail view', () => {
   })
 
   // reason: only a campaign or a mission owns a `documents` key, so those are
-  // the levels that draw the list. It is read-only for now: the bridge has no
-  // documents patch, and this surface never reaches around the store — attach
-  // waits on a seam of its own.
-  it('lists a campaign’s documents with no attach control, there being no store seam', () => {
+  // the levels that draw the list — and, beneath it, an attach control that
+  // pairs a label with a target and appends one link. The store builds the full
+  // new array from the current one, so only the typed label and target cross.
+  it('lists a campaign’s documents and attaches one from the attach control', () => {
+    const on = actions()
     show(
       detail({
         level: 'campaign',
@@ -517,13 +519,37 @@ describe('the detail view', () => {
         status: 'idea',
         documents: [{ label: 'The spec', target: 'docs/spec.md' }],
       }),
-      actions(),
+      on,
     )
     const docs = document.querySelector('.board-detail-docs')
     expect(docs?.textContent).toContain('The spec')
     expect(docs?.textContent).toContain('docs/spec.md')
-    expect(docs?.querySelector('input')).toBeNull()
-    expect(docs?.querySelector('button')).toBeNull()
+    const form = docs?.querySelector<HTMLFormElement>('.board-detail-attach-doc')
+    expect(form).not.toBeNull()
+    const inputs = form?.querySelectorAll<HTMLInputElement>('input')
+    if (inputs !== undefined) {
+      inputs[0].value = 'The plan'
+      inputs[1].value = 'docs/plan.md'
+    }
+    form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    expect(on.calls).toContainEqual(['attachDoc', 'campaigns/q3/missions/m1/tasks/t1', 'The plan', 'docs/plan.md'])
+  })
+
+  // reason: a document is a target, and a label is only what to call it — so an
+  // empty target is nothing to link and submits nothing, the way the add-test
+  // control refuses an empty path.
+  it('attaches nothing when the target is empty', () => {
+    const on = actions()
+    show(detail({ level: 'campaign', parent: undefined, status: 'idea', documents: [] }), on)
+    const form = document.querySelector<HTMLFormElement>('.board-detail-attach-doc')
+    expect(form).not.toBeNull()
+    const inputs = form?.querySelectorAll<HTMLInputElement>('input')
+    if (inputs !== undefined) {
+      inputs[0].value = 'A label but no target'
+      inputs[1].value = '   '
+    }
+    form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    expect(on.calls).toEqual([])
   })
 
   // reason: a level that owns no documents key would draw a heading over

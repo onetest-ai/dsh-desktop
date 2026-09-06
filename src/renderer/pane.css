@@ -1895,8 +1895,9 @@ body {
   cursor: pointer;
 }
 
-/* The documents a campaign or a mission links. Read-only for now: the bridge
-   has no documents patch, so this is a list and not yet a control. */
+/* The documents a campaign or a mission links, and the control that attaches
+   one. The list reads down the page and the attach form sits under it, the
+   same shape and spacing the Add-test control uses beneath its own list. */
 .board-detail-docs {
   margin-top: 4px;
 }
@@ -1908,9 +1909,24 @@ body {
   padding: 2px 0;
 }
 
+/* The label is the name the eye runs along, so it reads at the body weight the
+   rows do rather than the dimmed tertiary the target sits in. */
+.board-detail-doc-label {
+  color: var(--dsw-alias-label-primary);
+}
+
 .board-detail-doc-target {
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
+}
+
+/* The attach control: the two inputs and their button on one wrapping row, the
+   Add-test form's own layout, so the two writes on this surface look alike. */
+.board-detail-attach-doc {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
 }
 
 /* A row is a whole line, unlike a card: a detail is read down the page, and

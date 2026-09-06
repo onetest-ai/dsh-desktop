@@ -144,7 +144,12 @@ contextBridge.exposeInMainWorld('pane', {
     ipcRenderer.invoke('tasks:tick', folderPath, index, done),
   updateBoardEntity: (
     folderPath: string,
-    patch: { description?: string; notes?: string; section?: { heading: string; body: string } },
+    patch: {
+      description?: string
+      notes?: string
+      section?: { heading: string; body: string }
+      documents?: { label: string; target: string }[]
+    },
   ) => ipcRenderer.invoke('tasks:update', folderPath, patch),
   addBoardCriterion: (folderPath: string, text: string) => ipcRenderer.invoke('tasks:add-criterion', folderPath, text),
   linkBoardTest: (folderPath: string, test: string, comment: string) =>
