@@ -62,8 +62,8 @@ import { boardFor, detailFor, watchBoard } from './board-ipc'
 import { BOARD_DIR, resolveInBoard } from './board/board-paths'
 // `setStatus` is imported under a name of its own: this file already has one,
 // which is about the window's state rather than an entity's.
-import { addCriterion, createEntity, setStatus as setEntityStatus, tickCriterion, trashEntity, updateEntity, type WriteResult } from './board/board-write'
-import { ENTITY_LEVELS, type EntityLevel } from './board/entity-schema'
+import { addCriterion, createEntity, linkTest, setStatus as setEntityStatus, tickCriterion, trashEntity, updateEntity, type WriteResult } from './board/board-write'
+import { ENTITY_LEVELS, patchForSection, type EntityFields, type EntityLevel } from './board/entity-schema'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
 import { loadableUrl } from './view-tools'
@@ -2763,6 +2763,61 @@ if (!app.requestSingleInstanceLock()) {
         return { ok: false, reason: 'A criterion is ticked or it is not, so done must be true or false.' }
       }
       const out = tickCriterion(project, folderPath, index, done)
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
+    })
+    // The detail's editable prose. `description` and `notes` are fields in
+    // their own right; a `section` names a heading whose field only the schema
+    // knows, so `patchForSection` translates it from the entity's level — read
+    // here from the store, since a heading owned by one level is a stray on
+    // another and stays out of the write. The store resolves the folder inside
+    // the board before it touches anything, so a path outside it is refused
+    // there, exactly as `tasks:tick` is.
+    ipcMain.handle(
+      'tasks:update',
+      (
+        _event,
+        folderPath: string,
+        patch: { description?: string; notes?: string; section?: { heading: string; body: string } },
+      ) => {
+        const project = currentProject?.path
+        if (project === undefined) return { ok: false, reason: 'No project is open.' }
+        const built: Partial<EntityFields> = {}
+        if (patch?.description !== undefined) built.description = patch.description
+        if (patch?.notes !== undefined) built.notes = patch.notes
+        if (patch?.section !== undefined) {
+          // The level says which headings are the entity's own; a detail read
+          // is the same walk the panel drew from, so the two cannot disagree
+          // about it. A path the board does not hold answers nothing here, and
+          // is refused rather than written blind.
+          const detail = detailFor(project, folderPath)
+          if (detail === undefined) return { ok: false, reason: `${folderPath} is not on this project's board.` }
+          Object.assign(built, patchForSection(detail.level as EntityLevel, patch.section.heading, patch.section.body))
+        }
+        const out = updateEntity(project, folderPath, built)
+        notifyTasksChanged()
+        return out.ok ? { ok: true } : out
+      },
+    )
+    // Append one acceptance criterion, unticked. The store refuses a level
+    // whose document has no `## Acceptance Criteria` section, and resolves the
+    // folder inside the board itself.
+    ipcMain.handle('tasks:add-criterion', (_event, folderPath: string, text: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      const out = addCriterion(project, folderPath, text)
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
+    })
+    // Declare that a test proves this workitem. A freshly attached test is
+    // `not_run` — it has not been run against this workitem yet — so the result
+    // is fixed here and only the comment crosses the channel. The store refuses
+    // a non-workitem level and a test path it does not know, and resolves the
+    // folder inside the board itself.
+    ipcMain.handle('tasks:link', (_event, folderPath: string, test: string, comment: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      const out = linkTest(project, folderPath, test, 'not_run', comment)
       notifyTasksChanged()
       return out.ok ? { ok: true } : out
     })

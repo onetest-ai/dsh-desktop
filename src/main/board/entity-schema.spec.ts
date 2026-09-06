@@ -7,6 +7,7 @@ import {
   LINK_RESULTS,
   loadEntity,
   loadLegacyEntity,
+  patchForSection,
   RUN_HISTORY,
   typeOf,
   WORKITEM_SUBTYPES,
@@ -798,5 +799,33 @@ describe('an entity file saved with CRLF line endings', () => {
     expect(loadEntity(text).description).toBe('intro line\n\n### Design\ndeep stuff')
     expect(loadEntity(text).expected).toBe('it opens')
     expect(dumpEntity('bug', loadEntity(text))).toBe(text)
+  })
+})
+
+describe('patchForSection', () => {
+  // reason: the write-side companion to `bodyFor`, so an edited section lands in
+  // the field the reader drew it from. A bug's own headings each map to their
+  // field, and the body crosses verbatim.
+  it('maps a level’s own opaque heading to the field it fills', () => {
+    expect(patchForSection('bug', 'Steps to Reproduce', 'open it')).toEqual({ stepsToReproduce: 'open it' })
+    expect(patchForSection('bug', 'Actual', 'it crashed')).toEqual({ actual: 'it crashed' })
+    expect(patchForSection('test', 'Expected Final State', 'it is closed')).toEqual({ expectedFinalState: 'it is closed' })
+    expect(patchForSection('campaign', 'Notes', 'signed off')).toEqual({ notes: 'signed off' })
+  })
+
+  // reason: a heading modelled for another level is a stray on this one, and a
+  // stray section is fixed in the file rather than written back — the same
+  // refusal `dumpEntity` makes when it declines to emit one.
+  it('patches nothing for a heading the level does not own', () => {
+    expect(patchForSection('task', 'Steps to Reproduce', 'nope')).toEqual({})
+    expect(patchForSection('campaign', 'RCA', 'nope')).toEqual({})
+    expect(patchForSection('bug', 'Nonesuch', 'nope')).toEqual({})
+  })
+
+  // reason: Acceptance Criteria is the one owned section that is not opaque
+  // prose — it is a checklist ticked item by item — so it holds no single field
+  // a body could replace and must fall through to nothing here.
+  it('patches nothing for Acceptance Criteria, even where the level owns it', () => {
+    expect(patchForSection('task', 'Acceptance Criteria', '- [ ] a')).toEqual({})
   })
 })

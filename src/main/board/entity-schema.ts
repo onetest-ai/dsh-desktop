@@ -705,6 +705,32 @@ export function bodyFor(f: EntityFields, heading: string): string {
 }
 
 /**
+ * The field one section heading patches, when a surface edits that section whole.
+ *
+ * The write-side companion to `bodyFor`, off the same two tables `dumpEntity`
+ * writes a file from: `LEVEL_SECTIONS` says which headings a level owns, and
+ * `SECTION_FIELDS` says which field each opaque one fills. A heading the level
+ * does not own — one modelled for another level, or modelled nowhere — patches
+ * nothing, because a stray section is a finding to fix in the file rather than
+ * a body to write back, exactly as `dumpEntity` refuses to emit one.
+ *
+ * `Acceptance Criteria` patches nothing here even where a level owns it: it is
+ * the one owned section that is not opaque prose but a checklist the board ticks
+ * item by item, through `addCriterion` and `tickCriterion`, and it holds no
+ * single field a body could replace. It is absent from `SECTION_FIELDS`, so it
+ * falls through to `{}` on its own.
+ * @param level - the level the entity sits at, which says which headings it owns.
+ * @param heading - the section heading a surface edited.
+ * @param body - the new body under it.
+ * @returns the one-field patch to hand `updateEntity`; `{}` for a heading this level does not own.
+ */
+export function patchForSection(level: EntityLevel, heading: string, body: string): Partial<EntityFields> {
+  if (!LEVEL_SECTIONS[level].includes(heading)) return {}
+  const found = SECTION_FIELDS.find(([h]) => h === heading)
+  return found ? { [found[1]]: body } : {}
+}
+
+/**
  * Serialize typed fields to a `<type>.md` body — frontmatter, lead and sections — emitting only
  * what that level uses, in a stable order.
  * @param level - the level to dump at. Wins over whatever `f.subtype` says, since the caller got

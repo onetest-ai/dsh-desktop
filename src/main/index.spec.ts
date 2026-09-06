@@ -3054,6 +3054,64 @@ describe('the board channels', () => {
     expect(detail.criteria).toEqual([{ text: 'It works', done: false }])
   })
 
+  // reason: the detail's editable prose. A description maps straight to its
+  // field, and the write is the same read-through-the-store every board channel
+  // makes, so a fresh detail sees exactly what was written.
+  it('updates a field it was given, and refuses a path outside the board', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:update', task, { description: 'A clearer description.' })).toEqual({ ok: true })
+    const detail = (await fake.sendIpc('tasks:detail', task)) as { description: string }
+    expect(detail.description).toBe('A clearer description.')
+    expect(fake.sendIpc('tasks:update', '../../etc', { description: 'nope' })).toEqual({
+      ok: false,
+      reason: "../../etc is not inside this project's board.",
+    })
+  })
+
+  // reason: a `section` names a heading whose field only the schema knows, so
+  // main translates it from the entity's level — a task's own `## Notes` lands
+  // in `notes`, and a heading the level does not own is refused by the schema
+  // and writes nothing.
+  it('updates a section by its heading, via the level’s own mapping', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:update', task, { section: { heading: 'Notes', body: 'A decision.' } })).toEqual({
+      ok: true,
+    })
+    const detail = (await fake.sendIpc('tasks:detail', task)) as { sections: { heading: string; body: string }[] }
+    expect(detail.sections.find((one) => one.heading === 'Notes')?.body).toBe('A decision.')
+  })
+
+  // reason: the detail appends criteria one at a time, and the store refuses a
+  // level whose document has no `## Acceptance Criteria` section — a task has
+  // one, so this lands.
+  it('adds a criterion it was given, and refuses a path outside the board', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:add-criterion', task, 'It logs in fast')).toEqual({ ok: true })
+    const detail = (await fake.sendIpc('tasks:detail', task)) as { criteria: { text: string }[] }
+    expect(detail.criteria.map((one) => one.text)).toContain('It logs in fast')
+    expect(fake.sendIpc('tasks:add-criterion', '../../etc', 'nope')).toEqual({
+      ok: false,
+      reason: "../../etc is not inside this project's board.",
+    })
+  })
+
+  // reason: a freshly attached test is `not_run` — it has not been run against
+  // this workitem yet — so main fixes the verdict and only the comment crosses.
+  // The store refuses a test path it does not know and a non-workitem level.
+  it('links a test to a workitem, unrun, and refuses a path outside the board', async () => {
+    await bootWithBoard()
+    const test = made(createEntity(project, 'test', '', 'Login works'))
+    expect(fake.sendIpc('tasks:link', task, test, 'covers the timeout')).toEqual({ ok: true })
+    const detail = (await fake.sendIpc('tasks:detail', task)) as {
+      links: { test: string; result: string; comment: string }[]
+    }
+    expect(detail.links).toEqual([{ test, name: 'Login works', result: 'not_run', comment: 'covers the timeout' }])
+    expect(fake.sendIpc('tasks:link', '../../etc', test, '')).toEqual({
+      ok: false,
+      reason: "../../etc is not inside this project's board.",
+    })
+  })
+
   // reason: the prompt is itself something a hostile page could use — a dialog
   // naming a plausible entity with Delete under the pointer. A path the board
   // does not hold must not raise one at all.
@@ -3115,6 +3173,9 @@ describe('the board channels', () => {
     expect(fake.sendIpc('tasks:create', 'task', mission, 'Nope', '')).toEqual(refused)
     expect(fake.sendIpc('tasks:set-status', task, 'done')).toEqual(refused)
     expect(fake.sendIpc('tasks:tick', task, 0, true)).toEqual(refused)
+    expect(fake.sendIpc('tasks:update', task, { description: 'nope' })).toEqual(refused)
+    expect(fake.sendIpc('tasks:add-criterion', task, 'nope')).toEqual(refused)
+    expect(fake.sendIpc('tasks:link', task, 'tests/login', '')).toEqual(refused)
     await expect(fake.sendIpc('tasks:trash', task, 'Fix the login timeout')).resolves.toEqual(refused)
     fake.sendIpc('tasks:open-file', task, 'workitem.yaml')
     fake.sendIpc('tasks:reveal', mission)

@@ -167,6 +167,12 @@ export interface EntityDetailWire {
   /** The lead paragraph. */
   description: string
   /**
+   * The linked documents, `{ label, target }` in file order. A campaign or a
+   * mission carries what it has; every other level carries `[]`, since only
+   * those two own a `documents` key.
+   */
+  documents: { label: string; target: string }[]
+  /**
    * `[{ heading, body }]` in the level's own order, blank ones included so the reader sees the shape.
    *
    * `stray` marks a section this level does not own — modelled elsewhere in the
@@ -328,6 +334,10 @@ export function detailFor(project: string | undefined, folderPath: string): Enti
       ? {}
       : { parent: { folderPath: found.parent.folderPath, name: found.parent.name } }),
     description: entity.fields.description,
+    // The store already parsed these to `{label,target}`; a level with no
+    // `documents` key reads as `[]` rather than as absent, so the surface has
+    // one shape to draw for every level.
+    documents: entity.fields.documents.map((one) => ({ label: one.label, target: one.target })),
     sections: sectionsOf(entity),
     criteria: entity.fields.acceptanceCriteria.map((one) => ({ text: one.text, done: one.done })),
     children: entity.children.map((child) => ({

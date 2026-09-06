@@ -142,6 +142,13 @@ contextBridge.exposeInMainWorld('pane', {
   setBoardStatus: (folderPath: string, status: string) => ipcRenderer.invoke('tasks:set-status', folderPath, status),
   tickCriterion: (folderPath: string, index: number, done: boolean) =>
     ipcRenderer.invoke('tasks:tick', folderPath, index, done),
+  updateBoardEntity: (
+    folderPath: string,
+    patch: { description?: string; notes?: string; section?: { heading: string; body: string } },
+  ) => ipcRenderer.invoke('tasks:update', folderPath, patch),
+  addBoardCriterion: (folderPath: string, text: string) => ipcRenderer.invoke('tasks:add-criterion', folderPath, text),
+  linkBoardTest: (folderPath: string, test: string, comment: string) =>
+    ipcRenderer.invoke('tasks:link', folderPath, test, comment),
   trashBoardEntity: (folderPath: string, name: string) => ipcRenderer.invoke('tasks:trash', folderPath, name),
   onShowDiff: (listener: (root: string, relative: string, proposed: string) => void) => {
     ipcRenderer.on('pane:diff', (_event, root: string, relative: string, proposed: string) =>

@@ -259,6 +259,30 @@ describe('detailFor', () => {
     put('campaigns/q3/workitem.yaml', 'name: Q3\nsubtype: campaign\n')
     expect(detailFor(project, 'campaigns/q3')!.file).toBe('workitem.yaml')
   })
+
+  // reason: the linked documents are the one thing a campaign or a mission
+  // carries that the detail could not draw before, and the store already
+  // parsed them to `{label,target}` — the detail's job is only to carry them.
+  it('carries a campaign’s linked documents as {label, target}', () => {
+    put(
+      'campaigns/q3/workitem.md',
+      '---\nname: Q3\nsubtype: campaign\n' +
+        'documents:\n  - label: The spec\n    target: docs/spec.md\n  - label: The brief\n    target: docs/brief.md\n---\n',
+    )
+    expect(detailFor(project, 'campaigns/q3')!.documents).toEqual([
+      { label: 'The spec', target: 'docs/spec.md' },
+      { label: 'The brief', target: 'docs/brief.md' },
+    ])
+  })
+
+  // reason: only a campaign and a mission own a `documents` key, so every other
+  // level — and a campaign that named none — has to carry `[]` rather than
+  // absent, so the surface draws one shape for all of them.
+  it('carries an empty list for a level with no documents', () => {
+    aBoard()
+    expect(detailFor(project, 'campaigns/q3')!.documents).toEqual([])
+    expect(detailFor(project, 'tests/login')!.documents).toEqual([])
+  })
 })
 
 /**

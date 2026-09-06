@@ -88,6 +88,12 @@ export interface EntityDetailView {
   /** The lead paragraph. */
   description: string
   /**
+   * The linked documents, `{ label, target }` in file order. A campaign or a
+   * mission carries what it has; every other level carries `[]`, since only
+   * those two own a `documents` key.
+   */
+  documents: { label: string; target: string }[]
+  /**
    * `[{ heading, body }]` in the level's own order, blank ones included so the reader sees the shape.
    *
    * `stray` marks a section this level does not own — modelled elsewhere in the
@@ -219,6 +225,21 @@ declare global {
       // the list the store parsed out of the same file — a text would be a
       // second way to name the same line, and the two could disagree.
       tickCriterion(folderPath: string, index: number, done: boolean): Promise<BoardResult>
+      // The detail's editable prose. `description` and `notes` map straight to
+      // their fields; a `section` names a heading the level owns and main
+      // translates it to the field it fills — a heading the level does not own
+      // patches nothing, since a stray section is fixed in the file, not here.
+      updateBoardEntity(
+        folderPath: string,
+        patch: { description?: string; notes?: string; section?: { heading: string; body: string } },
+      ): Promise<BoardResult>
+      // Appends one acceptance criterion, unticked. The store refuses a level
+      // whose document has no `## Acceptance Criteria` section.
+      addBoardCriterion(folderPath: string, text: string): Promise<BoardResult>
+      // Declares that a test proves this workitem. A freshly attached test is
+      // `not_run` — it has not been run against this workitem yet — so main
+      // fixes the verdict and only the comment crosses.
+      linkBoardTest(folderPath: string, test: string, comment: string): Promise<BoardResult>
       // Main confirms this one before the store is touched, the way
       // `git:discard` does, so the panel does not ask a second time. The name
       // goes with the path because the confirmation is read by a person: the

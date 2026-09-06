@@ -21,6 +21,7 @@ function detail(over: Partial<EntityDetailView> = {}): EntityDetailView {
     status: 'executing',
     parent: { folderPath: 'campaigns/q3/missions/m1', name: 'M1' },
     description: 'The session dies at ten minutes.',
+    documents: [],
     sections: [
       { heading: 'Acceptance Criteria', body: '- [x] It holds\n- [ ] It logs' },
       { heading: 'Notes', body: '' },
