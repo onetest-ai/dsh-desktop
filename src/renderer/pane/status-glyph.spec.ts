@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { statusGlyph, verdictDot } from './status-glyph'
+import { statusGlyph, verdictDot } from './status-glyph.ts'
 
 describe('statusGlyph', () => {
   it('returns an svg carrying the status as a data attribute, for each of the five', () => {

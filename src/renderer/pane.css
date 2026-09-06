@@ -1470,10 +1470,10 @@ body {
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* The pass/total count on a test row and the failing-note on a detail row. The
-   count is kept in the neutral label token — a verdict dot carries the colour
-   now — while the failing note still reddens, since it is prose about what
-   broke rather than a number beside a dot. */
+/* The criterion-failing note on a detail row — kept in the neutral label
+   token by default, since the failing variant below is what reddens it. Test
+   rows carry their pass/total count and colour through .board-card-verdict-
+   count and a verdict dot instead. */
 .board-chip {
   flex: none;
   padding: 0 4px;

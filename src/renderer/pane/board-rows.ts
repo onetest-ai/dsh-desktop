@@ -180,19 +180,3 @@ export function groupBoard(campaigns: EntityView[]): GroupView[] {
     return { campaign, lanes }
   })
 }
-
-/**
- * What a card says about the tests that prove it.
- *
- * Absent when nothing validates it — a chip reading `0/0` is a claim about
- * nothing, and every card would carry one. Any failure makes the whole chip
- * read as failing, because one unproven check is the thing worth seeing from
- * across a board.
- * @param entity - the card.
- * @returns the chip, or nothing when there is nothing to say.
- */
-export function chipOf(entity: EntityView): { text: string; failing: boolean } | undefined {
-  const { pass, total } = entity.verdicts
-  if (total === 0) return undefined
-  return { text: `${String(pass)}/${String(total)} passing`, failing: pass < total }
-}

@@ -193,7 +193,7 @@ function cardFor(entity: EntityView): HTMLElement {
   // The dot carries the verdict now — pass, fail, or none — so the word
   // "passing" and the failing-red text it used to colour are both gone from
   // here; a card with nothing to validate it draws no dot and no count, the
-  // same absence `chipOf` used to answer with.
+  // same absence a verdict-less card has always shown.
   const { pass, total } = entity.verdicts
   if (total > 0) {
     const verdicts = document.createElement('span')

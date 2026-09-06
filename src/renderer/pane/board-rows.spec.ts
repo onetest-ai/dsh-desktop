@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BOARD_STATUSES, CLOSED, chipOf, closedCampaigns, groupBoard, statusLabel, type EntityView } from './board-rows.ts'
+import { BOARD_STATUSES, CLOSED, closedCampaigns, groupBoard, statusLabel, type EntityView } from './board-rows.ts'
 
 /**
  * One entity for the grouper, with only the fields a case names.
@@ -197,24 +197,5 @@ describe('groupBoard', () => {
     ])
     const keys = groups.flatMap((group) => group.lanes.map((lane) => lane.key))
     expect(new Set(keys).size).toBe(keys.length)
-  })
-})
-
-describe('chipOf', () => {
-  it('says nothing when nothing validates the entity', () => {
-    expect(chipOf(entity({ level: 'task', name: 'T' }))).toBeUndefined()
-  })
-
-  it('counts the verdicts that passed', () => {
-    expect(chipOf(entity({ level: 'task', name: 'T', verdicts: { pass: 3, total: 4 } }))).toEqual({
-      text: '3/4 passing',
-      failing: true,
-    })
-  })
-
-  // reason: one unproven check is the thing worth seeing from across a board,
-  // so a chip with any failure in it reads as a failure.
-  it('reads as passing only when every verdict passed', () => {
-    expect(chipOf(entity({ level: 'task', name: 'T', verdicts: { pass: 2, total: 2 } }))?.failing).toBe(false)
   })
 })
