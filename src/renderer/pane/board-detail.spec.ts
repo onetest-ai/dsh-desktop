@@ -69,6 +69,24 @@ describe('the detail view', () => {
     expect(document.querySelector('.board-detail-status')?.textContent).toBe('Executing')
   })
 
+  // reason: a card and its opened detail are the same status, and the reader
+  // should not have to learn a second visual language to see that.
+  it('puts the status glyph on the header pill, matching the status', () => {
+    show(detail({ status: 'done' }), actions())
+    const glyph = document.querySelector('.board-detail-status .status-glyph')
+    expect(glyph).not.toBeNull()
+    expect(glyph?.classList.contains('status-glyph-done')).toBe(true)
+  })
+
+  // reason: a test's detail has no status at all — the pill is never drawn,
+  // so there is nothing here for a glyph to sit in either, and drawing one
+  // anyway would be the exact claim the missing pill is there to avoid.
+  it('draws no header glyph for a test, and does not throw', () => {
+    expect(() => show(detail({ level: 'test', status: '', parent: undefined }), actions())).not.toThrow()
+    expect(document.querySelector('.board-detail-status .status-glyph')).toBeNull()
+    expect(document.querySelector('.board-detail .status-glyph')).toBeNull()
+  })
+
   // reason: the parent is where back would take you if the detail were the
   // board — an entity that has none must not draw a line pointing at nothing.
   it('draws the parent line, and omits it when there is no parent', () => {
@@ -151,6 +169,18 @@ describe('the detail view', () => {
     expect(select?.value).toBe('blocked')
   })
 
+  // reason: the select's own label carries the same glyph the card and the
+  // header pill do, so a reader who only glances at the field still sees
+  // what it currently holds — not wired to the select's own change, which
+  // Task 3 leaves for the next redraw rather than a live listener.
+  it('puts the status glyph beside the select’s label, for the current value', () => {
+    show(detail({ status: 'validation' }), actions())
+    const field = document.querySelector('.board-detail-field')
+    const glyph = field?.querySelector('.status-glyph')
+    expect(glyph).not.toBeNull()
+    expect(glyph?.classList.contains('status-glyph-validation')).toBe(true)
+  })
+
   // reason: a test has no status, so a select over it would offer to write
   // one — and a pill on the heading would read as one the file failed to say.
   it('offers no status at all for a test', () => {
@@ -185,8 +215,18 @@ describe('the detail view', () => {
     )
     const row = document.querySelector<HTMLElement>('.board-detail-children .board-detail-row')
     expect(row?.textContent).toContain('T2')
+    expect(row?.querySelector('.status-glyph-idea')).not.toBeNull()
     row?.click()
     expect(on.calls).toContainEqual(['open', 'campaigns/q3/missions/m1/tasks/t2'])
+  })
+
+  // reason: the wire's `EntityDetailView` gives a parent line only a
+  // folder path and a name — no status field to read — so the row must not
+  // reach for one that is not there, and must not throw doing it.
+  it('draws no glyph on the parent row, which carries no status', () => {
+    expect(() => show(detail(), actions())).not.toThrow()
+    const parentRow = document.querySelector<HTMLElement>('.board-detail-parent .board-detail-row')
+    expect(parentRow?.querySelector('.status-glyph')).toBeNull()
   })
 
   // reason: this is where a failing check is explained, and it is the reason

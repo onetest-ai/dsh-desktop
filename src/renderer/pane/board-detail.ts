@@ -1,6 +1,7 @@
 import { BOARD_STATUSES, statusLabel } from './board-rows.ts'
 import type { EntityDetailView } from './bridge.ts'
 import { openMarkdownLink, renderMarkdown } from './markdown.ts'
+import { statusGlyph } from './status-glyph.ts'
 
 /**
  * What a detail can do, handed in rather than reached for.
@@ -156,12 +157,17 @@ export function tag(className: string, text: string): HTMLElement {
  * @param note - the status or verdict beside it, if any.
  * @param failing - whether that note reads as a failure.
  * @param go - what pressing it does.
+ * @param status - the row's own status, when its entity carries one. A
+ *   parent line and a link/validates row point at a workitem that has no
+ *   status field on the wire at all, so they pass nothing rather than `''`;
+ *   only a child row carries the field, and only then is a glyph drawn.
  * @returns the row, ready to append.
  */
-function rowFor(name: string, note: string, failing: boolean, go: () => void): HTMLElement {
+function rowFor(name: string, note: string, failing: boolean, go: () => void, status?: string): HTMLElement {
   const row = document.createElement('button')
   row.type = 'button'
   row.className = 'board-detail-row'
+  if (status !== undefined && status !== '') row.append(statusGlyph(status))
   const label = document.createElement('span')
   label.className = 'board-detail-row-name'
   label.textContent = name
@@ -195,7 +201,11 @@ function headFor(detail: EntityDetailView, on: DetailActions, under: Surface): H
   head.append(title)
   // A test has no status at all, so it gets no pill: an empty one would read
   // as a status the file failed to say rather than as one it never has.
-  if (detail.status !== '') head.append(tag('board-detail-status', statusLabel(detail.status)))
+  if (detail.status !== '') {
+    const pill = tag('board-detail-status', statusLabel(detail.status))
+    pill.prepend(statusGlyph(detail.status))
+    head.append(pill)
+  }
   const file = document.createElement('button')
   file.type = 'button'
   file.className = 'board-detail-file'
@@ -214,6 +224,11 @@ function headFor(detail: EntityDetailView, on: DetailActions, under: Surface): H
  * silently redrawn as `idea`: the select would otherwise claim the file says
  * something it does not, and one change of any other field would then write
  * that claim into it. It is a finding, and the tree is where it is named.
+ * The glyph beside the label is a static read of `detail.status` at draw
+ * time, not a control bound to the select: it says what the file currently
+ * holds, and a pick not yet confirmed by main has not changed that yet
+ * either. The redraw that follows a write is what moves it, same as the
+ * label text already does.
  * @param detail - the entity being drawn.
  * @param on - what the surface can do.
  * @returns the labelled select, ready to append.
@@ -222,7 +237,7 @@ function statusFor(detail: EntityDetailView, on: DetailActions): HTMLElement {
   const field = document.createElement('label')
   field.className = 'board-detail-field'
   const label = document.createElement('span')
-  label.textContent = 'Status'
+  label.append(statusGlyph(detail.status), document.createTextNode('Status'))
   const select = document.createElement('select')
   select.className = 'board-detail-select'
   const statuses = BOARD_STATUSES.includes(detail.status) ? BOARD_STATUSES : [...BOARD_STATUSES, detail.status]
@@ -433,9 +448,15 @@ export function renderDetail(detail: EntityDetailView, on: DetailActions, under:
     kids.append(heading('Children'))
     for (const child of detail.children) {
       kids.append(
-        rowFor(child.name, child.status === '' ? '' : statusLabel(child.status), false, () => {
-          on.open(child.folderPath)
-        }),
+        rowFor(
+          child.name,
+          child.status === '' ? '' : statusLabel(child.status),
+          false,
+          () => {
+            on.open(child.folderPath)
+          },
+          child.status,
+        ),
       )
     }
     box.append(kids)
