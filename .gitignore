@@ -11,3 +11,6 @@ plugin/lib
 # Working notes and SDD plans/specs — kept on disk, not committed
 docs/notes/
 docs/superpowers/
+
+# Local, uncommitted Claude notes (may reference credential locations)
+CLAUDE.local.md
