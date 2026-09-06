@@ -66,6 +66,7 @@ window.shell.onPlaces((places) => {
   rail.style.width = `${places.rail.width}px`
   document.getElementById('rail-files').setAttribute('aria-pressed', String(places.open.files))
   document.getElementById('rail-git').setAttribute('aria-pressed', String(places.open.git))
+  document.getElementById('rail-tasks').setAttribute('aria-pressed', String(places.open.tasks))
   document.getElementById('rail-web').setAttribute('aria-pressed', String(places.open.web))
   document.getElementById('rail-terminal').setAttribute('aria-pressed', String(places.open.terminal))
 })
@@ -78,6 +79,11 @@ document.getElementById('rail-files').addEventListener('click', () => {
 // closes it.
 document.getElementById('rail-git').addEventListener('click', () => {
   window.shell.toggleGit()
+})
+// The tree, source control, and the task board's tree take turns in the same
+// column, so this button says only which view was pressed too.
+document.getElementById('rail-tasks').addEventListener('click', () => {
+  window.shell.toggleTasks()
 })
 document.getElementById('rail-web').addEventListener('click', () => {
   window.shell.toggleWeb()

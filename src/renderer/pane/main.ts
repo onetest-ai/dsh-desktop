@@ -5,6 +5,7 @@ import { isMarkdown, openMarkdownLink, renderMarkdown } from './markdown.ts'
 import { isMedia } from './media-kind.ts'
 import { monacoDocuments, setEditorTheme } from './monaco-surface.ts'
 import './bridge.ts'
+import './board.ts'
 import { followHarnessTheme } from './theme.ts'
 
 // Main decides the theme and pushes it, before any document is mounted; the

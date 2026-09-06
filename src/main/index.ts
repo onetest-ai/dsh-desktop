@@ -58,6 +58,12 @@ import { remote, type RemoteOp, type RemoteOutcome } from './git-remote'
 import type { Section } from './git-status'
 import { setGitPath } from './git-run'
 import { serveViewTools, SURFACES, type BrowserAutomation, type PageText, type ViewServer } from './view-mcp'
+import { boardFor, detailFor, watchBoard } from './board-ipc'
+import { BOARD_DIR, resolveInBoard } from './board/board-paths'
+// `setStatus` is imported under a name of its own: this file already has one,
+// which is about the window's state rather than an entity's.
+import { addCriterion, createEntity, linkTest, setStatus as setEntityStatus, tickCriterion, trashEntity, updateEntity, type WriteResult } from './board/board-write'
+import { ENTITY_LEVELS, patchForSection, type EntityFields, type EntityLevel } from './board/entity-schema'
 import { PAGE_TEXT_LIMIT, pageTextScript } from './page-text'
 import { projectFileUrl } from './project-url'
 import { loadableUrl } from './view-tools'
@@ -163,16 +169,18 @@ function setColumn(key: keyof Columns, next: { width?: number; open?: boolean })
 /**
  * The view the side column's rectangle is currently in.
  *
- * The tree and the git panel take turns in that column, and `applyLayout`
- * gives the one that is not showing a 0x0 rectangle — so anything measuring
- * the column has to ask the view that has it. Measuring `files` while the
- * panel is up reads zero, and a zero committed at the end of a drag is stored
- * as a width the user never chose.
+ * The tree, the git panel and the board's tree take turns in that column, and
+ * `applyLayout` gives the two that are not showing a 0x0 rectangle — so
+ * anything measuring the column has to ask the view that has it. Measuring
+ * `files` while another view is up reads zero, and a zero committed at the
+ * end of a drag is stored as a width the user never chose.
  * @param window - the window and its views.
- * @returns whichever of the two is holding the column.
+ * @returns whichever of the three is holding the column.
  */
 function sideColumn(window: MainWindow): MainWindow['files'] {
-  return columns.files.view === 'git' ? window.git : window.files
+  if (columns.files.view === 'git') return window.git
+  if (columns.files.view === 'tasks') return window.tasks
+  return window.files
 }
 
 /**
@@ -283,6 +291,7 @@ async function startViewTools(config: DesktopConfig): Promise<void> {
   try {
     viewServer = await serveViewTools(config.viewToolsPort ?? DEFAULT_VIEW_TOOLS_PORT, {
       roots: () => readWorkspaces(DSH_HOME).map((workspace) => workspace.path),
+      project: () => currentProject?.path,
       openFile: openInPane,
       openUrl: openUrlInPane,
       showDiff: showDiffInPane,
@@ -701,8 +710,11 @@ function showProject(project?: { path: string; title: string }): void {
   if (views === undefined || views.window.isDestroyed()) return
   views.files.webContents.send('pane:project', currentProject)
   // The panel follows the project the tree does; a moved project is a
-  // different set of repositories entirely.
-  if (moved) notifyGitChanged()
+  // different set of repositories entirely — and a different board.
+  if (moved) {
+    notifyGitChanged()
+    notifyTasksChanged()
+  }
 }
 
 /**
@@ -717,6 +729,8 @@ function watchCurrentProject(): void {
   projectWatcher?.close()
   projectWatcher = undefined
   closeGitWatchers()
+  stopBoardWatch?.()
+  stopBoardWatch = undefined
   const root = currentProject?.path
   if (root === undefined) return
   projectWatcher = watchProject(root, (relative) => {
@@ -727,6 +741,7 @@ function watchCurrentProject(): void {
     notifyGitChanged()
   })
   watchRepos(root)
+  stopBoardWatch = watchBoard(root, notifyTasksChanged)
 }
 
 /**
@@ -1179,6 +1194,44 @@ function notifyGitChanged(): void {
   gitNotify.unref?.()
 }
 
+/** The pending `tasks:changed`, so a burst of writes arrives as one. */
+let tasksNotify: ReturnType<typeof setTimeout> | undefined
+
+/**
+ * Tell both board views to read themselves again, once the writes have settled.
+ *
+ * An agent planning a campaign writes dozens of files in a second through its
+ * tools; without this, each one is a full re-read and a redraw in two views.
+ *
+ * Both are told unconditionally, unlike `notifyGitChanged`: the tree is in the
+ * side column and the board is in the editor's, so there is no one place to
+ * check for whether anyone is looking — and a view that missed the notice
+ * would show a board that no longer exists until something else moved.
+ */
+function notifyTasksChanged(): void {
+  if (views === undefined || views.window.isDestroyed()) return
+  if (tasksNotify !== undefined) clearTimeout(tasksNotify)
+  tasksNotify = setTimeout(() => {
+    tasksNotify = undefined
+    if (views === undefined || views.window.isDestroyed()) return
+    views.tasks.webContents.send('tasks:changed')
+    views.pane.webContents.send('tasks:changed')
+  }, GIT_SETTLE_MS)
+  tasksNotify.unref?.()
+}
+
+/**
+ * Stops watching the open project's board, or undefined when none is watched.
+ *
+ * Its own watch rather than a second use of the project watcher's: that one
+ * reports the directory each changed file sits in so the file tree can re-list
+ * it, and the board wants only "something under `.dsh/tasks/` moved". It also
+ * walks down to that directory as it appears, which a watch shaped around the
+ * tree could not — a project opened without a board is the case the whole
+ * feature starts from.
+ */
+let stopBoardWatch: (() => void) | undefined
+
 /**
  * Watches over each repository's own `.git`, closed when the project moves.
  *
@@ -1298,6 +1351,8 @@ function pushTheme(): void {
     // resolves to the light value, and the panel renders white beside a dark
     // harness — the failure 0.3.0 fixed for the Settings window.
     views.git.webContents,
+    // The board's tree is a page of this app's own too, for the same reason.
+    views.tasks.webContents,
     views.terminal.webContents,
     ...(settings === undefined ? [] : [settings]),
   ]) {
@@ -2396,6 +2451,8 @@ async function shutdown(): Promise<void> {
   projectWatcher?.close()
   projectWatcher = undefined
   closeGitWatchers()
+  stopBoardWatch?.()
+  stopBoardWatch = undefined
   // The install child is reaped first and unconditionally: it is in neither
   // the lifecycle chain nor `child`, so nothing below would ever find it, and
   // an unreaped `npm` keeps writing into $DSH_HOME after Electron is gone.
@@ -2518,6 +2575,9 @@ if (!app.requestSingleInstanceLock()) {
       toggleGit: () => {
         toggleSideView('git')
       },
+      toggleTasks: () => {
+        toggleSideView('tasks')
+      },
       toggleWeb,
       toggleTerminal: toggleTerminalPanel,
       zoomIn: () => {
@@ -2542,7 +2602,7 @@ if (!app.requestSingleInstanceLock()) {
         // `loadConfig` fills it in — the fallback here is for a stored object
         // that reached this build by any other route.
         const side = stored.config.pane.files
-        columns.files = { ...side, view: side.view === 'git' ? 'git' : 'files' }
+        columns.files = { ...side, view: side.view === 'git' || side.view === 'tasks' ? side.view : 'files' }
         // The panel's size is restored but never its open state, for the
         // editor's reason: a terminal exists because someone opened one, and
         // reopening it at launch would start a shell nobody asked for.
@@ -2608,7 +2668,201 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.on('shell:toggle-git', () => {
       toggleSideView('git')
     })
+    ipcMain.on('shell:toggle-tasks', () => {
+      toggleSideView('tasks')
+    })
     ipcMain.on('shell:toggle-web', toggleWeb)
+    // The board's own read, for both of its views. A full walk of
+    // `.dsh/tasks/` every time and never a cache: the read is milliseconds,
+    // and a cached board is a second thing that can disagree with disk.
+    // Which project it was read from goes with it: a view that could not tell
+    // "no project" from "no board" would advise creating a campaign in a
+    // place that does not exist, and one that could not tell one project from
+    // the next would keep the last one's highlights and folds over it.
+    ipcMain.handle('tasks:read', () => ({ ...boardFor(currentProject?.path), project: currentProject?.path }))
+    // One entity, for the panel's detail view — read the same way, from the
+    // same walk of the same files, so a detail and the card it was opened
+    // from cannot disagree. A folder path the board does not have answers
+    // nothing: the path came from a view holding a board it read a moment
+    // ago, and an entity deleted since is a fall back to the board rather
+    // than a failure.
+    ipcMain.handle('tasks:detail', (_event, folderPath: string) => detailFor(currentProject?.path, folderPath))
+    // The tree names a folder path; main hands it to the board's panel, which
+    // brings its own tab forward. A reveal that scrolled a panel nobody could
+    // see would look like nothing happening.
+    ipcMain.on('tasks:reveal', (_event, folderPath: string) => {
+      if (views === undefined || views.window.isDestroyed()) return
+      if (!columns.editor.open) {
+        setColumn('editor', { open: true })
+        storeColumns()
+      }
+      views.pane.webContents.send('tasks:reveal', folderPath)
+    })
+    // Open file in a detail hands the editor the entity's own document. The
+    // file name comes from the read that drew the detail rather than from the
+    // renderer's own idea of the level, and it is checked here anyway: a path
+    // and a name from a renderer are a request, not evidence of what they
+    // point at, and this one becomes a file that is opened.
+    //
+    // Six names, not three. An entity is a `.md` since the conversion, and
+    // a board nobody has converted still holds the `.yaml` — `detailFor`
+    // answers with whichever is on disk, so dropping either half would make
+    // Open file do nothing at all on exactly those entities. The folder is
+    // resolved inside the board first; the two checks are halves of one gate.
+    ipcMain.on('tasks:open-file', (_event, folderPath: string, file: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return
+      const dir = resolveInBoard(project, folderPath)
+      if (dir === undefined) return
+      const named = ['workitem.md', 'bug.md', 'test.md', 'workitem.yaml', 'bug.yaml', 'test.yaml']
+      if (!named.includes(file)) return
+      openInPane(project, join(BOARD_DIR, folderPath, file))
+    })
+    // The board's four writes. Every one of them goes to the store, which
+    // resolves the folder inside the board before it touches anything: a path
+    // from a renderer is a request, not evidence of where it points. Each then
+    // tells both views to read themselves again, since the write is exactly
+    // what made what they are showing stale.
+    ipcMain.handle('tasks:create', (_event, level: string, parent: string, name: string, second: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      if (!(ENTITY_LEVELS as readonly string[]).includes(level)) return { ok: false, reason: `"${level}" is not a level.` }
+      const made = createEntity(project, level as EntityLevel, parent, name)
+      if (!made.ok) return made
+      // The second field, when it was filled in: the criterion that says when
+      // a task is done, or what happened for a bug. A failure here is still
+      // reported — the entity exists either way, and a silent one would leave
+      // the user believing they had written something they had not.
+      let out: WriteResult = made
+      if (second !== '') {
+        out = level === 'bug' ? updateEntity(project, made.folderPath, { description: second })
+          : addCriterion(project, made.folderPath, second)
+      }
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
+    })
+    ipcMain.handle('tasks:set-status', (_event, folderPath: string, status: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      const out = setEntityStatus(project, folderPath, status)
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
+    })
+    // The detail's other write. The index is a position in the criteria the
+    // same read handed the detail, and the store checks it against the file
+    // it is about to rewrite — a stale index refuses rather than ticking a
+    // line the reader never saw.
+    ipcMain.handle('tasks:tick', (_event, folderPath: string, index: number, done: boolean) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      // The store checks the index and cannot check this: anything at all
+      // dumps as a value of the key. Refused here rather than coerced, so
+      // what the file ends up saying is what the channel accepted rather
+      // than what the writer made of it.
+      if (typeof done !== 'boolean') {
+        return { ok: false, reason: 'A criterion is ticked or it is not, so done must be true or false.' }
+      }
+      const out = tickCriterion(project, folderPath, index, done)
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
+    })
+    // The detail's editable prose, and a campaign or mission's document links.
+    // `description` and `notes` are fields in their own right; a `section` names
+    // a heading whose field only the schema knows, so `patchForSection`
+    // translates it from the entity's level — read here from the store, since a
+    // heading owned by one level is a stray on another and stays out of the
+    // write. `documents` needs no such translation: it is a field the schema
+    // names directly on the two levels that own it, and the store's own write
+    // refuses a level that does not — so the whole list the detail built maps
+    // straight in. The store resolves the folder inside the board before it
+    // touches anything, so a path outside it is refused there, exactly as
+    // `tasks:tick` is.
+    ipcMain.handle(
+      'tasks:update',
+      (
+        _event,
+        folderPath: string,
+        patch: {
+          description?: string
+          notes?: string
+          section?: { heading: string; body: string }
+          documents?: { label: string; target: string }[]
+        },
+      ) => {
+        const project = currentProject?.path
+        if (project === undefined) return { ok: false, reason: 'No project is open.' }
+        const built: Partial<EntityFields> = {}
+        if (patch?.description !== undefined) built.description = patch.description
+        if (patch?.notes !== undefined) built.notes = patch.notes
+        if (patch?.documents !== undefined) built.documents = patch.documents
+        if (patch?.section !== undefined) {
+          // The level says which headings are the entity's own; a detail read
+          // is the same walk the panel drew from, so the two cannot disagree
+          // about it. A path the board does not hold answers nothing here, and
+          // is refused rather than written blind.
+          const detail = detailFor(project, folderPath)
+          if (detail === undefined) return { ok: false, reason: `${folderPath} is not on this project's board.` }
+          Object.assign(built, patchForSection(detail.level as EntityLevel, patch.section.heading, patch.section.body))
+        }
+        const out = updateEntity(project, folderPath, built)
+        notifyTasksChanged()
+        return out.ok ? { ok: true } : out
+      },
+    )
+    // Append one acceptance criterion, unticked. The store refuses a level
+    // whose document has no `## Acceptance Criteria` section, and resolves the
+    // folder inside the board itself.
+    ipcMain.handle('tasks:add-criterion', (_event, folderPath: string, text: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      const out = addCriterion(project, folderPath, text)
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
+    })
+    // Declare that a test proves this workitem. A freshly attached test is
+    // `not_run` — it has not been run against this workitem yet — so the result
+    // is fixed here and only the comment crosses the channel. The store refuses
+    // a non-workitem level and a test path it does not know, and resolves the
+    // folder inside the board itself.
+    ipcMain.handle('tasks:link', (_event, folderPath: string, test: string, comment: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      const out = linkTest(project, folderPath, test, 'not_run', comment)
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
+    })
+    // Trash asks first, and it asks here, in main, where a renderer cannot
+    // answer for itself — the way Discard in the git panel does. The panel
+    // never asks a second time: two prompts for one press teach a user to
+    // click through both.
+    // The name is the renderer's because only the card has it: the folder is
+    // called `fix-the-login-timeout` and the entity is called "Fix the login
+    // timeout", and a confirmation is read by a person. It is wording and
+    // nothing more — the path is still what is resolved, and it is resolved
+    // before the dialog is raised.
+    ipcMain.handle('tasks:trash', async (_event, folderPath: string, name: string) => {
+      const project = currentProject?.path
+      if (project === undefined) return { ok: false, reason: 'No project is open.' }
+      if (views === undefined || views.window.isDestroyed()) return { ok: false, reason: '' }
+      if (resolveInBoard(project, folderPath) === undefined) {
+        return { ok: false, reason: `${folderPath} is not inside this project's board.` }
+      }
+      const called = name === undefined || name === '' ? (folderPath.split('/').pop() ?? folderPath) : name
+      const { response } = await dialog.showMessageBox(views.window, {
+        type: 'warning',
+        buttons: ['Delete', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        message: `Delete ${called}?`,
+        detail: 'It moves to the board’s trash, with everything under it. Nothing is removed from disk.',
+      })
+      // An empty reason: the user answered, so there is nothing to report back
+      // to them about it.
+      if (response !== 0) return { ok: false, reason: '' }
+      const out = trashEntity(project, folderPath)
+      notifyTasksChanged()
+      return out.ok ? { ok: true } : out
+    })
     // The panel's own read. Nothing about git reaches the renderer but this
     // result: the parsing, the spawning, and the serialisation are all here.
     ipcMain.handle('git:read', async () => await readCurrentGit())

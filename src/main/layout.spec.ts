@@ -262,3 +262,21 @@ describe('nextSideView', () => {
     expect(nextSideView({ open: true, view: 'git' }, 'files')).toEqual({ open: true, view: 'files' })
   })
 })
+
+describe('the tasks view in the side column', () => {
+  // reason: three views that are rarely read at once do not each deserve
+  // permanent horizontal space, so the third joins the rotation rather than
+  // becoming a fourth column.
+  it('opens the column on the tasks view when it was showing something else', () => {
+    expect(nextSideView({ open: true, view: 'git' }, 'tasks')).toEqual({ open: true, view: 'tasks' })
+    expect(nextSideView({ open: false, view: 'files' }, 'tasks')).toEqual({ open: true, view: 'tasks' })
+  })
+
+  it('closes the column when the tasks button is pressed while it is showing', () => {
+    expect(nextSideView({ open: true, view: 'tasks' }, 'tasks')).toEqual({ open: false, view: 'tasks' })
+  })
+
+  it('switches away from tasks without closing', () => {
+    expect(nextSideView({ open: true, view: 'tasks' }, 'files')).toEqual({ open: true, view: 'files' })
+  })
+})

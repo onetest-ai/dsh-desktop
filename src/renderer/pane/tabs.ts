@@ -3,11 +3,15 @@
  *
  * The file tree is not among them: it is a column of its own, beside this
  * one, the way an IDE keeps its explorer.
+ *
+ * The board is a panel of this document, unlike the web view, which is a
+ * separate view stacked over the pane's bounds — which is why moving to the
+ * board is also what takes that view down.
  */
-export type PaneTab = 'editor' | 'web'
+export type PaneTab = 'editor' | 'web' | 'board'
 
 /** Every tab, in the order they appear. */
-export const PANE_TABS: readonly PaneTab[] = ['editor', 'web']
+export const PANE_TABS: readonly PaneTab[] = ['editor', 'web', 'board']
 
 /** What the pane's DOM needs to change when the tab changes. */
 export interface TabView {

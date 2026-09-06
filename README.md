@@ -164,7 +164,13 @@ The **Web** tab is a browser with back, forward, reload, and an address bar that
 
 The **terminal** holds as many shells as you want: `+` opens another, each tab has its own close, and the `✕` at the end of the strip closes the panel and every shell in it. The rail's button only hides the panel, so shells you leave running are still there when you bring it back. Each tab keeps its own scrollback and cursor, so switching between them costs nothing. It runs your login shell — or the one set under **Settings → Advanced → Terminal shell** — in the workspace the tree is showing. It keeps that directory: switching workspace later moves the tree, not a shell you are already working in. Where it sits depends on what else is open: it takes the editor's place when the editor is closed, the whole split when the tree is closed too, and docks along the bottom, up to half the window, when both are up.
 
-Open the tree and the browser from the rail, or from **View** (`Cmd+Alt+B` and `Cmd+Alt+W`). The editor has no toggle of its own: it appears when a file is opened, and closes when its last tab does. Every column remembers its width.
+Open the tree and the browser from the rail, or from **View** (`Cmd+Alt+B`, `Cmd+Alt+W`, and `Cmd+Alt+T`). The editor has no toggle of its own: it appears when a file is opened, and closes when its last tab does. Every column remembers its width.
+
+The board has two surfaces. `⌘⌥T` opens its tree in the side column — campaigns,
+missions, tasks and bugs, with the tests that prove them under their own root.
+The Board tab in the content column shows the same work as a swimlane board:
+one lane per mission, one column per status, and a card dragged between them
+sets that entity's status and nothing else's.
 
 The rail's **Source Control** button, or `Cmd+Alt+G`, takes the tree's place with a git panel instead — the two share that one column, the way Explorer and Source Control take turns in one VS Code sidebar, rather than each holding permanent width of its own. It lists every repository the project holds (skipping straight to its contents when there is only one), each repository's branch and how far it is ahead or behind, and its changed, staged, and untracked files. Clicking a file shows its diff inline in the editor column, coloured, beside whatever tab you already had open for that file. This reads your local git only — there is no account, no API, and no token involved.
 
@@ -230,6 +236,13 @@ Two limits worth knowing. `window.prompt` is replaced rather than intercepted, b
 There are two browsers in reach, and their tools carry the same names: these drive **this app's** browser, the one on your screen, while Playwright's MCP server drives a separate headless one. Every description here says which, so the model does not reach for the wrong one.
 
 Every path argument is checked against the projects the harness has opened, and a path outside them is refused with a reason the model can read. Nothing is written to `mcp.json`: the server entry is built per launch, so it cannot linger when the app is not running. Switch the whole thing off on the **MCP** tab.
+
+The agent can also keep a board. `.dsh/tasks/` holds campaigns, missions,
+tasks, bugs and the tests that prove them as YAML files, committed alongside
+the code — so a plan is diffable, survives the conversation it was made in,
+and merges when two agents work on different branches. Nothing infers a
+status: a mission is done when someone says so, never because its last task
+finished.
 
 ## Development
 

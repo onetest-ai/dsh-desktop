@@ -1,5 +1,34 @@
 <!doctype html>
 <meta charset="utf-8">
+<!--
+  What this page may fetch, and from where.
+
+  It is the page that holds the preload reaching the filesystem, and since the
+  board's detail it renders markdown an agent wrote — sanitised, but a
+  sanitiser keeps an `<img src>`, so opening a card used to be enough to make
+  the privileged page issue a request to whatever URL a file named. `default-src
+  'none'` is the answer to that: nothing remote loads here at all, and every
+  directive below names only this app's own two hosts.
+
+  Each one is here because something the pane actually does needs it, and
+  nothing is wider than that thing:
+  - `script-src 'self'` — `pane-bundle.js`, the only script this page has.
+  - `worker-src 'self'` — Monaco's language services are workers, fetched from
+    `app://pane/*.worker.js`; without this the editor loses every one of them,
+    which is the whole reason this page is served from a scheme and not a file.
+  - `style-src` needs `'unsafe-inline'` — Monaco injects a `<style>` element
+    and sets `element.style` on nearly everything it draws. A nonce cannot
+    cover the second of those.
+  - `img-src` needs `data:` for the squiggles and the empty-editor art that
+    `pane-bundle.css` carries as data URIs, and `app://project` for a picture
+    the editor column is showing out of the open project.
+  - `font-src 'self'` — the codicon face esbuild emits beside the bundle.
+  - `media-src` / `object-src` — the same project files, as video, audio, or a
+    PDF in an `<embed>`.
+  - `connect-src 'self'` — nothing here fetches today; main is reached over IPC
+    through the preload, which is not a fetch and is not governed here.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' app://project data:; font-src 'self'; media-src 'self' app://project; object-src app://project; connect-src 'self'; base-uri 'none'; form-action 'none'">
 <title>Editor</title>
 <!-- The harness's own tokens, vendored; see vendor/dsh-theme/README.md. -->
 <link rel="stylesheet" href="theme/base.css">
@@ -12,6 +41,7 @@
   <nav class="tabs" role="tablist" aria-label="Editor column">
     <button type="button" role="tab" id="tab-editor" aria-controls="panel-editor" aria-selected="true" class="tab">Editor</button>
     <button type="button" role="tab" id="tab-web" aria-controls="panel-web" aria-selected="false" tabindex="-1" class="tab">Web</button>
+    <button type="button" role="tab" id="tab-board" aria-controls="panel-board" aria-selected="false" tabindex="-1" class="tab">Board</button>
     <span class="tab-spacer"></span>
     <button type="button" id="close-editor" class="tab-close" aria-label="Close the editor" title="Close">✕</button>
   </nav>
@@ -39,6 +69,38 @@
       <button type="button" id="web-forward" class="chrome" aria-label="Forward" title="Forward">›</button>
       <button type="button" id="web-reload" class="chrome" aria-label="Reload" title="Reload">⟳</button>
       <input id="web-url" type="text" spellcheck="false" autocomplete="off" aria-label="Address" placeholder="example.com">
+    </div>
+  </section>
+  <!-- The board itself, unlike the web page above: a panel of this document,
+       drawn from the same read the tree in the side column uses. -->
+  <section id="panel-board" role="tabpanel" aria-labelledby="tab-board" class="panel">
+    <p class="empty" id="board-empty" hidden></p>
+    <p class="git-note" id="board-note" role="status" hidden></p>
+    <!-- The board's own chrome, and the only way to a test that does not
+         require knowing the test exists. Hidden while a destination is open,
+         because each of those carries its own back. -->
+    <div class="board-head" id="board-head" hidden>
+      <button type="button" id="board-tests" class="board-head-button">Tests</button>
+    </div>
+    <div id="board-groups"></div>
+    <!-- Closed by its own controls and by nothing else; see the spec's
+         "Creating something opens a modal". -->
+    <div id="board-modal" class="board-modal" role="dialog" aria-modal="true" aria-labelledby="board-modal-title" hidden>
+      <form class="board-modal-form" id="board-modal-form">
+        <div class="board-modal-head">
+          <p class="board-modal-title" id="board-modal-title"></p>
+          <!-- An ordinary button, not a backdrop or an Escape handler: a
+               keyboard user leaves the way everyone else does. -->
+          <button type="button" id="board-modal-close" class="board-modal-close" aria-label="Close">✕</button>
+        </div>
+        <label class="board-modal-field"><span>Name</span><input type="text" id="board-modal-name"></label>
+        <label class="board-modal-field"><span id="board-modal-second-label"></span><input type="text" id="board-modal-second"></label>
+        <p class="board-modal-error" id="board-modal-error" role="status" hidden></p>
+        <div class="board-modal-actions">
+          <button type="button" id="board-modal-cancel" class="board-modal-button">Cancel</button>
+          <button type="submit" id="board-modal-create" class="board-modal-button">Create</button>
+        </div>
+      </form>
     </div>
   </section>
 </main>

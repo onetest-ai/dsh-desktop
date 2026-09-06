@@ -6,6 +6,7 @@ import type { ConfigResult, DesktopConfig } from './config'
 import type { OpenConfigFileResult } from './open-config-file'
 import type { PluginStatus } from './plugin-entries'
 import type { StartOptions } from './server'
+import { createEntity } from './board/board-write'
 
 /** The stored config used by tests that need a configured first run. */
 const STORED: DesktopConfig = {
@@ -88,6 +89,11 @@ const fake = vi.hoisted(() => {
     getBounds: vi.fn(() => ({ x: 0, y: 0, width: 220, height: 860 })),
     webContents: { send: vi.fn() },
   }
+  // The task board's tree: a page of this app's own, like the git panel.
+  const tasks = {
+    getBounds: vi.fn(() => ({ x: 0, y: 0, width: 220, height: 860 })),
+    webContents: { send: vi.fn() },
+  }
   // The terminal panel: `index.ts` pushes it the theme and the shell's output.
   const terminal = {
     getBounds: vi.fn(() => ({ x: 0, y: 620, width: 740, height: 240 })),
@@ -118,7 +124,7 @@ const fake = vi.hoisted(() => {
       },
     },
   }
-  const views = { window, harness, pane, files, git, terminal, web }
+  const views = { window, harness, pane, files, git, tasks, terminal, web }
 
   const app = {
     requestSingleInstanceLock: vi.fn(() => true),
@@ -409,7 +415,13 @@ vi.mock('./workspaces', () => ({
 }))
 
 const readDirectoryMock = vi.fn(() => [] as unknown[])
-vi.mock('./file-tree', () => ({ readDirectory: (...args: unknown[]) => readDirectoryMock(...(args as [])) }))
+// Partial, like `./git-model` below: the project watcher reads `IGNORED` on
+// every filesystem event, so a mock without it turns any test that opens a
+// real directory into an uncaught throw from inside a watcher callback.
+vi.mock('./file-tree', async () => ({
+  ...(await vi.importActual<typeof import('./file-tree')>('./file-tree')),
+  readDirectory: (...args: unknown[]) => readDirectoryMock(...(args as [])),
+}))
 
 /** The panel's read, so a test can hold one open and watch what a second does. */
 const readProjectMock = vi.fn(async (root: string) => ({ ok: true as const, repos: [{ path: root }] }))
@@ -2273,11 +2285,11 @@ describe('the side columns', () => {
   it('pushes the theme to every page of its own, the git panel included', async () => {
     fake.nativeTheme.shouldUseDarkColors = true
     await bootReady()
-    for (const view of [fake.views.pane, fake.views.files, fake.views.git, fake.views.terminal]) {
+    for (const view of [fake.views.pane, fake.views.files, fake.views.git, fake.views.tasks, fake.views.terminal]) {
       view.webContents.send.mockClear()
     }
     fake.sendIpc('theme:ask')
-    for (const view of [fake.views.pane, fake.views.files, fake.views.git, fake.views.terminal]) {
+    for (const view of [fake.views.pane, fake.views.files, fake.views.git, fake.views.tasks, fake.views.terminal]) {
       expect(view.webContents.send).toHaveBeenCalledWith('theme', true)
     }
   })
@@ -2827,5 +2839,373 @@ describe('the git write channels', () => {
       await bootInRepo()
       expect(() => fake.sendIpc('git:cancel-remote', '/elsewhere')).not.toThrow()
     })
+  })
+})
+
+/**
+ * The board's seven channels, over the bridge rather than through their helpers.
+ *
+ * The store beneath them is real here — nothing under `src/main/board/` is
+ * faked — because what these tests are about is the gate in front of it: every
+ * one of them is refused when no project is open, and the one that destroys
+ * work resolves its path and asks the user before the store is touched. The
+ * shape is `git:discard`'s above, for the same reason it was written that way.
+ */
+describe('the board channels', () => {
+  /** A real project directory, with a real board inside it. */
+  let project = ''
+  let campaign = ''
+  let mission = ''
+  let task = ''
+
+  /**
+   * The folder path a create answered with, or a failure naming what it said.
+   * @param out - what the store answered.
+   * @returns the new entity's folder path.
+   */
+  function made(out: ReturnType<typeof createEntity>): string {
+    if (!out.ok) throw new Error(`the fixture could not be built: ${out.reason}`)
+    return out.folderPath
+  }
+
+  /** Boot with the project above open, the way the harness announces one. */
+  async function bootWithBoard(): Promise<void> {
+    readWorkspacesMock.mockReturnValue([
+      { path: project, title: 'board', file: join(project, '.dsh', 'mcp.json'), declared: false, servers: [] },
+    ])
+    await bootReady()
+    fake.sendIpc('harness:workspace', project)
+    await settle()
+  }
+
+  beforeEach(() => {
+    project = mkdtempSync(join(tmpdir(), 'dsh-board-project-'))
+    campaign = made(createEntity(project, 'campaign', '', 'Q3'))
+    mission = made(createEntity(project, 'mission', campaign, 'M1'))
+    task = made(createEntity(project, 'task', mission, 'Fix the login timeout'))
+  })
+
+  it('answers the read with the open project’s board, and says which project', async () => {
+    await bootWithBoard()
+    const board = (await fake.sendIpc('tasks:read')) as {
+      project: string
+      present: boolean
+      campaigns: { name: string; children: { name: string }[] }[]
+    }
+    expect(board.present).toBe(true)
+    expect(board.project).toBe(project)
+    expect(board.campaigns.map((one) => one.name)).toEqual(['Q3'])
+  })
+
+  // reason: no project open and a project with no board are different things,
+  // and only the second is worth offering to start. The views cannot tell them
+  // apart unless the read says which it was.
+  it('answers the read with no project when none is open', async () => {
+    readWorkspacesMock.mockReturnValue([])
+    await bootReady()
+    const board = (await fake.sendIpc('tasks:read')) as { project: string | undefined; present: boolean }
+    expect(board.present).toBe(false)
+    expect(board.project).toBeUndefined()
+  })
+
+  // reason: the detail is a second surface on the same files, and it is gated
+  // on the open project exactly as the read is. A detail answered from a board
+  // no project is open on would be drawing the last project's work.
+  it('answers the detail with one entity of the open project’s board', async () => {
+    await bootWithBoard()
+    const detail = (await fake.sendIpc('tasks:detail', task)) as {
+      level: string
+      name: string
+      parent?: { folderPath: string }
+      file: string
+    }
+    expect(detail.level).toBe('task')
+    expect(detail.name).toBe('Fix the login timeout')
+    expect(detail.parent?.folderPath).toBe(mission)
+    expect(detail.file).toBe('workitem.md')
+  })
+
+  it('answers the detail with nothing when no project is open, or the path is not on the board', async () => {
+    readWorkspacesMock.mockReturnValue([])
+    await bootReady()
+    expect(await fake.sendIpc('tasks:detail', task)).toBeUndefined()
+    readWorkspacesMock.mockReturnValue([
+      { path: project, title: 'board', file: join(project, '.dsh', 'mcp.json'), declared: false, servers: [] },
+    ])
+    fake.sendIpc('harness:workspace', project)
+    await settle()
+    expect(await fake.sendIpc('tasks:detail', 'campaigns/nope')).toBeUndefined()
+  })
+
+  it('forwards a reveal to the board’s panel', async () => {
+    await bootWithBoard()
+    fake.views.pane.webContents.send.mockClear()
+    fake.sendIpc('tasks:reveal', mission)
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith('tasks:reveal', mission)
+  })
+
+  it('opens a card’s own file in the pane', async () => {
+    await bootWithBoard()
+    fake.views.pane.webContents.send.mockClear()
+    fake.sendIpc('tasks:open-file', task, 'workitem.yaml')
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith(
+      'pane:open',
+      project,
+      join('.dsh', 'tasks', task, 'workitem.yaml'),
+      expect.anything(),
+    )
+  })
+
+  // reason: an entity is a `.md` since the conversion, and the allowlist that
+  // guards this channel named only the three `.yaml`s — which made Open file
+  // a silent no-op on every converted entity, the only kind the store writes.
+  it('opens the entity’s markdown document as well as the legacy YAML', async () => {
+    await bootWithBoard()
+    fake.views.pane.webContents.send.mockClear()
+    fake.sendIpc('tasks:open-file', task, 'workitem.md')
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith(
+      'pane:open',
+      project,
+      join('.dsh', 'tasks', task, 'workitem.md'),
+      expect.anything(),
+    )
+  })
+
+  // reason: a folder path arrives from a renderer, so it is a request and not
+  // evidence of where it points — and this one becomes a file that is opened.
+  // Widening the list to the `.md`s must not widen it to anything else: this
+  // is one half of the gate, `resolveInBoard` above it is the other.
+  it('opens nothing for a path outside the board, or a file it does not name', async () => {
+    await bootWithBoard()
+    fake.views.pane.webContents.send.mockClear()
+    fake.sendIpc('tasks:open-file', '../../etc', 'workitem.yaml')
+    fake.sendIpc('tasks:open-file', task, '.zshrc')
+    fake.sendIpc('tasks:open-file', task, 'notes.md')
+    fake.sendIpc('tasks:open-file', task, '../../../.zshrc')
+    expect(fake.views.pane.webContents.send).not.toHaveBeenCalled()
+  })
+
+  it('creates a task under the mission it was given, with its first criterion', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:create', 'task', mission, 'Second thing', 'It works')).toEqual({ ok: true })
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: { name: string; criteria: { total: number } }[] }[] }[]
+    }
+    const tasks = board.campaigns[0].children[0].children
+    expect(tasks.map((one) => one.name)).toContain('Second thing')
+    expect(tasks.find((one) => one.name === 'Second thing')?.criteria.total).toBe(1)
+  })
+
+  it('sets the status of the card it was given', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:set-status', task, 'executing')).toEqual({ ok: true })
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: { status: string }[] }[] }[]
+    }
+    expect(board.campaigns[0].children[0].children[0].status).toBe('executing')
+  })
+
+  // reason: the detail's other write. It is gated on the open project as
+  // every board channel is, and the store refuses an index the file does not
+  // have rather than appending one — a detail can be a moment out of date.
+  it('ticks the criterion it was given, and refuses one that is not there', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:create', 'task', mission, 'Second thing', 'It works')).toEqual({ ok: true })
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: { name: string; folderPath: string }[] }[] }[]
+    }
+    const second = board.campaigns[0].children[0].children.find((one) => one.name === 'Second thing')
+    expect(fake.sendIpc('tasks:tick', second?.folderPath, 0, true)).toEqual({ ok: true })
+    const detail = (await fake.sendIpc('tasks:detail', second?.folderPath)) as {
+      criteria: { text: string; done: boolean }[]
+    }
+    expect(detail.criteria).toEqual([{ text: 'It works', done: true }])
+    expect((fake.sendIpc('tasks:tick', second?.folderPath, 4, true) as { ok: boolean }).ok).toBe(false)
+  })
+
+  // reason: a write channel is reachable by whatever is in the renderer, and
+  // this one names a path. Its neighbours `tasks:open-file` and `tasks:trash`
+  // are both pinned against a path outside the board; this one is the newest
+  // of the three and had no such case at all.
+  it('ticks nothing for a path outside the board', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:tick', '../../etc', 0, true)).toEqual({
+      ok: false,
+      reason: "../../etc is not inside this project's board.",
+    })
+  })
+
+  // reason: the index is checked and `done` was not, inside one signature.
+  // Nothing is corrupted today only because the dump coerces on the way out,
+  // which makes the file's answer depend on a coercion rather than on what
+  // the channel accepted.
+  it('refuses a tick whose done is not a boolean', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:create', 'task', mission, 'Third thing', 'It works')).toEqual({ ok: true })
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: { name: string; folderPath: string }[] }[] }[]
+    }
+    const third = board.campaigns[0].children[0].children.find((one) => one.name === 'Third thing')
+    expect(fake.sendIpc('tasks:tick', third?.folderPath, 0, 'yes')).toEqual({
+      ok: false,
+      reason: 'A criterion is ticked or it is not, so done must be true or false.',
+    })
+    const detail = (await fake.sendIpc('tasks:detail', third?.folderPath)) as { criteria: { done: boolean }[] }
+    expect(detail.criteria).toEqual([{ text: 'It works', done: false }])
+  })
+
+  // reason: the detail's editable prose. A description maps straight to its
+  // field, and the write is the same read-through-the-store every board channel
+  // makes, so a fresh detail sees exactly what was written.
+  it('updates a field it was given, and refuses a path outside the board', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:update', task, { description: 'A clearer description.' })).toEqual({ ok: true })
+    const detail = (await fake.sendIpc('tasks:detail', task)) as { description: string }
+    expect(detail.description).toBe('A clearer description.')
+    expect(fake.sendIpc('tasks:update', '../../etc', { description: 'nope' })).toEqual({
+      ok: false,
+      reason: "../../etc is not inside this project's board.",
+    })
+  })
+
+  // reason: a `section` names a heading whose field only the schema knows, so
+  // main translates it from the entity's level — a task's own `## Notes` lands
+  // in `notes`, and a heading the level does not own is refused by the schema
+  // and writes nothing.
+  it('updates a section by its heading, via the level’s own mapping', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:update', task, { section: { heading: 'Notes', body: 'A decision.' } })).toEqual({
+      ok: true,
+    })
+    const detail = (await fake.sendIpc('tasks:detail', task)) as { sections: { heading: string; body: string }[] }
+    expect(detail.sections.find((one) => one.heading === 'Notes')?.body).toBe('A decision.')
+  })
+
+  // reason: a campaign owns a `documents` key, so a documents patch maps
+  // straight to the field with no per-level translation, and a fresh detail
+  // reads the links back. The renderer builds the full array from the current
+  // one; main writes what it is handed.
+  it('updates the documents it was given', async () => {
+    await bootWithBoard()
+    expect(
+      fake.sendIpc('tasks:update', campaign, { documents: [{ label: 'The spec', target: 'docs/spec.md' }] }),
+    ).toEqual({ ok: true })
+    const detail = (await fake.sendIpc('tasks:detail', campaign)) as {
+      documents: { label: string; target: string }[]
+    }
+    expect(detail.documents).toEqual([{ label: 'The spec', target: 'docs/spec.md' }])
+  })
+
+  // reason: the detail appends criteria one at a time, and the store refuses a
+  // level whose document has no `## Acceptance Criteria` section — a task has
+  // one, so this lands.
+  it('adds a criterion it was given, and refuses a path outside the board', async () => {
+    await bootWithBoard()
+    expect(fake.sendIpc('tasks:add-criterion', task, 'It logs in fast')).toEqual({ ok: true })
+    const detail = (await fake.sendIpc('tasks:detail', task)) as { criteria: { text: string }[] }
+    expect(detail.criteria.map((one) => one.text)).toContain('It logs in fast')
+    expect(fake.sendIpc('tasks:add-criterion', '../../etc', 'nope')).toEqual({
+      ok: false,
+      reason: "../../etc is not inside this project's board.",
+    })
+  })
+
+  // reason: a freshly attached test is `not_run` — it has not been run against
+  // this workitem yet — so main fixes the verdict and only the comment crosses.
+  // The store refuses a test path it does not know and a non-workitem level.
+  it('links a test to a workitem, unrun, and refuses a path outside the board', async () => {
+    await bootWithBoard()
+    const test = made(createEntity(project, 'test', '', 'Login works'))
+    expect(fake.sendIpc('tasks:link', task, test, 'covers the timeout')).toEqual({ ok: true })
+    const detail = (await fake.sendIpc('tasks:detail', task)) as {
+      links: { test: string; result: string; comment: string }[]
+    }
+    expect(detail.links).toEqual([{ test, name: 'Login works', result: 'not_run', comment: 'covers the timeout' }])
+    expect(fake.sendIpc('tasks:link', '../../etc', test, '')).toEqual({
+      ok: false,
+      reason: "../../etc is not inside this project's board.",
+    })
+  })
+
+  // reason: the prompt is itself something a hostile page could use — a dialog
+  // naming a plausible entity with Delete under the pointer. A path the board
+  // does not hold must not raise one at all.
+  it('raises no dialog for a path outside the board', async () => {
+    await bootWithBoard()
+    await expect(fake.sendIpc('tasks:trash', '../../etc')).resolves.toEqual({
+      ok: false,
+      reason: "../../etc is not inside this project's board.",
+    })
+    expect(fake.showMessageBox).not.toHaveBeenCalled()
+  })
+
+  // reason: a confirmation a renderer could answer for itself is not a
+  // confirmation. Trash moves an entity and everything under it away, so the
+  // dialog is raised in main and Cancel means nothing moved.
+  it('trashes nothing when the confirmation is cancelled', async () => {
+    await bootWithBoard()
+    await expect(fake.sendIpc('tasks:trash', task, 'Fix the login timeout')).resolves.toEqual({
+      ok: false,
+      reason: '',
+    })
+    expect(fake.showMessageBox).toHaveBeenCalled()
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: unknown[] }[] }[]
+    }
+    expect(board.campaigns[0].children[0].children).toHaveLength(1)
+  })
+
+  it('trashes once the confirmation is accepted', async () => {
+    await bootWithBoard()
+    fake.showMessageBox.mockResolvedValue({ response: 0 })
+    await expect(fake.sendIpc('tasks:trash', task, 'Fix the login timeout')).resolves.toEqual({ ok: true })
+    const board = (await fake.sendIpc('tasks:read')) as {
+      campaigns: { children: { children: unknown[] }[] }[]
+    }
+    expect(board.campaigns[0].children[0].children).toHaveLength(0)
+  })
+
+  // reason: the card says "Fix the login timeout" and the folder is called
+  // `fix-the-login-timeout`. A confirmation that names the slug asks about
+  // something the user has never seen written down.
+  it('names the entity, not its slug, in the confirmation', async () => {
+    await bootWithBoard()
+    fake.showMessageBox.mockResolvedValue({ response: 0 })
+    await fake.sendIpc('tasks:trash', task, 'Fix the login timeout')
+    expect(fake.showMessageBox).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ message: 'Delete Fix the login timeout?' }),
+    )
+  })
+
+  // reason: every channel here is rooted in a project the harness opened, and
+  // a board write with no project is a write with no board to check it against.
+  it('refuses every channel when no project is open', async () => {
+    readWorkspacesMock.mockReturnValue([])
+    await bootReady()
+    fake.views.pane.webContents.send.mockClear()
+    const refused = { ok: false, reason: 'No project is open.' }
+    expect(fake.sendIpc('tasks:create', 'task', mission, 'Nope', '')).toEqual(refused)
+    expect(fake.sendIpc('tasks:set-status', task, 'done')).toEqual(refused)
+    expect(fake.sendIpc('tasks:tick', task, 0, true)).toEqual(refused)
+    expect(fake.sendIpc('tasks:update', task, { description: 'nope' })).toEqual(refused)
+    expect(fake.sendIpc('tasks:add-criterion', task, 'nope')).toEqual(refused)
+    expect(fake.sendIpc('tasks:link', task, 'tests/login', '')).toEqual(refused)
+    await expect(fake.sendIpc('tasks:trash', task, 'Fix the login timeout')).resolves.toEqual(refused)
+    fake.sendIpc('tasks:open-file', task, 'workitem.yaml')
+    fake.sendIpc('tasks:reveal', mission)
+    expect(fake.showMessageBox).not.toHaveBeenCalled()
+    expect(fake.views.pane.webContents.send).not.toHaveBeenCalledWith('pane:open', expect.anything(), expect.anything(), expect.anything())
+  })
+
+  // reason: the write is exactly what makes what both views are showing stale.
+  it('tells both views to read themselves again after a write', async () => {
+    await bootWithBoard()
+    fake.views.tasks.webContents.send.mockClear()
+    fake.views.pane.webContents.send.mockClear()
+    await fake.sendIpc('tasks:set-status', task, 'done')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(fake.views.tasks.webContents.send).toHaveBeenCalledWith('tasks:changed')
+    expect(fake.views.pane.webContents.send).toHaveBeenCalledWith('tasks:changed')
   })
 })

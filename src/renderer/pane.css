@@ -712,9 +712,9 @@ body {
   flex-direction: column;
   margin: 2px 0 4px;
   padding: 3px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
-  background: var(--dsw-alias-surface-primary, transparent);
+  background: var(--dsw-alias-bg-layer-2);
 }
 
 /* The running state stands where the header's actions were, so the eye does
@@ -792,7 +792,7 @@ body {
 
 .branch-new {
   margin-top: 2px;
-  border-top: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-top: 1px solid var(--dsw-alias-border-l2);
   border-radius: 0 0 4px 4px;
   color: var(--dsw-alias-label-secondary);
 }
@@ -803,9 +803,9 @@ body {
   flex: 1 1 auto;
   min-width: 0;
   padding: 2px 5px;
-  border: 1px solid var(--dsw-alias-interactive-primary, currentColor);
+  border: 1px solid var(--dsw-alias-state-business-primary);
   border-radius: 4px;
-  background: var(--dsw-alias-surface-primary, transparent);
+  background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
   font: inherit;
 }
@@ -934,7 +934,7 @@ body {
   width: 13px;
   height: 13px;
   margin: 0;
-  accent-color: var(--dsw-alias-interactive-primary, currentColor);
+  accent-color: var(--dsw-alias-state-business-primary);
 }
 
 /* Stage, Discard, and the repository's three. Out of the way until the row is
@@ -1004,9 +1004,9 @@ body {
   flex: 1 1 auto;
   min-width: 0;
   padding: 2px 4px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 4px;
-  background: var(--dsw-alias-surface-primary, transparent);
+  background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
   font: inherit;
 }
@@ -1015,9 +1015,9 @@ body {
   min-height: 40px;
   max-height: 76px;
   padding: 5px 6px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
-  background: var(--dsw-alias-surface-primary, transparent);
+  background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
   font: inherit;
   resize: vertical;
@@ -1088,3 +1088,1149 @@ body {
   font-weight: 600;
 }
 
+
+/*
+ * The board's tree, in the side column.
+ *
+ * It borrows the file tree's `.row`, `.twisty` and `.name` for its layout,
+ * and adds only what a board row has that a file row does not: a status, and
+ * a count of what is through. Both are drawn as the git panel's tags are, so
+ * the two side columns read as one surface.
+ */
+.tree-row {
+  gap: 6px;
+}
+
+.tree-twisty {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* The status, as the file says it. Dimmed and small: it qualifies the name
+   beside it rather than competing with it, the way `.repo-branch` does. */
+.tree-status {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* A status the board has no column for. Amber rather than red: the file is
+   readable and the row is real — it is the word that is wrong, and it is the
+   user's to correct rather than a failure of this app's. */
+.tree-status-unknown {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--dsh-git-modified);
+  color: var(--dsh-git-modified);
+}
+
+/* How much of a container is through. Last in the row, after the status, and
+   the same size as the section counts in the git panel. */
+.tree-count {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A test carries a count and no status, so the count takes the place the
+   status would have had rather than sitting against the name. */
+.tree-row > .tree-name + .tree-count {
+  margin-left: auto;
+}
+
+/*
+ * The board itself, in the editor column.
+ *
+ * One campaign per group, one lane per mission, and six columns per lane.
+ * The panel is the only sideways scroller, so every lane's columns move
+ * together: six columns at fixed widths are the same six positions in every
+ * lane, and a lane that scrolled on its own would show `cancelled` beside the
+ * next lane's `draft` — a swimlane board whose lanes do not line up is no
+ * longer telling you anything by putting them under each other.
+ */
+.board-group {
+  /* As wide as its widest lane rather than as wide as the panel, so a lane's
+     border still wraps its own columns once the board is scrolled sideways. */
+  width: max-content;
+  min-width: 100%;
+  margin-bottom: 14px;
+}
+
+.board-group-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* The heading is a landmark and the fold is a button inside it, so the button
+   carries no chrome of its own — it borrows the h2's size and weight and adds
+   only the pointer and the chevron's gap. Folding a campaign is a press on the
+   name that names it, which is why the whole line, not a twisty beside it, is
+   the target. */
+.board-group-fold {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-group-fold:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.board-group-name {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One shape the stylesheet turns rather than two the markup swaps: it points
+   down when the row is open and a quarter-turn left — to the right, toward the
+   name — when it is shut. Muted like the lane's own plus, since it is chrome
+   the reader reaches for and not a status. */
+.board-fold-chevron {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--dsw-alias-label-secondary);
+  transition: transform 0.12s ease;
+}
+
+.board-fold-chevron-collapsed {
+  transform: rotate(-90deg);
+}
+
+/* The campaign the tree asked for. A campaign is a heading on this board and
+   nothing else, so the heading is what a campaign row reveals. */
+.board-group-revealed {
+  padding: 2px 4px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 2px var(--dsw-alias-state-business-primary);
+}
+
+.board-lane {
+  margin-bottom: 10px;
+  padding: 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+}
+
+/* The lane the tree asked for. A ring rather than a fill, so the cards inside
+   it are still read against the panel's own background. */
+.board-lane-revealed {
+  box-shadow: inset 0 0 0 2px var(--dsw-alias-state-business-primary);
+}
+
+.board-lane-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.board-lane-title {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  overflow: hidden;
+  /* Without this the title's max-content contribution (overflow: hidden does
+     not shrink it) widens `.board-group`, and the ellipsis below never
+     triggers: a long mission or campaign name widens the whole board instead
+     of eliding. */
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A mission's title is the button that folds it; a bug lane's is a plain span
+   sharing the class above for its layout. The button strips its own chrome and
+   borrows the head's, so it reads as the title it is and not a control bolted
+   beside one — the chevron is the only mark that says it can be pressed. */
+button.board-lane-title {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.board-lane-title:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The button's own text, held apart from the chevron so the ellipsis clips the
+   name and not the mark beside it. */
+.board-lane-name {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The lane's own status, which a bug lane does not have. Drawn as the tree's
+   status is, since it says the same thing about the same entity. */
+.board-lane-status {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+/* Creates into this lane and no other, which is what makes it need no picker.
+   Sized and coloured as the tree column's own actions are. */
+.board-lane-add {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.board-lane-add:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.board-columns {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+/* A fixed width, so an empty column is as wide as a full one: a column that
+   shrank to nothing when its work moved on would stop being a place work can
+   be put back into. The tray recedes to the canvas rather than carrying a
+   fill of its own — with a filled tray the cards, which are surfaces, had the
+   same colour as the tray and vanished into it, and the gaps between trays
+   read as one grey against another. On the dark canvas the cards stand out
+   and the gaps are the canvas: the columns are told apart by their cards and
+   their labels, the way a Linear board tells them apart, not by five grey
+   blocks. */
+.board-column {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  flex-direction: column;
+  /* Wider than the original 140px: at that width a two-line name plus the slug
+     line above it cut most real titles off, and the column that cannot say
+     what a card is called is the thing the first pass got wrong. 168px fits
+     the common case without widening the board past what six columns need. */
+  width: 168px;
+  min-height: 64px;
+  padding: 2px;
+  border-radius: 6px;
+  background: transparent;
+}
+
+/* Glyph, then the label, then the count — a row read by its shape before its
+   word, the same glyph this status draws on every card beneath it. Not the raw
+   lowercase value: that was the file's word, and this is the reader's. */
+.board-column-title {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  margin: 0 0 4px;
+  padding: 2px 4px;
+}
+
+.board-column-label {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  font-weight: 510;
+}
+
+/* The count sits at the end, quiet and tabular so a column of ten does not
+   jump against a column of two. */
+.board-column-count {
+  margin-left: auto;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The card the tree asked for. The same ring the lane and the heading carry,
+   because a reveal points at one thing and it should look the same whichever
+   of the three it turned out to be. */
+.board-card-revealed {
+  box-shadow: inset 0 0 0 2px var(--dsw-alias-state-business-primary);
+}
+
+/* The card and its delete share a box so the delete can sit on the card's
+   corner without being inside the card's own button. */
+.board-card-wrap {
+  position: relative;
+}
+
+/* A raised surface on the receded tray, not a borderless row. The anti-slop
+   rule bars a card used only to group things; this one is the thing you pick
+   up and drag to another column, which is exactly the interaction a card is
+   for. Against the dark canvas its own lighter fill and hairline border are
+   what make it a distinct object the eye can grab — the borderless version
+   disappeared into the tray it sat on. */
+.board-card {
+  display: flex;
+  gap: 3px 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-card:hover {
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+/* The path an agent's own tools call this card, set above the human name like
+   the machine line of a file header. Mono, so it reads as an identifier and
+   not as more prose, and tertiary so the name still leads. Full width, so the
+   name wraps under it rather than beside it. */
+.board-card-slug {
+  flex: 1 1 100%;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--ds-font-family-code);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Two lines and then an ellipsis, not one: at this column width one line cut
+   most real names off after three words — `Define First Deliver…` — and a
+   card that cannot say what it is called is the thing the original columns
+   got wrong. The clamp is what still bounds a card's height, so a lane of
+   long names does not become a lane of paragraphs.
+
+   `overflow-wrap` is what makes the ellipsis reachable at all for a name with
+   no space in it — a slug, a path, a long identifier. Without it a single
+   token wider than the column has no break to take, so it overflows into the
+   `overflow: hidden` above and is cut mid-letter with nothing saying it was
+   cut. The clamp elides where a line ends; this is what lets a line end. */
+.board-card-name {
+  display: -webkit-box;
+  overflow: hidden;
+  flex: 1 1 100%;
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 500;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* A bug says so on its face: it sits in the same columns as the work around
+   it, and nothing else about the card would tell them apart. The Design Lock
+   gives "bug" the error token — the same red a failing verdict wears — because
+   both are the thing on the board that wants looking at. */
+.board-card-kind {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.board-card-criteria {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The verdict chip: a coloured dot that says pass/fail/none at a glance, then
+   the count kept quiet beside it — colour lives in the dot, the number does
+   not repeat it. */
+.board-card-verdicts {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+}
+
+.board-card-verdict-count {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The status glyph, wherever it is drawn — column head, card is glyph-free but
+   the lane tag, the detail header and the status field carry it. The shape is
+   painted in `currentColor`; each `.status-glyph-<status>` is the one place a
+   token is keyed to it, so one status is one colour everywhere. Colour enters
+   only when work is live (accent) or proven (success) or malformed (warn);
+   idea and backlog stay neutral grey, as the Design Lock draws them. */
+.status-glyph {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.status-glyph-idea {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.status-glyph-backlog {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.status-glyph-executing {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.status-glyph-validation {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.status-glyph-done {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+/* A status the board does not know is a finding, not a state: amber, so it
+   reads as "look at this" rather than passing itself off as idea's grey. */
+.status-glyph-unknown {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+/* The verdict dot, on a card and on a test row. Green all-pass, red any-fail,
+   grey nothing-run — a card nobody has tested is not a card that is failing. */
+.verdict-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+}
+
+.verdict-dot-pass {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.verdict-dot-fail {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.verdict-dot-none {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* The criterion-failing note on a detail row — kept in the neutral label
+   token by default, since the failing variant below is what reddens it. Test
+   rows carry their pass/total count and colour through .board-card-verdict-
+   count and a verdict dot instead. */
+.board-chip {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.board-chip-failing {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* Revealed by a right-click on the card and hidden again by the next redraw.
+   Over the card's corner rather than in its row, so it never takes width from
+   the name. */
+.board-card-delete {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsh-git-deleted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/*
+ * The board's own header.
+ *
+ * One control, right-aligned, above the columns: it is chrome rather than
+ * content, and putting it on the left would give the board two things
+ * competing to be the first thing read — the campaign heading is the board.
+ */
+.board-head {
+  position: sticky;
+  left: 0;
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+/* Quiet, like the detail's Open file: a door out of this surface rather than
+   the point of it. Bordered where that one is not, because this one sits over
+   empty panel with nothing beside it to read as a control. */
+.board-head-button {
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.board-head-button:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/*
+ * The Tests destination.
+ *
+ * Capped at the detail's measure and left where the columns started, for the
+ * detail's reason: it is the same panel one level in, not a different page.
+ */
+.board-tests {
+  max-width: 68ch;
+}
+
+/* Indented under its parent with a rule down the group, as a campaign's lanes
+   are: a nested suite and a sibling one are otherwise the same shape. The rule
+   runs the height of the block, so the tests under a suite read as belonging to
+   the heading above them and not to the surface. */
+.board-tests-suite-box .board-tests-suite-box {
+  margin-left: 8px;
+  padding-left: 10px;
+  border-left: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* The slug and its count on one line, ruled off from the rows beneath so a
+   heading reads as the head of a section rather than as the first row of it —
+   the same separation a campaign's name has from its lanes. */
+.board-tests-suite-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* A quiet heading, as a campaign's is: small, weighted, and in the secondary
+   label so the test names beneath it are what the eye lands on first. Uppercase
+   with a little tracking, the way the detail's own section headings are, so a
+   suite reads as a divider and not as another name in the list. */
+.board-tests-suite {
+  margin: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* How many tests the suite holds at every depth, the figure a column head draws
+   over its cards — tabular so a column of them lines up, and tertiary so it is
+   read as context beside the slug rather than as a second heading. */
+.board-tests-suite-count {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A whole line, as a detail's child row is — this list is read down the page
+   and the name is what the eye runs along. Ruled off from the next with a
+   hairline, the same way a card is: a test has no status, so there is no glyph
+   here, only the verdict column it carries at the right. */
+.board-tests-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px;
+  border: none;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The name takes the row and elides rather than wraps: the verdict column to
+   its right is a fixed edge, and a name that wrapped under it would break the
+   straight line the counts are read down. */
+.board-tests-name {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The dot and count, right-aligned in a column of their own so the slashes line
+   up down the list. A minimum measure holds the column open even on the rows
+   with nothing to prove, so a test with a verdict and one without do not shift
+   the edge between them. */
+.board-tests-verdict {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 44px;
+}
+
+.board-tests-row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/*
+ * The detail view, in the place the columns were.
+ *
+ * Prose, so it is capped at a readable measure and left where the columns
+ * started rather than centred: the board next to it begins at the left edge,
+ * and a detail that jumped to the middle of the panel would read as a
+ * different page rather than as the same one, one level in. The board's own
+ * horizontal scroll is not this surface's — nothing here is wider than the
+ * measure.
+ */
+.board-detail {
+  max-width: 68ch;
+}
+
+.board-detail-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+/* First on the surface and left-most on it, because it is the answer to
+   "where am I": the columns are gone, and this is what brings them back. */
+.board-detail-back {
+  flex: none;
+  padding: 2px 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.board-detail-back:hover,
+.board-detail-file:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* The name is what this surface is about, so it is the largest thing on it —
+   the detail header reads as a title, not as another row. */
+.board-detail-title {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 20px;
+  font-weight: 510;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Glyph and label together, the same tag the lane's status is, because it says
+   the same thing about the same kind of entity. */
+.board-detail-status {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+/* The way out of a read surface into the editor, which is where prose is
+   written. Quiet: it is a door, not the point of the page. */
+.board-detail-file {
+  flex: none;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.board-detail-parent {
+  margin: 0 0 8px;
+}
+
+.board-detail-heading {
+  margin: 12px 0 4px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* A section the file has and nobody has filled in. Dimmed and italic so it
+   reads as an invitation rather than as content. */
+.board-detail-blank {
+  margin: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-style: italic;
+}
+
+/* Prose is capped at its own measure as well as the surface's: the detail box
+   already stops at 68ch, but the body text is the one thing here that must not
+   run wider than the eye can track a line, so it carries the measure itself. */
+.board-detail-prose {
+  margin: 0;
+  max-width: 68ch;
+  line-height: 1.5;
+}
+
+/* A table is why the file format changed, so it is the one thing here with
+   borders: a Steps table drawn without them is the wall of pipes again.
+
+   And the one thing here that can be wider than the measure the comment on
+   `.board-detail` claims nothing is: a test's Test Data table is exactly the
+   case the format change was made for, and columns do not wrap. `display:
+   block` is what gives it a scroll box of its own — a `table` box ignores
+   `overflow` — so the width stays inside the panel instead of adding to the
+   board's own horizontal scroll. `width: max-content` keeps the cells sized to
+   their content rather than stretched to the block's width, which is what a
+   table laid out as a block would otherwise do. */
+.board-detail-prose table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.board-detail-prose td,
+.board-detail-prose th {
+  padding: 2px 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  text-align: left;
+}
+
+.board-detail-prose pre {
+  overflow-x: auto;
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-overlay);
+}
+
+.board-detail-field {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+/* The field's label carries the same glyph the header does, a static read of
+   the current status, so it lines up with its word rather than sitting on the
+   text baseline. */
+.board-detail-field > span {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.board-detail-select {
+  padding: 2px 4px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+}
+
+.board-detail-criteria {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-detail-criteria label {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+/* The tick is the one live control in the list, so its checked state wears the
+   board's accent rather than the platform's default blue — the same token the
+   selects and focus rings already use, so a ticked criterion reads as part of
+   this surface and not the OS's. */
+.board-detail-tick {
+  accent-color: var(--dsw-alias-state-business-primary);
+}
+
+/* Criteria on a level whose document has no section for them. Dimmed and
+   read-only, because the store refuses a tick here: this block is a finding
+   about the file, not a control. */
+.board-detail-finding {
+  margin: 0 0 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.board-detail-stray-mark {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* The criterion's text beside its read-only mark: it takes the rest of the row
+   so a long one has room, and inherits the dimmed colour the stray list's `li`
+   sets — this is a finding about the file, not an editable line. */
+.board-detail-stray-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.board-detail-stray .board-detail-criteria li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The detail is an editor: a prose field reads as rendered markdown and, on a
+   click, becomes the raw source in a textarea. The read state carries a quiet
+   hover so it reads as editable without a control cluttering every paragraph;
+   the input is the modal's own input, sized to the prose measure, with the
+   accent for its focus ring. `bg-layer-2` rather than the brief's `bg-layer-1`,
+   which this stylesheet does not define — the select and the modal inputs both
+   use layer-2, so the field matches the controls already on the surface. */
+.edit-field {
+  margin: 0;
+}
+
+.edit-field-read {
+  border-radius: 4px;
+  cursor: text;
+}
+
+.edit-field-read:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* An add control's empty read is the invitation itself — muted like a blank
+   section, since there is nothing yet to render. */
+.edit-field-empty {
+  color: var(--dsw-alias-label-tertiary);
+  font-style: italic;
+}
+
+.edit-field-input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 68ch;
+  padding: 4px 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  line-height: 1.5;
+  resize: none;
+  overflow: hidden;
+}
+
+.edit-field-input:focus {
+  border-color: var(--dsw-alias-state-business-primary);
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-state-business-primary);
+}
+
+/* The Add controls: quiet, sitting under the list they grow, and consistent
+   with the create modal's own inputs. */
+.board-detail-add {
+  margin-top: 4px;
+}
+
+.board-detail-add-test {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.board-detail-add-input {
+  padding: 4px 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
+.board-detail-add-input:focus {
+  border-color: var(--dsw-alias-state-business-primary);
+  outline: none;
+}
+
+.board-detail-add-button {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* The documents a campaign or a mission links, and the control that attaches
+   one. The list reads down the page and the attach form sits under it, the
+   same shape and spacing the Add-test control uses beneath its own list. */
+/* The three trailing sections — documents, children, and what validates the
+   entity — each open with a heading and stack down the page, so they carry the
+   same small top gap the heading's own margin sits on top of. One rule keeps
+   the rhythm between them from drifting as any one is edited. */
+.board-detail-docs,
+.board-detail-children,
+.board-detail-links {
+  margin-top: 4px;
+}
+
+.board-detail-doc {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+/* The label is the name the eye runs along, so it reads at the body weight the
+   rows do rather than the dimmed tertiary the target sits in. */
+.board-detail-doc-label {
+  color: var(--dsw-alias-label-primary);
+}
+
+.board-detail-doc-target {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+/* The attach control: the two inputs and their button on one wrapping row, the
+   Add-test form's own layout, so the two writes on this surface look alike. */
+.board-detail-attach-doc {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+/* A row is a whole line, unlike a card: a detail is read down the page, and
+   the name is what the eye is running along. */
+.board-detail-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-detail-row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.board-detail-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-detail-row-note,
+.board-detail-row-comment,
+.board-detail-row-bug {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+}
+
+/* The comment is the only thing on a row that is a sentence, so it takes the
+   space the rest of the row does not. */
+.board-detail-row-comment {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * The create modal.
+ *
+ * The backdrop takes pointer events, which is what makes this modal modal:
+ * it becomes the hit-test target for every click over the panel, so the lane
+ * plus and the cards visible through it are not reachable while a name is
+ * half typed. `pointer-events: none` here would be click-through — the board
+ * behind would keep taking clicks, and one of them reopens this modal with
+ * both fields cleared. Catching the click is all the backdrop does: it does
+ * not close, because losing a half-typed task to a stray gesture is what
+ * stops someone trusting a board. See `board.ts`'s handler on it.
+ */
+.board-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--dsw-alias-bg-mask-drop);
+  pointer-events: auto;
+}
+
+.board-modal-form {
+  display: flex;
+  gap: 8px;
+  flex-direction: column;
+  width: 260px;
+  padding: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-overlay);
+}
+
+.board-modal-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.board-modal-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.board-modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.board-modal-close:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.board-modal-field {
+  display: flex;
+  gap: 3px;
+  flex-direction: column;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.board-modal-field input {
+  padding: 4px 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
+/* Why nothing was created, said where the name that failed still is. */
+.board-modal-error {
+  margin: 0;
+  color: var(--dsh-git-deleted);
+  font-size: 11px;
+}
+
+.board-modal-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.board-modal-button {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}

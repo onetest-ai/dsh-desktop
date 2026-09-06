@@ -116,6 +116,45 @@ contextBridge.exposeInMainWorld('pane', {
   gitRemote: (repo: string, op: string) => ipcRenderer.invoke('git:remote', repo, op),
   cancelGitRemote: (repo: string) => ipcRenderer.send('git:cancel-remote', repo),
   openGitTerminal: (repo: string) => ipcRenderer.send('git:open-terminal', repo),
+  // The board's own read, for both of its views. Nothing about `.dsh/tasks/`
+  // reaches either page but this result: the parsing and the walk are main's.
+  readTasks: () => ipcRenderer.invoke('tasks:read'),
+  // One entity, read the same way the board is. Answers undefined for a
+  // folder path the board no longer has.
+  readTaskDetail: (folderPath: string) => ipcRenderer.invoke('tasks:detail', folderPath),
+  // Sends rather than invokes: main owns which column is open and where the
+  // board scrolls to, and there is no answer for a view to wait on.
+  revealOnBoard: (folderPath: string) => ipcRenderer.send('tasks:reveal', folderPath),
+  openTaskFile: (folderPath: string, file: string) => ipcRenderer.send('tasks:open-file', folderPath, file),
+  onTasksChanged: (listener: () => void) => {
+    ipcRenderer.on('tasks:changed', () => {
+      listener()
+    })
+  },
+  onReveal: (listener: (folderPath: string) => void) => {
+    ipcRenderer.on('tasks:reveal', (_event, folderPath: string) => listener(folderPath))
+  },
+  // The board's four writes. Invokes, unlike the reveal above: each answers
+  // whether it happened, and a board that assumed it had would be showing a
+  // status that is not in the file.
+  createBoardEntity: (level: string, parent: string, name: string, second: string) =>
+    ipcRenderer.invoke('tasks:create', level, parent, name, second),
+  setBoardStatus: (folderPath: string, status: string) => ipcRenderer.invoke('tasks:set-status', folderPath, status),
+  tickCriterion: (folderPath: string, index: number, done: boolean) =>
+    ipcRenderer.invoke('tasks:tick', folderPath, index, done),
+  updateBoardEntity: (
+    folderPath: string,
+    patch: {
+      description?: string
+      notes?: string
+      section?: { heading: string; body: string }
+      documents?: { label: string; target: string }[]
+    },
+  ) => ipcRenderer.invoke('tasks:update', folderPath, patch),
+  addBoardCriterion: (folderPath: string, text: string) => ipcRenderer.invoke('tasks:add-criterion', folderPath, text),
+  linkBoardTest: (folderPath: string, test: string, comment: string) =>
+    ipcRenderer.invoke('tasks:link', folderPath, test, comment),
+  trashBoardEntity: (folderPath: string, name: string) => ipcRenderer.invoke('tasks:trash', folderPath, name),
   onShowDiff: (listener: (root: string, relative: string, proposed: string) => void) => {
     ipcRenderer.on('pane:diff', (_event, root: string, relative: string, proposed: string) =>
       listener(root, relative, proposed),

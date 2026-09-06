@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { serveViewTools, SURFACES, type BrowserAutomation, type ViewDeps, type ViewServer } from './view-mcp'
 
@@ -40,6 +43,7 @@ function deps(overrides: Partial<ViewDeps> = {}): ViewDeps {
   return {
     browser: automation(),
     roots: () => ['/p/demo'],
+    project: () => undefined,
     openFile: vi.fn(),
     openUrl: vi.fn(),
     showDiff: vi.fn(),
@@ -107,6 +111,29 @@ function textOf(result: Record<string, unknown>): string {
   return (result.content as { text: string }[]).map((part) => part.text).join('')
 }
 
+/**
+ * A project directory holding a board with the files given.
+ *
+ * Real directories rather than a mocked filesystem: the board's whole contract
+ * is what is on disk, and a test over a fake one would prove nothing about it.
+ * @param files - paths within `.dsh/tasks/`, mapped to their contents.
+ * @returns the project's root directory.
+ */
+function boardFixture(files: Record<string, string>): string {
+  // tmpdir() sits under a symlink (/var -> /private/var), and resolveInBoard
+  // compares the realpath of an existing target against the project root — a
+  // path about to be created (createEntity's own target) is not yet realpath-
+  // able, so the project root must already be canonical. See board-paths.spec.ts.
+  const project = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-mcp-board-')))
+  mkdirSync(join(project, '.dsh', 'tasks'), { recursive: true })
+  for (const [path, body] of Object.entries(files)) {
+    const full = join(project, '.dsh', 'tasks', path)
+    mkdirSync(dirname(full), { recursive: true })
+    writeFileSync(full, body)
+  }
+  return project
+}
+
 describe('the view tools server', () => {
   it('lists the browser\u2019s tools on the browser\u2019s endpoint', async () => {
     const url = await serve(deps())
@@ -143,7 +170,19 @@ describe('the view tools server', () => {
     await rpc(url, INITIALIZE)
     const answer = await rpc(url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
     const names = ((answer.result as { tools: { name: string }[] }).tools ?? []).map((tool) => tool.name)
-    expect(names.sort()).toEqual(['open_file', 'selection', 'show_diff'])
+    expect(names.sort()).toEqual([
+      'board_create',
+      'board_criterion',
+      'board_delete',
+      'board_link',
+      'board_read',
+      'board_run',
+      'board_status',
+      'board_update',
+      'open_file',
+      'selection',
+      'show_diff',
+    ])
   })
 
   it('answers nothing on a path no surface claims', async () => {
@@ -509,5 +548,425 @@ describe('the shape of the tool surface', () => {
     for (const surface of Object.values(SURFACES)) {
       expect(surface.name, surface.name).not.toContain('-')
     }
+  })
+})
+
+describe('the board tools', () => {
+  it('offers the six board tools on the editor endpoint', async () => {
+    const url = await serve(deps(), 'editor')
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
+    const names = ((answer.result as { tools: { name: string }[] }).tools ?? []).map((tool) => tool.name)
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'board_read',
+        'board_create',
+        'board_update',
+        'board_status',
+        'board_criterion',
+        'board_delete',
+      ]),
+    )
+  })
+
+  // reason: these tools take no path — the open project is the whole of their
+  // addressing — so "which project" is the one thing every one must get right.
+  it('refuses when no project is open', async () => {
+    const url = await serve(deps({ project: () => undefined }), 'editor')
+    const result = await callTool(url, 'board_read')
+    expect(result.isError).toBe(true)
+    expect(textOf(result)).toContain('No project is open')
+  })
+
+  // reason: `roots` is every project the harness has ever registered — nine,
+  // for the person this was built for — not the one open in the pane. A check
+  // against its length would refuse every board tool on a machine with more
+  // than one workspace, which is the ordinary case, not the edge one.
+  it('works from whichever project is open, even with several roots registered', async () => {
+    const project = boardFixture({ 'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\n' })
+    const url = await serve(deps({ roots: () => ['/p/one', '/p/two', project], project: () => project }), 'editor')
+    expect(textOf(await callTool(url, 'board_read'))).toContain('Q3')
+  })
+
+  it('says a project has no board rather than creating one', async () => {
+    const project = mkdtempSync(join(tmpdir(), 'dsh-mcp-noboard-'))
+    const url = await serve(deps({ project: () => project }), 'editor')
+    expect(textOf(await callTool(url, 'board_read'))).toContain('no board')
+  })
+
+  // reason: a board with nothing on it at all — no campaigns, no tests — is
+  // the only shape that should ever say "empty".
+  it('says the board is empty when it holds nothing at all', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    expect(textOf(await callTool(url, 'board_read'))).toContain('The board is empty.')
+  })
+
+  // reason: this is the bug the reviewer reproduced — a board holding a test
+  // but no campaign must not tell the agent it is empty, or it will recreate
+  // work that already exists.
+  it('does not say the board is empty when it holds a test but no campaigns', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).not.toContain('The board is empty.')
+    expect(text).toContain('tests/login')
+  })
+
+  // reason: the mirror case — campaigns with no tests yet must not claim the
+  // board is empty either.
+  it('does not say the board is empty when it holds campaigns but no tests', async () => {
+    const project = boardFixture({ 'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\n' })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).not.toContain('The board is empty.')
+    expect(text).toContain('Q3')
+  })
+
+  it('reads a board, with its statuses and folder paths', async () => {
+    const project = boardFixture({
+      'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\nstatus: executing\n',
+      'campaigns/q3/missions/m1/workitem.yaml': 'name: M1\nsubtype: mission\nstatus: idea\n',
+    })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).toContain('Q3')
+    expect(text).toContain('executing')
+    expect(text).toContain('campaigns/q3/missions/m1')
+  })
+
+  it('creates, then reads back what it created', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    expect((await callTool(url, 'board_create', { level: 'campaign', name: 'Q3 Launch' })).isError).toBeFalsy()
+    expect(textOf(await callTool(url, 'board_read'))).toContain('Q3 Launch')
+  })
+
+  // reason: the status set is fixed, and an agent learns that from the refusal
+  // as much as from the description — so the refusal has to carry the list.
+  it('names the five statuses when it refuses one', async () => {
+    const project = boardFixture({ 'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\n' })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    const result = await callTool(url, 'board_status', { folder: 'campaigns/q3', status: 'inprogress' })
+    expect(result.isError).toBe(true)
+    expect(textOf(result)).toContain('validation')
+  })
+
+  // reason: the one rule the whole design is defined against.
+  it('does not move a parent when a child is marked done', async () => {
+    const project = boardFixture({
+      'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\nstatus: idea\n',
+      'campaigns/q3/missions/m1/workitem.yaml': 'name: M1\nsubtype: mission\nstatus: idea\n',
+    })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_status', { folder: 'campaigns/q3/missions/m1', status: 'done' })
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).toContain('[idea] campaign Q3')
+    expect(text).toContain('(1/1 done)')
+  })
+
+  // reason: this is the boundary — a folder path from the model becomes a
+  // directory this app writes into and moves to the trash.
+  it('refuses a folder path that climbs out of the board', async () => {
+    const project = boardFixture({ 'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\n' })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    expect((await callTool(url, 'board_delete', { folder: '../../..' })).isError).toBe(true)
+  })
+
+  it('reports a file it could not read alongside the rest of the board', async () => {
+    const project = boardFixture({
+      'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\n',
+      'campaigns/q3/missions/m1/workitem.yaml': 'name: [unclosed\n',
+    })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).toContain('Q3')
+    expect(text).toContain('Could not read')
+  })
+
+  // reason: board_criterion addresses a criterion by the index board_read
+  // shows — an agent has no other way to learn it, so board_read has to
+  // actually carry it.
+  it('renders acceptance criteria with their index and tick state', async () => {
+    const project = boardFixture({
+      'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\n',
+      'campaigns/q3/missions/m1/workitem.yaml': 'name: M1\nsubtype: mission\n',
+      'campaigns/q3/missions/m1/tasks/t1/workitem.yaml':
+        'name: T1\nsubtype: task\nacceptance_criteria:\n  - text: it works\n    done: true\n  - text: it is fast\n    done: false\n',
+    })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).toContain('(1/2 criteria)')
+    expect(text).toContain('[x] 0. it works')
+    expect(text).toContain('[ ] 1. it is fast')
+  })
+
+  it('ticks a criterion by the index board_read reported', async () => {
+    const project = boardFixture({
+      'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\n',
+      'campaigns/q3/missions/m1/workitem.yaml': 'name: M1\nsubtype: mission\n',
+      'campaigns/q3/missions/m1/tasks/t1/workitem.yaml': 'name: T1\nsubtype: task\nacceptance_criteria:\n  - text: it works\n    done: false\n',
+    })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    const out = await callTool(url, 'board_criterion', { folder: 'campaigns/q3/missions/m1/tasks/t1', index: 0, done: true })
+    expect(out.isError).toBeFalsy()
+    expect(textOf(await callTool(url, 'board_read'))).toContain('[x] 0. it works')
+  })
+
+  // reason: silently taking the add branch and dropping the tick is a call
+  // that reports success while doing something other than what was asked.
+  it('refuses board_criterion given both text and index/done', async () => {
+    const project = boardFixture({ 'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\n' })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    const out = await callTool(url, 'board_criterion', { folder: 'campaigns/q3', text: 'new one', index: 0, done: true })
+    expect(out.isError).toBe(true)
+    expect(textOf(out)).toContain('not both')
+  })
+
+  // reason: board_update's schema table promises the per-kind fields, and a
+  // bug created with board_create has no other way to fill them in.
+  it("fills a bug's per-kind fields through board_update and reads them back", async () => {
+    const project = boardFixture({ 'campaigns/q3/workitem.yaml': 'name: Q3\nsubtype: campaign\n' })
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'bug', name: 'Crash', parent: 'campaigns/q3' })
+    const out = await callTool(url, 'board_update', {
+      folder: 'campaigns/q3/bugs/crash',
+      severity: 'blocker',
+      steps_to_reproduce: 'open the app',
+      expected: 'it opens',
+      actual: 'it crashes',
+      rca: 'null pointer',
+      environment: 'macOS 15',
+    })
+    expect(out.isError).toBeFalsy()
+    const text = readFileSync(join(project, '.dsh', 'tasks', 'campaigns', 'q3', 'bugs', 'crash', 'bug.md'), 'utf8')
+    expect(text).toContain('severity: blocker')
+    expect(text).toContain('## Steps to Reproduce\n\nopen the app')
+    expect(text).toContain('## Expected\n\nit opens')
+    expect(text).toContain('## Actual\n\nit crashes')
+    expect(text).toContain('## RCA\n\nnull pointer')
+    expect(text).toContain('## Environment\n\nmacOS 15')
+  })
+
+  it('offers the two link tools alongside the rest', async () => {
+    const url = await serve(deps(), 'editor')
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
+    const names = ((answer.result as { tools: { name: string }[] }).tools ?? []).map((tool) => tool.name)
+    expect(names).toEqual(expect.arrayContaining(['board_link', 'board_run']))
+  })
+
+  it('creates a workitem at the level it was given', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).toContain('campaign Q3')
+  })
+
+  it('creates a test in the tests container', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    expect((await callTool(url, 'board_create', { level: 'test', name: 'Login' })).isError).toBeFalsy()
+    expect(textOf(await callTool(url, 'board_read'))).toContain('tests/login')
+  })
+
+  it('links a test to a workitem and shows the verdict', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const linked = await callTool(url, 'board_link', {
+      folder: 'campaigns/q3',
+      test: 'tests/login',
+      result: 'pass',
+    })
+    expect(linked.isError).toBeFalsy()
+    expect(textOf(await callTool(url, 'board_read'))).toContain('pass')
+  })
+
+  // reason: an agent learns the vocabulary from the refusal as much as from
+  // the description.
+  it('names the three results when it refuses one', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/login', result: 'green' })
+    expect(out.isError).toBe(true)
+    expect(textOf(out)).toContain('not_run')
+  })
+
+  it('records a run against a test', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_run', {
+      test: 'tests/login',
+      workitem: 'campaigns/q3',
+      result: 'fail',
+    })
+    expect(out.isError).toBeFalsy()
+  })
+
+  // reason: unlinking is how a test is retired in this model, so it has to
+  // actually remove the verdict rather than just report success.
+  it('unlinks a test, removing its verdict and leaving any others', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Logout' })
+    await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/login', result: 'pass' })
+    await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/logout', result: 'fail', bug: 'campaigns/q3/bugs/b1' })
+    const out = await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/login', unlink: true })
+    expect(out.isError).toBeFalsy()
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).not.toContain('[pass] tests/login')
+    expect(text).toContain('[fail] tests/logout')
+  })
+
+  // reason: an unlink that was never linked is not a no-op success — reporting
+  // it as done would let an agent believe it retired a test it never touched.
+  it('refuses to unlink a test that was never linked', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/login', unlink: true })
+    expect(out.isError).toBe(true)
+    expect(textOf(out)).toContain('does not name')
+  })
+
+  // reason: the handler branches on unlink before it looks at result, so a
+  // result passed alongside unlink is deliberately ignored — this is the
+  // test that says so.
+  it('unlinks and ignores a result passed alongside unlink', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/login', result: 'pass' })
+    const out = await callTool(url, 'board_link', { folder: 'campaigns/q3', test: 'tests/login', unlink: true, result: 'fail' })
+    expect(out.isError).toBeFalsy()
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).not.toContain('[pass] tests/login')
+    expect(text).not.toContain('[fail] tests/login')
+  })
+
+  // reason: a test's file has five sections an agent must be able to write —
+  // preconditions, test data, steps, expected final state, teardown — "the
+  // things that make a test repeatable by someone who did not write it".
+  // `steps` already existed as an input, but six write paths could not reach
+  // a test at all until recently, so it is asserted here alongside the rest
+  // rather than assumed still to work.
+  it("fills a test's sections through board_update and reads them back", async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_update', {
+      folder: 'tests/login',
+      preconditions: 'a user account exists',
+      test_data: '| user | pass |\n| a@b.com | secret |',
+      steps: 'go to /login, submit valid creds',
+      expected_final_state: 'redirected to /dashboard',
+      teardown: 'delete the session',
+    })
+    expect(out.isError).toBeFalsy()
+    const text = readFileSync(join(project, '.dsh', 'tasks', 'tests', 'login', 'test.md'), 'utf8')
+    expect(text).toContain('## Preconditions\n\na user account exists')
+    expect(text).toContain('## Test Data\n\n| user | pass |\n| a@b.com | secret |')
+    expect(text).toContain('## Steps\n\ngo to /login, submit valid creds')
+    expect(text).toContain('## Expected Final State\n\nredirected to /dashboard')
+    expect(text).toContain('## Teardown\n\ndelete the session')
+  })
+
+  // reason: `steps` already existed as an input before the other four
+  // section fields did, and the write path that reaches a test is shared —
+  // this pins that a lone `steps` update still lands, on its own.
+  it("writes a test's steps through board_update on their own", async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_update', { folder: 'tests/login', steps: 'go to /login' })
+    expect(out.isError).toBeFalsy()
+    const text = readFileSync(join(project, '.dsh', 'tasks', 'tests', 'login', 'test.md'), 'utf8')
+    expect(text).toContain('## Steps\n\ngo to /login')
+  })
+
+  // reason: `open()` used to require `findEntity`, which walks campaigns
+  // only — so board_status, board_update, board_criterion and board_delete
+  // all refused every test even though board_read had just listed it.
+  it('refuses to set a status on a test through board_status', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_status', { folder: 'tests/login', status: 'done' })
+    expect(out.isError).toBe(true)
+  })
+
+  it('trashes a test through board_delete', async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    const out = await callTool(url, 'board_delete', { folder: 'tests/login' })
+    expect(out.isError).toBeFalsy()
+    expect(textOf(await callTool(url, 'board_read'))).not.toContain('tests/login')
+  })
+
+  // reason: the run history exists so flakiness is visible, and with no UI
+  // yet the agent is its only reader — board_read has to actually show it.
+  it("shows a test's run history as a compact tail", async () => {
+    const project = boardFixture({})
+    const url = await serve(deps({ project: () => project }), 'editor')
+    await callTool(url, 'board_create', { level: 'campaign', name: 'Q3' })
+    await callTool(url, 'board_create', { level: 'test', name: 'Login' })
+    await callTool(url, 'board_run', { test: 'tests/login', workitem: 'campaigns/q3', result: 'pass' })
+    await callTool(url, 'board_run', { test: 'tests/login', workitem: 'campaigns/q3', result: 'fail' })
+    const text = textOf(await callTool(url, 'board_read'))
+    expect(text).toContain('runs: 2 (pass, fail)')
+  })
+
+  it("interpolates the run cap into board_run's description", async () => {
+    const url = await serve(deps(), 'editor')
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
+    const tools = (answer.result as { tools: { name: string; description: string }[] }).tools ?? []
+    const boardRun = tools.find((t) => t.name === 'board_run')
+    expect(boardRun?.description).toMatch(/most recent \d+ runs/)
+  })
+
+  it('mentions tests, suites and runs in board_read', async () => {
+    const url = await serve(deps(), 'editor')
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
+    const tools = (answer.result as { tools: { name: string; description: string }[] }).tools ?? []
+    const boardRead = tools.find((t) => t.name === 'board_read')
+    expect(boardRead?.description).toContain('tests')
+    expect(boardRead?.description).toContain('verdict')
+  })
+
+  // reason: an entity file has been `<type>.md` with YAML frontmatter since
+  // the schema moved off all-YAML — a description still calling the board
+  // "YAML files" describes the format the board no longer writes.
+  it('names workitem.md rather than workitem.yaml wherever board_read names a file', async () => {
+    const url = await serve(deps(), 'editor')
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
+    const tools = (answer.result as { tools: { name: string; description: string }[] }).tools ?? []
+    const boardRead = tools.find((t) => t.name === 'board_read')
+    expect(boardRead?.description).not.toContain('.yaml')
+    expect(boardRead?.description).toContain('.md')
+  })
+
+  it('mentions that children are folder-derived in board_create', async () => {
+    const url = await serve(deps(), 'editor')
+    await rpc(url, INITIALIZE)
+    const answer = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
+    const tools = (answer.result as { tools: { name: string; description: string }[] }).tools ?? []
+    const boardCreate = tools.find((t) => t.name === 'board_create')
+    expect(boardCreate?.description).toContain('folder-derived')
   })
 })

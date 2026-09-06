@@ -2,6 +2,19 @@ import { createServer, type Server } from 'node:http'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
+import { readBoard, type Board, type Entity, type Suite } from './board/board-read'
+import {
+  addCriterion,
+  createEntity,
+  linkTest,
+  recordRun,
+  setStatus,
+  tickCriterion,
+  trashEntity,
+  unlinkTest,
+  updateEntity,
+} from './board/board-write'
+import { ENTITY_STATUSES, LINK_RESULTS, RUN_HISTORY } from './board/entity-schema'
 import type { ActionResult } from './browser-actions'
 import type { ConsoleEntry, DialogRecord, Evaluated, NavigationRecord } from './browser-cdp'
 import { loadableUrl, locate } from './view-tools'
@@ -10,6 +23,8 @@ import { loadableUrl, locate } from './view-tools'
 export interface ViewDeps {
   /** The projects the harness has opened; every path argument is checked against these. */
   roots(): string[]
+  /** The project open in the pane right now, or nothing when none is — what the board tools act on. */
+  project(): string | undefined
   /** Show a file in the editor column, opening it if it is closed. */
   openFile(root: string, relative: string): void
   /** Show a page in the web view. */
@@ -140,6 +155,110 @@ function refuse(message: string): { content: { type: 'text'; text: string }[]; i
 /** Tool result for a call that did what it said. */
 function done(message: string): { content: { type: 'text'; text: string }[] } {
   return { content: [{ type: 'text' as const, text: message }] }
+}
+
+/**
+ * The project a board tool acts on.
+ *
+ * The board belongs to one project, and these tools take no path — so which
+ * project is not a thing the caller says, it is whichever one is open in the
+ * pane. `roots` is the wrong dep for this: it is every project the harness has
+ * ever registered, which for a real user is routinely more than one — so a
+ * check against its length refuses every board tool on the machine this was
+ * built for. `project` is the single answer the file pane and the git panel
+ * already agree on, so the board tools agree with them too.
+ * @param project - the project open in the pane, from `deps.project()`.
+ * @returns the project, or why there is none.
+ */
+function boardProject(project: string | undefined): { ok: true; project: string } | { ok: false; reason: string } {
+  if (project === undefined) return { ok: false, reason: 'No project is open, so there is no board.' }
+  return { ok: true, project }
+}
+
+/**
+ * The board as an agent reads it: one line per entity, indented by depth.
+ *
+ * Lines rather than JSON. An agent reads this to decide what to do next, and
+ * an indented list of names with their statuses and progress is what that
+ * decision is made from — a nested object costs more tokens to say the same
+ * thing and is harder to scan.
+ *
+ * Criteria are rendered under each entity, with their zero-based index —
+ * `board_criterion` addresses one by that index, and this is the only place
+ * an agent can learn it, so leaving criteria out is not a compactness saving,
+ * it is a tool an agent cannot actually use.
+ *
+ * Verdicts are rendered inline under the entity they were recorded against,
+ * because a verdict is a claim about that pairing, not a property of the
+ * test — an agent deciding whether a workitem is actually done needs to see
+ * what proved it right there, not go look up a test to find out.
+ *
+ * Tests themselves get their own trailing section instead of being nested
+ * under the workitems that name them: a test can validate more than one
+ * workitem, or none yet, so there is no single place in the workitem tree it
+ * belongs — and a test with no verdict anywhere is still work that exists
+ * and must still be visible, not hidden until something claims it.
+ *
+ * Each test also gets a tail of its own run history — a count and the most
+ * recent results, not the whole list — because with no UI yet the agent is
+ * the only reader who can notice a test is flaky, and it cannot notice what
+ * this never shows it.
+ * @param board - the board to render.
+ * @returns the text, including findings when there are any.
+ */
+function renderBoard(board: Board): string {
+  if (!board.present) return 'This project has no board. Create a campaign to start one.'
+  const lines: string[] = []
+  const walk = (entity: Entity, depth: number): void => {
+    const indent = '  '.repeat(depth)
+    const children = entity.progress.total > 0 ? `  (${String(entity.progress.done)}/${String(entity.progress.total)} done)` : ''
+    const criteria = entity.fields.acceptanceCriteria
+    const ticked = criteria.filter((c) => c.done).length
+    const criteriaCount = criteria.length > 0 ? `  (${String(ticked)}/${String(criteria.length)} criteria)` : ''
+    lines.push(`${indent}[${entity.status}] ${entity.level} ${entity.name}${children}${criteriaCount}`)
+    lines.push(`${indent}  ${entity.folderPath}`)
+    criteria.forEach((c, index) => {
+      lines.push(`${indent}  [${c.done ? 'x' : ' '}] ${String(index)}. ${c.text}`)
+    })
+    for (const link of entity.fields.validatedBy) {
+      const bug = link.bug === undefined ? '' : `  bug: ${link.bug}`
+      lines.push(`${'  '.repeat(depth)}  [${link.result}] ${link.test}${bug}`)
+    }
+    for (const child of entity.children) walk(child, depth + 1)
+  }
+  for (const campaign of board.campaigns) walk(campaign, 0)
+  const hadCampaigns = lines.length > 0
+  const suites: string[] = []
+  const walkSuite = (suite: Suite, depth: number): void => {
+    for (const test of suite.tests) {
+      const indent = '  '.repeat(depth)
+      suites.push(`${indent}test ${test.name}\n${indent}  ${test.folderPath}`)
+      const runs = test.fields.runs
+      // A tail, not the whole list: the run history exists so flakiness is
+      // visible, and a handful of recent results is what shows a pattern —
+      // the count says how much history there is behind it.
+      if (runs.length > 0) {
+        const tail = runs
+          .slice(-3)
+          .map((r) => r.result)
+          .join(', ')
+        suites.push(`${indent}  runs: ${String(runs.length)} (${tail})`)
+      }
+    }
+    for (const child of suite.suites) {
+      suites.push(`${'  '.repeat(depth)}suite ${child.slug}`)
+      walkSuite(child, depth + 1)
+    }
+  }
+  walkSuite(board.tests, 0)
+  if (suites.length > 0) lines.push('', 'Tests:', ...suites)
+  if (!hadCampaigns && suites.length === 0) lines.push('The board is empty.')
+  else if (!hadCampaigns) lines.unshift('No campaigns yet.')
+  if (board.findings.length > 0) {
+    lines.push('', 'Could not read:')
+    for (const finding of board.findings) lines.push(`  ${finding.folderPath}: ${finding.says}`)
+  }
+  return lines.join('\n')
 }
 
 /**
@@ -531,6 +650,233 @@ function buildServer(surface: keyof typeof SURFACES, deps: ViewDeps): McpServer 
       inputSchema: {},
     },
     async () => done(await deps.selection()),
+  )
+
+  if (editor) server.registerTool(
+    'board_read',
+    {
+      title: 'Read the project board',
+      description:
+        "The whole board for the open project: campaigns, their missions, the tasks and bugs under them, each with its status and folder path — plus the tests container, its suites at any depth, and each test's own run history. A workitem's verdicts are shown inline under it, naming the test and the result from the last time it was linked. The board is `<type>.md` files — markdown with a YAML frontmatter block — under `.dsh/tasks/`, committed with the code. Read this before planning work, and read it again before claiming any of it is done — someone else may have moved it. Every other board tool addresses an entity by the folder path this returns.",
+      inputSchema: {},
+    },
+    () => {
+      const project = boardProject(deps.project())
+      if (!project.ok) return refuse(project.reason)
+      return done(renderBoard(readBoard(project.project)))
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_create',
+    {
+      title: 'Add something to the project board',
+      description:
+        "Create something on the board. A campaign, mission and task are workitems at three altitudes: a campaign is an outcome, a mission an independently shippable slice of it, a task one small verifiable unit. A mission goes under a campaign, a task under a mission, and a bug under either. A test is different — it lives in the tests container rather than under any workitem, because a test is not work in flight but the instrument work is measured with; give `parent` a suite path like `tests/auth` to file it in one, and suites are created as needed. Children are folder-derived — a mission's tasks and bugs come from what board_read finds beneath it on disk, not from a list kept anywhere, so nothing has to be told about a child besides creating it. Give a task at least one acceptance criterion with board_criterion, and say what proves a workitem with board_link.",
+      inputSchema: {
+        level: z
+          .enum(['campaign', 'mission', 'task', 'bug', 'test'])
+          .describe('What to create. A campaign, mission and task are workitems at three altitudes.'),
+        name: z.string().describe('The display name. The folder is named after it.'),
+        parent: z
+          .string()
+          .optional()
+          .describe(
+            "The parent's folder path from board_read. Omit for a campaign, and for a test at the root of the tests container; for a test inside a suite, give the suite's path.",
+          ),
+      },
+    },
+    ({ level, name, parent }) => {
+      const project = boardProject(deps.project())
+      if (!project.ok) return refuse(project.reason)
+      const out = createEntity(project.project, level, parent ?? '', name)
+      return out.ok ? done(`Created ${out.folderPath}.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_update',
+    {
+      title: 'Edit an entity on the board',
+      description:
+        "Change an entity's name, description or notes, and its per-level fields: `role` (task), `target` (campaign), for a bug `severity`, `steps_to_reproduce`, `expected`, `actual`, `rca`, `environment`, and for a test `preconditions`, `test_data`, `steps`, `expected_final_state` and `teardown` — what a test needs, does, and leaves behind, so it is repeatable by someone who did not write it. Notes are free-form prose for decisions, rationale and sign-offs — appended reasoning that outlives the conversation it was decided in. This does not change status: use board_status for that.",
+      inputSchema: {
+        folder: z.string().describe('The folder path from board_read.'),
+        name: z.string().optional().describe('A new display name. The folder does not move.'),
+        description: z.string().optional().describe('What this entity is.'),
+        notes: z.string().optional().describe('Decisions and rationale, in prose.'),
+        role: z.string().optional().describe('Who or what carries out this task. Task only.'),
+        target: z.string().optional().describe('What this campaign is aimed at. Campaign only.'),
+        severity: z.string().optional().describe('How bad this bug is. Bug only.'),
+        steps_to_reproduce: z.string().optional().describe('How to make the bug happen. Bug only.'),
+        steps: z.string().optional().describe('What to do to run this test. Test only.'),
+        expected: z.string().optional().describe('What should have happened instead. Bug only — a test records this as `expected_final_state`.'),
+        actual: z.string().optional().describe('What happened instead. Bug only.'),
+        rca: z.string().optional().describe('Root cause, once known. Bug only.'),
+        environment: z.string().optional().describe('Where the bug was seen. Bug only.'),
+        preconditions: z.string().optional().describe('What must already be true before this test runs. Test only.'),
+        test_data: z.string().optional().describe('The fixtures this test runs against, such as a table of inputs. Test only.'),
+        expected_final_state: z.string().optional().describe('What a passing run leaves true. Test only.'),
+        teardown: z.string().optional().describe("How to undo this test's setup once it has run. Test only."),
+      },
+    },
+    ({
+      folder,
+      name,
+      description,
+      notes,
+      role,
+      target,
+      severity,
+      steps_to_reproduce,
+      steps,
+      expected,
+      actual,
+      rca,
+      environment,
+      preconditions,
+      test_data,
+      expected_final_state,
+      teardown,
+    }) => {
+      const project = boardProject(deps.project())
+      if (!project.ok) return refuse(project.reason)
+      const patch = {
+        ...(name !== undefined && { name }),
+        ...(description !== undefined && { description }),
+        ...(notes !== undefined && { notes }),
+        ...(role !== undefined && { role }),
+        ...(target !== undefined && { target }),
+        ...(severity !== undefined && { severity }),
+        ...(steps_to_reproduce !== undefined && { stepsToReproduce: steps_to_reproduce }),
+        ...(steps !== undefined && { steps }),
+        ...(expected !== undefined && { expected }),
+        ...(actual !== undefined && { actual }),
+        ...(rca !== undefined && { rca }),
+        ...(environment !== undefined && { environment }),
+        ...(preconditions !== undefined && { preconditions }),
+        ...(test_data !== undefined && { testData: test_data }),
+        ...(expected_final_state !== undefined && { expectedFinalState: expected_final_state }),
+        ...(teardown !== undefined && { teardown }),
+      }
+      if (Object.keys(patch).length === 0) return refuse('Name at least one field to change.')
+      const out = updateEntity(project.project, folder, patch)
+      return out.ok ? done(`Updated ${folder}.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_status',
+    {
+      title: 'Move an entity to a status',
+      description:
+        `Set one entity's status to one of: ${ENTITY_STATUSES.join(', ')}. Nothing else changes it — a mission does not become done because its last task did, and a campaign does not start because a mission did. A status is a claim, so make it deliberately, and only for the entity you are actually talking about. A test has no status — it is not work in flight. Use board_link to record what a test proved.`,
+      inputSchema: {
+        folder: z.string().describe('The folder path from board_read.'),
+        status: z.string().describe(`One of: ${ENTITY_STATUSES.join(', ')}.`),
+      },
+    },
+    ({ folder, status }) => {
+      const project = boardProject(deps.project())
+      if (!project.ok) return refuse(project.reason)
+      const out = setStatus(project.project, folder, status)
+      return out.ok ? done(`${folder} is now ${status}.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_criterion',
+    {
+      title: 'Add or tick an acceptance criterion',
+      description:
+        "Add a criterion to an entity, or tick one that is now met. A criterion is a statement that is checkably true or false about observable behaviour — not a description of the work. Give `text` to add one; give `index` and `done` to tick or clear one, where index is its zero-based position in the list board_read shows. Ticking is a claim that you verified it, not that you intended it.",
+      inputSchema: {
+        folder: z.string().describe('The folder path from board_read.'),
+        text: z.string().optional().describe('A new criterion, added unticked.'),
+        index: z.number().optional().describe('Zero-based position of the criterion to tick.'),
+        done: z.boolean().optional().describe('True to tick it, false to clear it.'),
+      },
+    },
+    ({ folder, text, index, done: ticked }) => {
+      const project = boardProject(deps.project())
+      if (!project.ok) return refuse(project.reason)
+      // Both modes given is not "add, and also tick" — nothing here composes
+      // them, so silently taking the add branch would drop the tick on the
+      // floor while reporting success.
+      if (text !== undefined && (index !== undefined || ticked !== undefined)) {
+        return refuse('Give either text to add a criterion, or index and done to tick one — not both.')
+      }
+      if (text !== undefined) {
+        const out = addCriterion(project.project, folder, text)
+        return out.ok ? done(`Added a criterion to ${folder}.`) : refuse(out.reason)
+      }
+      if (index === undefined || ticked === undefined) return refuse('Give either text to add one, or index and done to tick one.')
+      const out = tickCriterion(project.project, folder, index, ticked)
+      return out.ok ? done(`${ticked ? 'Ticked' : 'Cleared'} criterion ${String(index)} on ${folder}.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_delete',
+    {
+      title: 'Move a board entity to the trash',
+      description:
+        "Move an entity, and everything under it, to `.dsh/tasks/.trash/`. It leaves the board but stays on disk, so a delete made in error is recoverable. Deleting a campaign takes its missions, tasks and bugs with it.",
+      inputSchema: { folder: z.string().describe('The folder path from board_read.') },
+    },
+    ({ folder }) => {
+      const project = boardProject(deps.project())
+      if (!project.ok) return refuse(project.reason)
+      const out = trashEntity(project.project, folder)
+      return out.ok ? done(`Moved ${folder} to the board's trash.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_link',
+    {
+      title: 'Say a test proves a workitem, and what it did',
+      description:
+        `Record that a test validates a workitem, with the verdict from the last time it ran: ${LINK_RESULTS.join(', ')}. The verdict lives on the workitem rather than on the test, because it is about the pairing — one test can pass for the mission it was written for and fail for the one that reused it. Linking the same test again replaces the verdict rather than adding a second. A failing verdict should name the bug it produced; a failure with no bug is reported as a gap. To stop claiming a test proves something, pass \`unlink\` — that is also how a test is retired, since validation is the link.`,
+      inputSchema: {
+        folder: z.string().describe('The workitem being proved, by folder path.'),
+        test: z.string().describe("The test's folder path from board_read."),
+        result: z.string().optional().describe(`One of: ${LINK_RESULTS.join(', ')}.`),
+        comment: z.string().optional().describe('Why, in your own words.'),
+        bug: z.string().optional().describe('The folder path of the bug a failure produced.'),
+        unlink: z.boolean().optional().describe('True to remove the link instead of recording one.'),
+      },
+    },
+    ({ folder, test, result, comment, bug, unlink }) => {
+      const project = boardProject(deps.project())
+      if (!project.ok) return refuse(project.reason)
+      if (unlink === true) {
+        const gone = unlinkTest(project.project, folder, test)
+        return gone.ok ? done(`${folder} no longer names ${test}.`) : refuse(gone.reason)
+      }
+      const out = linkTest(project.project, folder, test, result ?? 'not_run', comment ?? '', bug)
+      return out.ok ? done(`${test} now records ${result ?? 'not_run'} against ${folder}.`) : refuse(out.reason)
+    },
+  )
+
+  if (editor) server.registerTool(
+    'board_run',
+    {
+      title: 'Record that a test ran',
+      description:
+        `Append one execution to a test's own history: when it ran, what it ran against, and what came out. This does NOT change the verdict on any workitem — a verdict is a claim somebody makes, a run is a thing that happened, and the two disagreeing is the signal that a verdict has gone stale. Use board_link to change a verdict. The history is what makes a flaky test visible, and is capped at the most recent ${String(RUN_HISTORY)} runs.`,
+      inputSchema: {
+        test: z.string().describe("The test's folder path from board_read."),
+        workitem: z.string().describe('The workitem it was run against, by folder path.'),
+        result: z.string().describe(`One of: ${LINK_RESULTS.join(', ')}.`),
+      },
+    },
+    ({ test, workitem, result }) => {
+      const project = boardProject(deps.project())
+      if (!project.ok) return refuse(project.reason)
+      const out = recordRun(project.project, test, workitem, result)
+      return out.ok ? done(`Recorded ${result} for ${test}.`) : refuse(out.reason)
+    },
   )
 
   return server
