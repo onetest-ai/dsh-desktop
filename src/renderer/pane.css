@@ -1919,6 +1919,14 @@ button.board-lane-title:hover {
   cursor: pointer;
 }
 
+/* The tick is the one live control in the list, so its checked state wears the
+   board's accent rather than the platform's default blue — the same token the
+   selects and focus rings already use, so a ticked criterion reads as part of
+   this surface and not the OS's. */
+.board-detail-tick {
+  accent-color: var(--dsw-alias-state-business-primary);
+}
+
 /* Criteria on a level whose document has no section for them. Dimmed and
    read-only, because the store refuses a tick here: this block is a finding
    about the file, not a control. */
@@ -1930,6 +1938,14 @@ button.board-lane-title:hover {
 
 .board-detail-stray-mark {
   color: var(--dsw-alias-label-tertiary);
+}
+
+/* The criterion's text beside its read-only mark: it takes the rest of the row
+   so a long one has room, and inherits the dimmed colour the stray list's `li`
+   sets — this is a finding about the file, not an editable line. */
+.board-detail-stray-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .board-detail-stray .board-detail-criteria li {
@@ -2030,7 +2046,13 @@ button.board-lane-title:hover {
 /* The documents a campaign or a mission links, and the control that attaches
    one. The list reads down the page and the attach form sits under it, the
    same shape and spacing the Add-test control uses beneath its own list. */
-.board-detail-docs {
+/* The three trailing sections — documents, children, and what validates the
+   entity — each open with a heading and stack down the page, so they carry the
+   same small top gap the heading's own margin sits on top of. One rule keeps
+   the rhythm between them from drifting as any one is edited. */
+.board-detail-docs,
+.board-detail-children,
+.board-detail-links {
   margin-top: 4px;
 }
 

@@ -17,7 +17,7 @@ Each has one job:
 
 `SideView` gains `'tasks'`, beside `'files'` and `'git'`. A third rail button, `⌘⌥T`, a `tasks.html` page with its own bundle, and `views.tasks` — the same shape the git panel added, for the same reason: three views that are rarely read at once do not each deserve permanent horizontal space.
 
-Rows nest campaign → mission → task/bug, collapsible, each carrying a status glyph and — for a campaign or a mission — the progress computed on read. Beneath them, a second root: `tests`, with its suites and the tests inside them. A test row shows what it validates, carrying the same verdict dot and count a card does, which is the reverse of the workitem's own dot and the only place that direction is visible. **Clicking a row scrolls the board to whatever that row is on it and highlights that**, bringing the Board tab forward if the pane was showing something else — a reveal that scrolled a panel nobody could see would look like nothing happening. A campaign row reveals its heading, a mission row its lane, and a task or bug row its own card. A test row reveals nothing, because the board deliberately draws no card for a test — it opens the test's own detail instead, which is the one thing a test row can go to and the same thing a card's click does for a workitem. The tree sends the same message for a test that it sends for every other row: it names a folder, and the board decides. That is the side that knows which paths are tests, because it holds the suite tree the read answered with, and it is what keeps this page free of a second cross-surface message that would mean the same thing. A test row is the tree's only exception: nothing here changes anything.
+Rows nest campaign → mission → task/bug, collapsible, each carrying a status glyph and — for a campaign or a mission — the progress computed on read. Beneath them, a second root: `tests`, with its suites and the tests inside them. A test row shows what it validates, carrying the same verdict dot and count a card does, which is the reverse of the workitem's own dot and the only place that direction is visible. **Clicking a row scrolls the board to whatever that row is on it and highlights that**, bringing the Board tab forward if the pane was showing something else — a reveal that scrolled a panel nobody could see would look like nothing happening. A campaign row reveals its heading, a mission row its lane, and a task or bug row its own card — unfolding whatever the target sits inside on the way, since a reveal that highlighted a card folded away inside a shut lane would look like nothing happening for the same reason a scroll of an unseen panel would. A test row reveals nothing, because the board deliberately draws no card for a test — it opens the test's own detail instead, which is the one thing a test row can go to and the same thing a card's click does for a workitem. The tree sends the same message for a test that it sends for every other row: it names a folder, and the board decides. That is the side that knows which paths are tests, because it holds the suite tree the read answered with, and it is what keeps this page free of a second cross-surface message that would mean the same thing. A test row is the tree's only exception: nothing here changes anything.
 
 A fold is remembered by folder path and forgotten when the project changes. `campaigns/q3` is a path two projects can both have, and reopening the next one already folded would be this state describing a board it was never about.
 
@@ -29,7 +29,7 @@ A project with no `.dsh/tasks/` is worded, not repaired, and says how a board ge
 
 **Columns are the five statuses, always** — `idea`, `backlog`, `executing`, `validation`, `done` — whether or not anything is in them. An empty column is information: it names a place work can go to. The set never changes shape under the reader, and when the panel is too narrow the board scrolls sideways rather than dropping a column.
 
-**Lanes are missions**, grouped under a campaign, and **both fold**. A mission's header is its own toggle; a folded lane still says what it holds, so folding is a way of putting something down rather than losing it. A campaign folds the same way, because a real project has more campaigns than fit on a screen and most of them are not today's.
+**Lanes are missions**, grouped under a campaign, and **both fold**. A mission's header is its own toggle and a campaign's heading is another; the whole line is the target, not a twisty beside it, because folding a campaign is a press on the name that names it. A chevron on the line is the only chrome that says so — it turns a quarter to point at the shut name and back to point down when the group is open, one shape the stylesheet rotates rather than two the markup swaps. A folded lane still says what it holds, so folding is a way of putting something down rather than losing it, and a campaign folds the same way because a real project has more campaigns than fit on a screen and most of them are not today's. The fold is per session, kept by folder path and forgotten when the project changes — a posture, not a decision.
 
 **A campaign can also be hidden**, which is different from folded: hidden is off the board entirely. A `N hidden` control at the top is the way back, and it lists everything hidden however it got there. **A `done` campaign hides itself** — finished work does not need a decision — but it is not special, because it appears in that same list. Nothing disappears without somewhere to look for it.
 
@@ -61,7 +61,9 @@ Not the editor column either, which is what it was and what was wrong with it. T
 
 **Children are rows, not cards**: a mission lists its tasks, its bugs and the tests that validate it, each a line with a name, a status glyph and — for a test — the verdict it last returned here. A row opens that entity's detail, so the surface navigates into itself, and back walks out the way it came.
 
-**Two things are editable here**, because both are already writes the board owns: the status, through a select paired with the same glyph the heading above it wears, so choosing a value and reading one show the same thing; and an acceptance criterion, through its checkbox. Everything else is read, with an **Open file** control that hands the entity's `.md` to the editor column for anyone who wants to write prose. That is the same division the board already draws — the panel moves work, the editor writes it — and now the file it opens reads like a document.
+**The detail edits, it does not only show.** The board owns every write the store exposes, so the surface that reads an entity is where it is changed — leaving for a second window to fix a sentence you are looking at is the detour the editor column was. The status is a select paired with the same glyph the heading wears, so choosing a value and reading one show the same thing. An acceptance criterion is its checkbox, and a control beneath the list adds another, so the definition of done grows where it is read rather than only where the file is opened. The description and every section the level's own document owns edit as prose: a click turns the rendered markdown into its own source in a textarea, and a blur saves it — a Steps table read as a table, written as pipes, and shown as a table again on the redraw. A campaign or a mission attaches a document link; a campaign, a mission or a task declares the test that proves it. What saves is always the file's own markdown, and the board re-reads and redraws from disk after every write, so the detail never carries a copy of the thing it just changed.
+
+**Open file** stays, one control in the header, handing the entity's `.md` to the editor column. Inline editing is for the change made while reading — a sentence, a criterion, a link — and the file is for the reorganisation that is the wrong shape for a field; now that the format is a document, it reads like one when it opens. That is still the board's division — the panel moves and now mends work, the editor rewrites it — only the line between them has moved to where the reader keeps crossing it.
 
 **Detail is per-session and not remembered.** Reopening the panel shows the board. A view that reopened on the task you were reading last Tuesday is a view that has decided something for you.
 
@@ -69,7 +71,7 @@ Not the editor column either, which is what it was and what was wrong with it. T
 
 A test has no status, so it has no column, and until now that meant it had no way onto the board at all — you could reach one only by knowing it existed and finding it in the tree. That is the second half of the same complaint: the board's whole job is to show what is there.
 
-**The board gains a Tests destination**, reached from its own header, rendering the suite tree with its cases: suites as headings, tests as rows, each carrying the same verdict dot and count a card does. A row opens the test's detail, which is the same surface everything else opens into.
+**The board gains a Tests destination**, reached from its own header, rendering the suite tree with its cases as a real layout rather than a flat list. A suite is a heading ruled off from the rows beneath it, so it reads as the head of a section and not as the first row of one — the same separation a campaign's name has from its lanes. A nested suite is indented under its parent with a rule running down the group, so a sub-suite and a sibling, otherwise the same shape, cannot be mistaken for each other. Each suite heading carries the count of the tests it holds at every depth, tabular so a column of them lines up. A test is a row: its name runs along the line and elides rather than wraps, and at the right, in a column of its own with a held-open minimum width, the same verdict dot and count a card carries — so the dots and the slashes read straight down the list whether or not a given test has run. A row opens the test's detail, which is the same surface everything else opens into.
 
 The control is on the header whether or not this board has a test in it, and the destination words its own emptiness: one that came and went with the suite tree would make Tests something you have to already know about, which is the thing it exists to fix. **Back walks out one level, not all the way**: a test opened from here returns to the list it was picked from, and only the list's own back reaches the columns — a detail that dropped the reader on the board would undo the navigation rather than reverse it. The header belongs to the columns alone; each destination carries its own back, and a second way out beside it would go somewhere the reader did not come from.
 
@@ -86,6 +88,10 @@ The control is on the header whether or not this board has a test in it, and the
 | Click a card | opens its detail, in place of the columns |
 | Change the status select in a detail | `setStatus` |
 | Tick a criterion in a detail | `tickCriterion` |
+| Edit the description or a section in a detail | `updateEntity` |
+| Add a criterion under the list in a detail | `addCriterion` |
+| Attach a document on a campaign's or a mission's detail | `updateEntity` (the whole `documents` list) |
+| Declare a test that proves a workitem, in its detail | `linkTest` |
 | **Open file** in a detail | opens its `workitem.md` (`bug.md`, `test.md`) in the editor column |
 
 Every one is a store call that already exists and is tested. The board adds gestures, not rules.
@@ -113,9 +119,17 @@ Escape is treated the same as the backdrop and does not close it either. That is
 
 The criterion field is not required — validation reports a task without one rather than refusing it, and the modal follows the store rather than inventing a stricter rule. But it is offered, and it is second, because a task whose definition of done is written at the moment it is created is the difference between a board that can gate work and a list of titles.
 
-### Deliberately not editable here
+### Still not editable here
 
-Prose, renames, and creating campaigns or missions. Editing prose is what the editor is for. Creating structure is a planning act — the agent does it, or you do it in the file. The `+` makes a task because a task is the thing you jot mid-thought — and a bug on the lane that holds bugs, since a lane whose `+` produced something it could not display would be a control that lies about where its result went.
+A rename, the making of a campaign or a mission, a section the format does not define, and a stray section's body. Prose has come off this list — the file is a document now and the detail edits it — but structure has not, and each thing left on it is left for a reason.
+
+A name is the folder on disk that an agent and a terminal already know the entity by; a rename only this view understood would leave those two calling it something else. It is a filesystem act, done in the file or by the agent.
+
+Creating a campaign or a mission is a planning act, which is why the `+` makes only a task or a bug — the thing jotted mid-thought — and never the structure it hangs under. A lane whose `+` produced something it could not display would be a control that lies about where its result went.
+
+A section exists because the level's own document defines it: the detail edits the sections a level owns and offers no way to invent one the format does not know, since a heading nothing reads back is not a section but a note lost in a file.
+
+And a stray section — a heading this level does not own, or acceptance criteria on a level that carries none — stays read-only under a finding that names it. Editing it would write malformed data back through a save as if it belonged, and a save against a heading the level does not own patches nothing anyway; it is the one repair the board's rule for malformed data refuses to make. The file is where a stray section is moved or removed, and the finding says so.
 
 ## What the view remembers
 
@@ -151,7 +165,7 @@ The pure parts are the ones with the bugs in them, and they test without Electro
 - **Main's channels**, each gated against the open project, as every board channel already is.
 - Each is broken deliberately to confirm its test fails, as this project asks of a test that guards something important.
 
-The two cross-surface messages — the tree's reveal reaching the board, the card's click reaching the editor — are asserted where each page sends them, against a stubbed bridge: what the message is called and what it carries, and — for the reveal — which of the board's four kinds of row it marks, plus the fifth it does not: a test, whose folder path the board answers by opening its detail rather than by marking anything. Main's forwarding of both is covered where the channels are, against the real store.
+The two cross-surface messages — the tree's reveal reaching the board, and the detail's **Open file** reaching the editor — are asserted where each page sends them, against a stubbed bridge: what the message is called and what it carries, and — for the reveal — which of the board's four kinds of row it marks, plus the fifth it does not: a test, whose folder path the board answers by opening its detail rather than by marking anything. Main's forwarding of both is covered where the channels are, against the real store.
 
 ## Deliberately not in this
 
