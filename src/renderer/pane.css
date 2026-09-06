@@ -712,9 +712,9 @@ body {
   flex-direction: column;
   margin: 2px 0 4px;
   padding: 3px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
-  background: var(--dsw-alias-surface-primary, transparent);
+  background: var(--dsw-alias-bg-layer-2);
 }
 
 /* The running state stands where the header's actions were, so the eye does
@@ -792,7 +792,7 @@ body {
 
 .branch-new {
   margin-top: 2px;
-  border-top: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-top: 1px solid var(--dsw-alias-border-l2);
   border-radius: 0 0 4px 4px;
   color: var(--dsw-alias-label-secondary);
 }
@@ -803,9 +803,9 @@ body {
   flex: 1 1 auto;
   min-width: 0;
   padding: 2px 5px;
-  border: 1px solid var(--dsw-alias-interactive-primary, currentColor);
+  border: 1px solid var(--dsw-alias-state-business-primary);
   border-radius: 4px;
-  background: var(--dsw-alias-surface-primary, transparent);
+  background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
   font: inherit;
 }
@@ -934,7 +934,7 @@ body {
   width: 13px;
   height: 13px;
   margin: 0;
-  accent-color: var(--dsw-alias-interactive-primary, currentColor);
+  accent-color: var(--dsw-alias-state-business-primary);
 }
 
 /* Stage, Discard, and the repository's three. Out of the way until the row is
@@ -1004,9 +1004,9 @@ body {
   flex: 1 1 auto;
   min-width: 0;
   padding: 2px 4px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 4px;
-  background: var(--dsw-alias-surface-primary, transparent);
+  background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
   font: inherit;
 }
@@ -1015,9 +1015,9 @@ body {
   min-height: 40px;
   max-height: 76px;
   padding: 5px 6px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
-  background: var(--dsw-alias-surface-primary, transparent);
+  background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
   font: inherit;
   resize: vertical;
@@ -1172,20 +1172,20 @@ body {
 .board-group-revealed {
   padding: 2px 4px;
   border-radius: 4px;
-  box-shadow: inset 0 0 0 2px var(--dsw-alias-interactive-primary, currentColor);
+  box-shadow: inset 0 0 0 2px var(--dsw-alias-state-business-primary);
 }
 
 .board-lane {
   margin-bottom: 10px;
   padding: 6px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
 }
 
 /* The lane the tree asked for. A ring rather than a fill, so the cards inside
    it are still read against the panel's own background. */
 .board-lane-revealed {
-  box-shadow: inset 0 0 0 2px var(--dsw-alias-interactive-primary, currentColor);
+  box-shadow: inset 0 0 0 2px var(--dsw-alias-state-business-primary);
 }
 
 .board-lane-head {
@@ -1211,8 +1211,11 @@ body {
 /* The lane's own status, which a bug lane does not have. Drawn as the tree's
    status is, since it says the same thing about the same entity. */
 .board-lane-status {
+  display: inline-flex;
   flex: none;
-  padding: 1px 5px;
+  gap: 4px;
+  align-items: center;
+  padding: 2px 6px;
   border-radius: 4px;
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-secondary);
@@ -1255,28 +1258,51 @@ body {
    be put back into. */
 .board-column {
   display: flex;
-  gap: 4px;
+  gap: 2px;
   flex: none;
   flex-direction: column;
-  width: 140px;
+  /* Wider than the original 140px: at that width a two-line name plus the slug
+     line above it cut most real titles off, and the column that cannot say
+     what a card is called is the thing the first pass got wrong. 168px fits
+     the common case without widening the board past what six columns need. */
+  width: 168px;
   min-height: 52px;
   padding: 4px;
   border-radius: 6px;
   background: var(--dsw-alias-bg-overlay);
 }
 
+/* Glyph, then the label, then the count — a row read by its shape before its
+   word, the same glyph this status draws on every card beneath it. Not the raw
+   lowercase value: that was the file's word, and this is the reader's. */
 .board-column-title {
-  margin: 0 0 2px;
-  padding: 0 2px;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  margin: 0 0 4px;
+  padding: 2px 4px;
+}
+
+.board-column-label {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  font-weight: 510;
+}
+
+/* The count sits at the end, quiet and tabular so a column of ten does not
+   jump against a column of two. */
+.board-column-count {
+  margin-left: auto;
   color: var(--dsw-alias-label-tertiary);
-  font-size: 11px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* The card the tree asked for. The same ring the lane and the heading carry,
    because a reveal points at one thing and it should look the same whichever
    of the three it turned out to be. */
 .board-card-revealed {
-  box-shadow: inset 0 0 0 2px var(--dsw-alias-interactive-primary, currentColor);
+  box-shadow: inset 0 0 0 2px var(--dsw-alias-state-business-primary);
 }
 
 /* The card and its delete share a box so the delete can sit on the card's
@@ -1285,16 +1311,22 @@ body {
   position: relative;
 }
 
+/* Not a boxed, filled container: the Design Lock rejects the bordered card as
+   the default, so a card carries no border and no surface of its own and is
+   read against the tray. What separates one card from the next is a hairline
+   along its foot, the way a Linear row is ruled off — the fill appears only on
+   hover, as the thing the pointer is over. */
 .board-card {
   display: flex;
-  gap: 4px;
+  gap: 3px 6px;
   flex-wrap: wrap;
   align-items: center;
   width: 100%;
-  padding: 5px 6px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  padding: 6px 8px;
+  border: none;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
   border-radius: 6px;
-  background: var(--dsw-alias-surface-primary, transparent);
+  background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
@@ -1303,6 +1335,21 @@ body {
 
 .board-card:hover {
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* The path an agent's own tools call this card, set above the human name like
+   the machine line of a file header. Mono, so it reads as an identifier and
+   not as more prose, and tertiary so the name still leads. Full width, so the
+   name wraps under it rather than beside it. */
+.board-card-slug {
+  flex: 1 1 100%;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--ds-font-family-code);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Two lines and then an ellipsis, not one: at this column width one line cut
@@ -1321,18 +1368,23 @@ body {
   overflow: hidden;
   flex: 1 1 100%;
   overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 500;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
 }
 
 /* A bug says so on its face: it sits in the same columns as the work around
-   it, and nothing else about the card would tell them apart. */
+   it, and nothing else about the card would tell them apart. The Design Lock
+   gives "bug" the error token — the same red a failing verdict wears — because
+   both are the thing on the board that wants looking at. */
 .board-card-kind {
   flex: none;
   padding: 0 4px;
   border-radius: 4px;
-  color: var(--dsh-git-deleted);
+  color: var(--dsw-alias-state-error-primary);
   font-size: 10px;
   text-transform: uppercase;
 }
@@ -1344,19 +1396,95 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* What the tests that prove this card say. Green while everything holds, and
-   red the moment one does not — the failing one is what is worth seeing from
-   across a board. */
+/* The verdict chip: a coloured dot that says pass/fail/none at a glance, then
+   the count kept quiet beside it — colour lives in the dot, the number does
+   not repeat it. */
+.board-card-verdicts {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+}
+
+.board-card-verdict-count {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The status glyph, wherever it is drawn — column head, card is glyph-free but
+   the lane tag, the detail header and the status field carry it. The shape is
+   painted in `currentColor`; each `.status-glyph-<status>` is the one place a
+   token is keyed to it, so one status is one colour everywhere. Colour enters
+   only when work is live (accent) or proven (success) or malformed (warn);
+   idea and backlog stay neutral grey, as the Design Lock draws them. */
+.status-glyph {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.status-glyph-idea {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.status-glyph-backlog {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.status-glyph-executing {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.status-glyph-validation {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.status-glyph-done {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+/* A status the board does not know is a finding, not a state: amber, so it
+   reads as "look at this" rather than passing itself off as idea's grey. */
+.status-glyph-unknown {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+/* The verdict dot, on a card and on a test row. Green all-pass, red any-fail,
+   grey nothing-run — a card nobody has tested is not a card that is failing. */
+.verdict-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+}
+
+.verdict-dot-pass {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.verdict-dot-fail {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.verdict-dot-none {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* The pass/total count on a test row and the failing-note on a detail row. The
+   count is kept in the neutral label token — a verdict dot carries the colour
+   now — while the failing note still reddens, since it is prose about what
+   broke rather than a number beside a dot. */
 .board-chip {
   flex: none;
   padding: 0 4px;
   border-radius: 4px;
-  color: var(--dsh-git-added);
+  color: var(--dsw-alias-label-secondary);
   font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .board-chip-failing {
-  color: var(--dsh-git-deleted);
+  color: var(--dsw-alias-state-error-primary);
 }
 
 /* Revealed by a right-click on the card and hidden again by the next redraw.
@@ -1402,7 +1530,7 @@ body {
    empty panel with nothing beside it to read as a control. */
 .board-head-button {
   padding: 2px 8px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 4px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
@@ -1431,7 +1559,7 @@ body {
 .board-tests-suite-box .board-tests-suite-box {
   margin-left: 8px;
   padding-left: 8px;
-  border-left: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border-left: 1px solid var(--dsw-alias-border-l2);
 }
 
 .board-tests-suite {
@@ -1443,15 +1571,18 @@ body {
 }
 
 /* A whole line, as a detail's child row is — this list is read down the page
-   and the name is what the eye runs along. */
+   and the name is what the eye runs along. Ruled off from the next with a
+   hairline, the same way a card is: a test has no status, so there is no glyph
+   here, only the count it carries. */
 .board-tests-row {
   display: flex;
   gap: 6px;
   align-items: baseline;
   justify-content: space-between;
   width: 100%;
-  padding: 4px 6px;
+  padding: 5px 6px;
   border: none;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
   border-radius: 4px;
   background: transparent;
   color: inherit;
@@ -1490,7 +1621,7 @@ body {
 .board-detail-back {
   flex: none;
   padding: 2px 6px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 4px;
   background: transparent;
   color: inherit;
@@ -1504,22 +1635,28 @@ body {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+/* The name is what this surface is about, so it is the largest thing on it —
+   the detail header reads as a title, not as another row. */
 .board-detail-title {
   overflow: hidden;
   flex: 1;
   min-width: 0;
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  font-size: 20px;
+  font-weight: 510;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* The same tag the lane's status is, because it says the same thing about the
-   same kind of entity. */
+/* Glyph and label together, the same tag the lane's status is, because it says
+   the same thing about the same kind of entity. */
 .board-detail-status {
+  display: inline-flex;
   flex: none;
-  padding: 1px 5px;
+  gap: 4px;
+  align-items: center;
+  padding: 2px 6px;
   border-radius: 4px;
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-secondary);
@@ -1560,8 +1697,12 @@ body {
   font-style: italic;
 }
 
+/* Prose is capped at its own measure as well as the surface's: the detail box
+   already stops at 68ch, but the body text is the one thing here that must not
+   run wider than the eye can track a line, so it carries the measure itself. */
 .board-detail-prose {
   margin: 0;
+  max-width: 68ch;
   line-height: 1.5;
 }
 
@@ -1587,7 +1728,7 @@ body {
 .board-detail-prose td,
 .board-detail-prose th {
   padding: 2px 6px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   text-align: left;
 }
 
@@ -1607,11 +1748,20 @@ body {
   font-size: 11px;
 }
 
+/* The field's label carries the same glyph the header does, a static read of
+   the current status, so it lines up with its word rather than sitting on the
+   text baseline. */
+.board-detail-field > span {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
 .board-detail-select {
   padding: 2px 4px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 4px;
-  background: var(--dsw-alias-surface-primary, transparent);
+  background: var(--dsw-alias-bg-layer-2);
   color: inherit;
   font: inherit;
   font-size: 11px;
@@ -1725,7 +1875,7 @@ body {
   flex-direction: column;
   width: 260px;
   padding: 12px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-overlay);
 }
@@ -1773,9 +1923,9 @@ body {
 
 .board-modal-field input {
   padding: 4px 6px;
-  border: 1px solid var(--dsw-alias-border-primary, currentColor);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
-  background: var(--dsw-alias-surface-primary, transparent);
+  background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
   font: inherit;
 }

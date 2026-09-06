@@ -1017,3 +1017,74 @@ describe('the Tests destination', () => {
     expect([...document.querySelectorAll('.board-tests-suite')].map((node) => node.textContent)).toEqual(['auth'])
   })
 })
+
+// The design pass lives in `pane.css`, and jsdom lays nothing out, so — as the
+// backdrop's `pointer-events` and the card name's `overflow-wrap` already are —
+// these rules are read from the stylesheet itself rather than measured. What is
+// pinned here is what the plan's Design Lock makes non-negotiable: no phantom
+// token silently falling back to `currentColor`, the glyph and dot coloured
+// from the right token, the card no longer a boxed container, and the detail
+// capped at a readable measure.
+describe('the board stylesheet', () => {
+  async function css(): Promise<string> {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    return readFileSync(join(import.meta.dirname, '..', 'pane.css'), 'utf8')
+  }
+
+  function rule(text: string, selector: string): string {
+    // The literal selector, then its brace block. Selectors here have no regex
+    // metacharacters but the dots, which must match a dot and not any char.
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const match = text.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))
+    expect(match, `no rule for ${selector}`).not.toBeNull()
+    return match?.[1] ?? ''
+  }
+
+  // reason: none of these three tokens exist in the app's token set, so every
+  // reference silently took its `, currentColor` / `, transparent` fallback —
+  // a colour nobody chose. The Design Lock calls them phantom and says to
+  // replace every one; the whole file must be clean of them.
+  it('references no phantom token', async () => {
+    const text = await css()
+    expect(text).not.toContain('--dsw-alias-interactive-primary')
+    expect(text).not.toContain('--dsw-alias-border-primary')
+    expect(text).not.toContain('--dsw-alias-surface-primary')
+  })
+
+  // reason: the boxed, bordered card is the anti-slop pattern the Design Lock
+  // rejects as the default container. A card is separated from its neighbour by
+  // a hairline, not wrapped in a full border, so `.board-card` must not carry a
+  // `1px solid` border of its own.
+  it('does not box the card in a full border', async () => {
+    expect(rule(await css(), '.board-card')).not.toMatch(/border\s*:\s*1px solid/)
+  })
+
+  // reason: colour enters the glyph only through the token its class sets —
+  // done proven green, executing live in the app's own accent — and never as a
+  // literal or a `currentColor` fallback.
+  it('colours the status glyph from its state token', async () => {
+    const text = await css()
+    expect(rule(text, '.status-glyph-done')).toMatch(
+      /color\s*:\s*var\(--dsw-alias-state-success-primary\)/,
+    )
+    expect(rule(text, '.status-glyph-executing')).toMatch(
+      /color\s*:\s*var\(--dsw-alias-state-business-primary\)/,
+    )
+  })
+
+  // reason: the reveal ring is the app's accent, and the phantom
+  // `--dsw-alias-interactive-primary` it used to name fell back to
+  // `currentColor` — the card's own text colour, not an accent at all.
+  it('draws the reveal ring in the accent token', async () => {
+    expect(rule(await css(), '.board-card-revealed')).toMatch(
+      /var\(--dsw-alias-state-business-primary\)/,
+    )
+  })
+
+  // reason: the detail is prose on the bare canvas, so it is capped at a
+  // readable measure rather than run to the panel's width.
+  it('caps the detail prose at a measure', async () => {
+    expect(rule(await css(), '.board-detail-prose')).toMatch(/max-width\s*:/)
+  })
+})
