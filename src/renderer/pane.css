@@ -1255,10 +1255,16 @@ body {
 
 /* A fixed width, so an empty column is as wide as a full one: a column that
    shrank to nothing when its work moved on would stop being a place work can
-   be put back into. */
+   be put back into. The tray recedes to the canvas rather than carrying a
+   fill of its own — with a filled tray the cards, which are surfaces, had the
+   same colour as the tray and vanished into it, and the gaps between trays
+   read as one grey against another. On the dark canvas the cards stand out
+   and the gaps are the canvas: the columns are told apart by their cards and
+   their labels, the way a Linear board tells them apart, not by five grey
+   blocks. */
 .board-column {
   display: flex;
-  gap: 2px;
+  gap: 4px;
   flex: none;
   flex-direction: column;
   /* Wider than the original 140px: at that width a two-line name plus the slug
@@ -1266,10 +1272,10 @@ body {
      what a card is called is the thing the first pass got wrong. 168px fits
      the common case without widening the board past what six columns need. */
   width: 168px;
-  min-height: 52px;
-  padding: 4px;
+  min-height: 64px;
+  padding: 2px;
   border-radius: 6px;
-  background: var(--dsw-alias-bg-overlay);
+  background: transparent;
 }
 
 /* Glyph, then the label, then the count — a row read by its shape before its
@@ -1311,11 +1317,12 @@ body {
   position: relative;
 }
 
-/* Not a boxed, filled container: the Design Lock rejects the bordered card as
-   the default, so a card carries no border and no surface of its own and is
-   read against the tray. What separates one card from the next is a hairline
-   along its foot, the way a Linear row is ruled off — the fill appears only on
-   hover, as the thing the pointer is over. */
+/* A raised surface on the receded tray, not a borderless row. The anti-slop
+   rule bars a card used only to group things; this one is the thing you pick
+   up and drag to another column, which is exactly the interaction a card is
+   for. Against the dark canvas its own lighter fill and hairline border are
+   what make it a distinct object the eye can grab — the borderless version
+   disappeared into the tray it sat on. */
 .board-card {
   display: flex;
   gap: 3px 6px;
@@ -1323,10 +1330,9 @@ body {
   align-items: center;
   width: 100%;
   padding: 6px 8px;
-  border: none;
-  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
-  background: transparent;
+  background: var(--dsw-alias-bg-layer-2);
   color: inherit;
   font: inherit;
   text-align: left;
@@ -1334,7 +1340,7 @@ body {
 }
 
 .board-card:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
+  background: var(--dsw-alias-bg-layer-3);
 }
 
 /* The path an agent's own tools call this card, set above the human name like

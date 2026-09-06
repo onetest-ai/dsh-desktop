@@ -1057,12 +1057,24 @@ describe('the board stylesheet', () => {
     expect(text).not.toContain('--dsw-alias-surface-primary')
   })
 
-  // reason: the boxed, bordered card is the anti-slop pattern the Design Lock
-  // rejects as the default container. A card is separated from its neighbour by
-  // a hairline, not wrapped in a full border, so `.board-card` must not carry a
-  // `1px solid` border of its own.
-  it('does not box the card in a full border', async () => {
-    expect(rule(await css(), '.board-card')).not.toMatch(/border\s*:\s*1px solid/)
+  // reason: a board card is a raised surface on a receded tray, not a
+  // borderless row. A borderless card had the tray's own colour and vanished
+  // into it on screen; the anti-slop rule bars a card used only to group
+  // things, but this one is the object you drag between columns — an
+  // interaction container — so it earns a surface (`bg-layer-2`) and a border
+  // to stand apart from the dark canvas.
+  it('gives the card a raised surface, not the tray colour', async () => {
+    const card = rule(await css(), '.board-card')
+    expect(card).toMatch(/background\s*:\s*var\(--dsw-alias-bg-layer-2\)/)
+    expect(card).toMatch(/border\s*:\s*1px solid var\(--dsw-alias-border-l2\)/)
+  })
+
+  // reason: the tray carries no fill of its own — a filled tray is what made
+  // the cards the same colour as the space between columns. The columns are
+  // told apart by their cards and labels on the dark canvas, not by five grey
+  // blocks, so `.board-column` must not paint a background.
+  it('lets the column tray recede to the canvas', async () => {
+    expect(rule(await css(), '.board-column')).toMatch(/background\s*:\s*transparent/)
   })
 
   // reason: colour enters the glyph only through the token its class sets —
