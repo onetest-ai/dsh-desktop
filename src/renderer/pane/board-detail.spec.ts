@@ -49,6 +49,9 @@ function actions(): DetailActions & { calls: unknown[][] } {
     setStatus: (folderPath, status) => calls.push(['status', folderPath, status]),
     tick: (folderPath, index, done) => calls.push(['tick', folderPath, index, done]),
     openLink: (url) => calls.push(['link', url]),
+    edit: (folderPath, patch) => calls.push(['edit', folderPath, patch]),
+    addCriterion: (folderPath, text) => calls.push(['addCriterion', folderPath, text]),
+    linkTest: (folderPath, test, comment) => calls.push(['linkTest', folderPath, test, comment]),
   }
 }
 
@@ -399,5 +402,192 @@ describe('the detail view', () => {
   it('draws no finding beside the level’s own sections', () => {
     show(detail({ criteria: [], sections: [{ heading: 'Notes', body: 'Fine.' }] }), actions())
     expect(document.querySelector('.board-detail-finding')).toBeNull()
+  })
+
+  // reason: this is the whole feature — the detail is an editor now. The lead
+  // reads as rendered prose and edits as its raw source, and the save is a
+  // `description` patch, wired to the same store write a status change is.
+  it('edits the description as prose and saves a description patch', () => {
+    const on = actions()
+    show(detail(), on)
+    const field = document.querySelector<HTMLElement>('.edit-field')
+    expect(field?.querySelector('.board-detail-prose')?.textContent).toContain('The session dies')
+    field?.querySelector<HTMLElement>('.edit-field-read')?.click()
+    const textarea = field?.querySelector<HTMLTextAreaElement>('.edit-field-input')
+    expect(textarea).not.toBeNull()
+    // The textarea is seeded with the raw source, not the rendered read.
+    expect(textarea?.value).toBe('The session dies at ten minutes.')
+    if (textarea !== null && textarea !== undefined) {
+      textarea.value = 'It dies at five.'
+      textarea.dispatchEvent(new Event('blur'))
+    }
+    expect(on.calls).toContainEqual(['edit', 'campaigns/q3/missions/m1/tasks/t1', { description: 'It dies at five.' }])
+  })
+
+  // reason: a modelled section the level owns is prose the reader edits in
+  // place, and the save names its heading so main can find the field it fills
+  // — one section per call, which is the shape the bridge takes.
+  it('edits a modelled section and saves a section patch named by its heading', () => {
+    const on = actions()
+    show(detail({ criteria: [], sections: [{ heading: 'Notes', body: 'A start.' }] }), on)
+    const notes = [...document.querySelectorAll<HTMLElement>('.edit-field')].find((f) => f.textContent?.includes('A start.'))
+    notes?.querySelector<HTMLElement>('.edit-field-read')?.click()
+    const textarea = notes?.querySelector<HTMLTextAreaElement>('.edit-field-input')
+    if (textarea !== null && textarea !== undefined) {
+      textarea.value = 'A finish.'
+      textarea.dispatchEvent(new Event('blur'))
+    }
+    expect(on.calls).toContainEqual([
+      'edit',
+      'campaigns/q3/missions/m1/tasks/t1',
+      { section: { heading: 'Notes', body: 'A finish.' } },
+    ])
+  })
+
+  // reason: THE hard rule. A stray section is a section this level does not
+  // own, drawn under a finding because the file is the only place it belongs.
+  // Editing it in place would write the malformed body back as if it belonged,
+  // which is the repair the board never makes — so its prose is not inside an
+  // edit field, and clicking it opens no textarea to save through.
+  it('keeps a stray section read-only, with no edit field over it', () => {
+    const on = actions()
+    show(
+      detail({
+        criteria: [],
+        sections: [
+          { heading: 'Notes', body: '' },
+          { heading: 'Target', body: 'Ship it.', stray: true },
+        ],
+      }),
+      on,
+    )
+    const stray = [...document.querySelectorAll<HTMLElement>('.board-detail-prose')].find((p) => p.textContent?.includes('Ship it.'))
+    expect(stray).not.toBeNull()
+    expect(stray?.closest('.edit-field')).toBeNull()
+    stray?.click()
+    expect(document.querySelector('.edit-field-input')).toBeNull()
+    expect(on.calls).toEqual([])
+  })
+
+  // reason: `editField` saves on blur and only when the text changed, because
+  // the board re-reads after every write — a blur that fired an unchanged save
+  // would round-trip to main for nothing.
+  it('saves nothing when a field is blurred unchanged', () => {
+    const on = actions()
+    show(detail(), on)
+    const field = document.querySelector<HTMLElement>('.edit-field')
+    field?.querySelector<HTMLElement>('.edit-field-read')?.click()
+    field?.querySelector<HTMLTextAreaElement>('.edit-field-input')?.dispatchEvent(new Event('blur'))
+    expect(on.calls).toEqual([])
+  })
+
+  // reason: the ticks are the read of the checklist and the Add control is how
+  // it grows; both belong under Acceptance Criteria, and adding one is a store
+  // write that appends it unticked.
+  it('adds an acceptance criterion from the Add control, keeping the ticks', () => {
+    const on = actions()
+    show(detail(), on)
+    expect(document.querySelectorAll('.board-detail-tick').length).toBe(2)
+    document.querySelector<HTMLElement>('.board-detail-add .edit-field-read')?.click()
+    const textarea = document.querySelector<HTMLTextAreaElement>('.board-detail-add .edit-field-input')
+    expect(textarea).not.toBeNull()
+    if (textarea !== null && textarea !== undefined) {
+      textarea.value = 'It rotates'
+      textarea.dispatchEvent(new Event('blur'))
+    }
+    expect(on.calls).toContainEqual(['addCriterion', 'campaigns/q3/missions/m1/tasks/t1', 'It rotates'])
+  })
+
+  // reason: a bug and a test own no acceptance criteria, so the level that has
+  // no section for them has no Add control either — the store would refuse it.
+  it('offers no Add-criterion control on a bug', () => {
+    show(detail({ level: 'bug', criteria: [], sections: [{ heading: 'Steps to Reproduce', body: 'It broke.' }] }), actions())
+    expect(document.querySelector('.board-detail-add')).toBeNull()
+  })
+
+  // reason: only a campaign or a mission owns a `documents` key, so those are
+  // the levels that draw the list. It is read-only for now: the bridge has no
+  // documents patch, and this surface never reaches around the store — attach
+  // waits on a seam of its own.
+  it('lists a campaign’s documents with no attach control, there being no store seam', () => {
+    show(
+      detail({
+        level: 'campaign',
+        parent: undefined,
+        status: 'idea',
+        documents: [{ label: 'The spec', target: 'docs/spec.md' }],
+      }),
+      actions(),
+    )
+    const docs = document.querySelector('.board-detail-docs')
+    expect(docs?.textContent).toContain('The spec')
+    expect(docs?.textContent).toContain('docs/spec.md')
+    expect(docs?.querySelector('input')).toBeNull()
+    expect(docs?.querySelector('button')).toBeNull()
+  })
+
+  // reason: a level that owns no documents key would draw a heading over
+  // nothing, which reads as a field the file failed to fill rather than one it
+  // never has.
+  it('draws no Documents section for a task', () => {
+    show(detail(), actions())
+    expect(document.querySelector('.board-detail-docs')).toBeNull()
+  })
+
+  // reason: a workitem declares what proves it, so its Validated-by list carries
+  // an Add-test control — shown even before the first link, which is how the
+  // first one is added. The verdict is main's to fix, so only path and comment
+  // cross.
+  it('links a test from the Add-test control on a workitem', () => {
+    const on = actions()
+    show(detail({ links: [] }), on)
+    const form = document.querySelector<HTMLFormElement>('.board-detail-add-test')
+    expect(form).not.toBeNull()
+    const inputs = form?.querySelectorAll<HTMLInputElement>('input')
+    if (inputs !== undefined) {
+      inputs[0].value = 'tests/login'
+      inputs[1].value = 'covers the timeout'
+    }
+    form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    expect(on.calls).toContainEqual(['linkTest', 'campaigns/q3/missions/m1/tasks/t1', 'tests/login', 'covers the timeout'])
+  })
+
+  // reason: an empty path names no test, so submitting one links nothing rather
+  // than sending the store a link with nothing behind it.
+  it('links nothing when the test path is blank', () => {
+    const on = actions()
+    show(detail({ links: [] }), on)
+    document.querySelector<HTMLFormElement>('.board-detail-add-test')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    expect(on.calls).toEqual([])
+  })
+
+  // reason: a bug is not a workitem — the store refuses to link a test to one —
+  // so it gets no Add-test control that would only ever offer a refused write.
+  it('offers no Add-test control on a bug', () => {
+    show(detail({ level: 'bug', criteria: [], links: [], sections: [{ heading: 'Steps to Reproduce', body: 'It broke.' }] }), actions())
+    expect(document.querySelector('.board-detail-add-test')).toBeNull()
+  })
+
+  // reason: a test's own detail is editable the same way for its own sections —
+  // it has no status and no criteria, but its Steps and the rest are prose it
+  // edits in place, saved as a section patch by heading.
+  it('edits a test’s own section as prose', () => {
+    const on = actions()
+    show(
+      detail({ level: 'test', status: '', parent: undefined, criteria: [], sections: [{ heading: 'Steps', body: 'Do it.' }] }),
+      on,
+    )
+    const steps = [...document.querySelectorAll<HTMLElement>('.edit-field')].find((f) => f.textContent?.includes('Do it.'))
+    steps?.querySelector<HTMLElement>('.edit-field-read')?.click()
+    const textarea = steps?.querySelector<HTMLTextAreaElement>('.edit-field-input')
+    if (textarea !== null && textarea !== undefined) {
+      textarea.value = 'Do it twice.'
+      textarea.dispatchEvent(new Event('blur'))
+    }
+    expect(on.calls).toContainEqual([
+      'edit',
+      'campaigns/q3/missions/m1/tasks/t1',
+      { section: { heading: 'Steps', body: 'Do it twice.' } },
+    ])
   })
 })

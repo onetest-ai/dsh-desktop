@@ -404,6 +404,15 @@ const detailActions: DetailActions = {
     // holds the preload.
     window.pane.openExternal(url)
   },
+  edit: (folderPath, patch) => {
+    void edit(folderPath, patch)
+  },
+  addCriterion: (folderPath, text) => {
+    void addCriterion(folderPath, text)
+  },
+  linkTest: (folderPath, test, comment) => {
+    void linkTest(folderPath, test, comment)
+  },
 }
 
 /**
@@ -616,6 +625,59 @@ async function flip(folderPath: string, index: number, done: boolean): Promise<v
   const out = await window.pane.tickCriterion(folderPath, index, done)
   refusal = out.ok ? undefined : out.reason
   draw()
+}
+
+/**
+ * Save an edited prose field, and say so only when the store would not.
+ *
+ * Unlike `move` and `flip`, this never redraws on its own — not even on
+ * success. The detail's edit fields hold what the user just typed, and `draw`
+ * rebuilds the whole surface from the entity as it was last read, which is
+ * stale until the write's own `tasks:changed` brings a fresh one. So on success
+ * the note is cleared and the redraw is left to that notice; on a refusal only
+ * the note is drawn, over a detail left standing — which is what keeps the
+ * typed edit from being thrown away along with the reason it was refused.
+ * @param folderPath - the entity being edited.
+ * @param patch - the description or the one section the field changed.
+ * @returns resolution once the answer has been shown.
+ */
+async function edit(folderPath: string, patch: { description?: string; section?: { heading: string; body: string } }): Promise<void> {
+  const out = await window.pane.updateBoardEntity(folderPath, patch)
+  refusal = out.ok ? undefined : out.reason
+  drawNote()
+}
+
+/**
+ * Append an acceptance criterion, and say so only when the store would not.
+ *
+ * `edit`'s shape and `edit`'s reason: the add field holds what the user typed,
+ * so a refusal draws the note without rebuilding the surface, and a success
+ * leaves the redraw — the new criterion, the emptied field — to the
+ * `tasks:changed` the write brings.
+ * @param folderPath - the entity to add it to.
+ * @param text - what has to be true.
+ * @returns resolution once the answer has been shown.
+ */
+async function addCriterion(folderPath: string, text: string): Promise<void> {
+  const out = await window.pane.addBoardCriterion(folderPath, text)
+  refusal = out.ok ? undefined : out.reason
+  drawNote()
+}
+
+/**
+ * Declare that a test proves this workitem, and say so only when the store would not.
+ *
+ * `edit`'s shape and `edit`'s reason. The verdict is main's to fix — a freshly
+ * declared link is unrun — so only the path and the comment cross here.
+ * @param folderPath - the workitem being proved.
+ * @param test - the test's folder path.
+ * @param comment - why, in the reader's own words; may be empty.
+ * @returns resolution once the answer has been shown.
+ */
+async function linkTest(folderPath: string, test: string, comment: string): Promise<void> {
+  const out = await window.pane.linkBoardTest(folderPath, test, comment)
+  refusal = out.ok ? undefined : out.reason
+  drawNote()
 }
 
 /**

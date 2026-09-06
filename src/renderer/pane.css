@@ -1808,6 +1808,111 @@ body {
   color: var(--dsw-alias-label-secondary);
 }
 
+/* The detail is an editor: a prose field reads as rendered markdown and, on a
+   click, becomes the raw source in a textarea. The read state carries a quiet
+   hover so it reads as editable without a control cluttering every paragraph;
+   the input is the modal's own input, sized to the prose measure, with the
+   accent for its focus ring. `bg-layer-2` rather than the brief's `bg-layer-1`,
+   which this stylesheet does not define — the select and the modal inputs both
+   use layer-2, so the field matches the controls already on the surface. */
+.edit-field {
+  margin: 0;
+}
+
+.edit-field-read {
+  border-radius: 4px;
+  cursor: text;
+}
+
+.edit-field-read:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* An add control's empty read is the invitation itself — muted like a blank
+   section, since there is nothing yet to render. */
+.edit-field-empty {
+  color: var(--dsw-alias-label-tertiary);
+  font-style: italic;
+}
+
+.edit-field-input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 68ch;
+  padding: 4px 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  line-height: 1.5;
+  resize: none;
+  overflow: hidden;
+}
+
+.edit-field-input:focus {
+  border-color: var(--dsw-alias-state-business-primary);
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-state-business-primary);
+}
+
+/* The Add controls: quiet, sitting under the list they grow, and consistent
+   with the create modal's own inputs. */
+.board-detail-add {
+  margin-top: 4px;
+}
+
+.board-detail-add-test {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.board-detail-add-input {
+  padding: 4px 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
+.board-detail-add-input:focus {
+  border-color: var(--dsw-alias-state-business-primary);
+  outline: none;
+}
+
+.board-detail-add-button {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* The documents a campaign or a mission links. Read-only for now: the bridge
+   has no documents patch, so this is a list and not yet a control. */
+.board-detail-docs {
+  margin-top: 4px;
+}
+
+.board-detail-doc {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.board-detail-doc-target {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
 /* A row is a whole line, unlike a card: a detail is read down the page, and
    the name is what the eye is running along. */
 .board-detail-row {

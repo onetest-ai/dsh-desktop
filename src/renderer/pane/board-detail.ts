@@ -1,5 +1,6 @@
 import { BOARD_STATUSES, statusLabel } from './board-rows.ts'
 import type { EntityDetailView } from './bridge.ts'
+import { editField } from './edit-field.ts'
 import { openMarkdownLink, renderMarkdown } from './markdown.ts'
 import { statusGlyph } from './status-glyph.ts'
 
@@ -25,6 +26,17 @@ export interface DetailActions {
   tick: (folderPath: string, index: number, done: boolean) => void
   /** Send a link in the prose where the user's links go, which is not here. */
   openLink: (url: string) => void
+  /**
+   * Save one edited prose field: the lead as `description`, or one modelled
+   * section by its heading. Never a stray section — a heading the level does
+   * not own patches nothing on the far side, and this surface does not offer
+   * to edit one, so the two agree that malformed data is fixed in the file.
+   */
+  edit: (folderPath: string, patch: { description?: string; section?: { heading: string; body: string } }) => void
+  /** Append one acceptance criterion, unticked; the store refuses a level that owns no criteria. */
+  addCriterion: (folderPath: string, text: string) => void
+  /** Declare that a test proves this workitem; a freshly declared link is unrun until something runs it. */
+  linkTest: (folderPath: string, test: string, comment: string) => void
 }
 
 /**
@@ -128,6 +140,204 @@ function prose(text: string, on: DetailActions): HTMLElement {
     if (url !== undefined) on.openLink(url)
   })
   return node
+}
+
+/**
+ * One editable block of prose: rendered markdown to read, raw markdown to edit.
+ *
+ * `editField` from `./edit-field.ts` is the model here but not the tool, and the
+ * difference is the read state alone. That field shows its value as plain text;
+ * this surface must show it as *rendered* markdown — a Steps table read back as
+ * `| a | b |` is the wall of pipes the whole file format was changed to end, and
+ * the section tests pin the table, the sanitiser and the one followed link to
+ * `.board-detail-prose`. So the read state is `prose` (rendered, sanitised, its
+ * link handled the same way) and only the edit state is the raw textarea
+ * `editField` shows throughout. That the two differ — pretty to read, raw to
+ * write — is octoshell's own behaviour and is deliberate: what saves is the
+ * source, and the board re-reads and re-renders it on the redraw a save brings.
+ *
+ * Save is on blur and only when the text changed, `editField`'s rule for
+ * `editField`'s reason: this detail is re-read after every write, so a blur
+ * that fired a same-value save would round-trip to main for nothing. A refusal
+ * is the one write that brings no redraw, and then this control is left showing
+ * what was typed rather than rebuilt from a stale copy — which is what "a
+ * refusal shows inline without losing the edit" means for a body.
+ * @param value - the raw markdown, shown rendered until clicked.
+ * @param placeholder - what an empty field invites, and the textarea's own placeholder.
+ * @param save - called once, on blur, with the new source when it differs from the last saved.
+ * @param on - what the surface can do, for the one link the rendered read may follow.
+ * @returns the control's root, read state showing first.
+ */
+function editableProse(value: string, placeholder: string, save: (next: string) => void, on: DetailActions): HTMLElement {
+  const root = document.createElement('div')
+  root.className = 'edit-field'
+  let saved = value
+
+  const resize = (textarea: HTMLTextAreaElement): void => {
+    // Auto first, so shrinking the text shrinks the box — scrollHeight only
+    // grows to fit what is there if the height is reset first.
+    textarea.style.height = 'auto'
+    textarea.style.height = `${textarea.scrollHeight}px`
+  }
+
+  function showEdit(): void {
+    root.replaceChildren()
+    const textarea = document.createElement('textarea')
+    textarea.className = 'edit-field-input'
+    textarea.placeholder = placeholder
+    textarea.value = saved
+    // Escape sets this before it swaps the DOM back, so the blur that removing a
+    // focused element raises finds a field already reverted and saves nothing.
+    let reverted = false
+    textarea.addEventListener('input', () => resize(textarea))
+    textarea.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        reverted = true
+        showRead(saved)
+      }
+    })
+    textarea.addEventListener('blur', () => {
+      if (reverted) return
+      const next = textarea.value
+      if (next !== saved) {
+        saved = next
+        save(next)
+      }
+      showRead(saved)
+    })
+    root.appendChild(textarea)
+    resize(textarea)
+    textarea.focus()
+  }
+
+  function showRead(text: string): void {
+    root.replaceChildren()
+    // A blank body keeps the read-only detail's own blank line, so an empty
+    // section still reads as an invitation rather than a broken view — now
+    // clickable, because the invitation is the whole point of it being here.
+    const read = text.trim() === '' ? blankLine() : prose(text, on)
+    read.classList.add('edit-field-read')
+    read.tabIndex = 0
+    read.setAttribute('role', 'button')
+    read.addEventListener('click', (event) => {
+      // A link in the rendered read is followed, not an opening to edit: its own
+      // handler ran already, and a click on it must not also swap a textarea in
+      // over the thing that was just clicked.
+      if ((event.target as Element | null)?.closest('a') !== null) return
+      showEdit()
+    })
+    read.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        showEdit()
+      }
+    })
+    root.appendChild(read)
+  }
+
+  showRead(saved)
+  return root
+}
+
+/**
+ * The control that appends one acceptance criterion.
+ *
+ * `editField` in add mode, which is where this surface does use it: a criterion
+ * is one line on disk — `AcceptanceCriterion` says so — so a single-line field
+ * whose placeholder is the invitation and whose save is the append is exactly
+ * the shape, no rendered read to want. It commits on blur or Enter and only
+ * when something was typed, and the board's re-read redraws it empty again, so
+ * there is no separate step that clears the box — the redraw is it.
+ * @param detail - the entity being drawn.
+ * @param on - what the surface can do.
+ * @returns the control, ready to append under the criteria list.
+ */
+function addCriterionFor(detail: EntityDetailView, on: DetailActions): HTMLElement {
+  const box = document.createElement('div')
+  box.className = 'board-detail-add'
+  box.append(
+    editField({
+      value: '',
+      placeholder: 'Add a criterion',
+      multiline: false,
+      onSave: (text) => {
+        const trimmed = text.trim()
+        if (trimmed !== '') on.addCriterion(detail.folderPath, trimmed)
+      },
+    }),
+  )
+  return box
+}
+
+/**
+ * The control that declares a test proves this workitem.
+ *
+ * Two fields and a submit rather than `editField`'s one value, because a link
+ * is a pairing and not a line of prose: the test's own folder path, and a
+ * comment saying why. The comment may be empty — the store allows it — but the
+ * path may not, so an empty path submits nothing. No verdict is asked for: a
+ * freshly declared link is `not_run` until something runs it, which main fixes.
+ * @param detail - the workitem being drawn.
+ * @param on - what the surface can do.
+ * @returns the control, ready to append under the Validated-by list.
+ */
+function addTestFor(detail: EntityDetailView, on: DetailActions): HTMLElement {
+  const form = document.createElement('form')
+  form.className = 'board-detail-add-test'
+  const test = document.createElement('input')
+  test.type = 'text'
+  test.className = 'board-detail-add-input'
+  test.placeholder = 'Test folder path'
+  const comment = document.createElement('input')
+  comment.type = 'text'
+  comment.className = 'board-detail-add-input'
+  comment.placeholder = 'Why, if worth saying'
+  const submit = document.createElement('button')
+  submit.type = 'submit'
+  submit.className = 'board-detail-add-button'
+  submit.textContent = 'Add test'
+  form.append(test, comment, submit)
+  form.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const path = test.value.trim()
+    if (path === '') return
+    on.linkTest(detail.folderPath, path, comment.value.trim())
+  })
+  return form
+}
+
+/**
+ * The linked documents a campaign or a mission carries.
+ *
+ * Read-only, and that is a stated gap rather than an oversight: a document
+ * lives in a `documents:` frontmatter key, and the bridge's `updateBoardEntity`
+ * patches `description`, `notes` and one section — it has no documents seam.
+ * Reaching around the store with a filesystem write of our own is the one thing
+ * this surface never does, so the list is shown and an attach control is not;
+ * attaching a document waits on a store write of its own. Drawn only for the
+ * two levels that own the key, since every other level carries `[]` and a
+ * heading over nothing would read as a field the file failed to fill rather
+ * than one it never has.
+ * @param detail - the entity being drawn.
+ * @returns the section, or nothing for a level that owns no documents.
+ */
+function documentsFor(detail: EntityDetailView): HTMLElement | undefined {
+  if (detail.level !== 'campaign' && detail.level !== 'mission') return undefined
+  const box = document.createElement('section')
+  box.className = 'board-detail-docs'
+  box.append(heading('Documents'))
+  if (detail.documents.length === 0) {
+    box.append(blankLine())
+    return box
+  }
+  for (const doc of detail.documents) {
+    const row = document.createElement('div')
+    row.className = 'board-detail-doc'
+    row.append(tag('board-detail-doc-label', doc.label))
+    row.append(tag('board-detail-doc-target', doc.target))
+    box.append(row)
+  }
+  return box
 }
 
 /**
@@ -374,7 +584,13 @@ function linksFor(detail: EntityDetailView, on: DetailActions): HTMLElement | un
     }
     return box
   }
-  if (detail.links.length === 0) return undefined
+  // Only a campaign, a mission or a task declares what proves it — `linkTest`
+  // refuses every other level — so those are the levels that draw the section
+  // and its add control even before the first link, which is how the first one
+  // is added. A bug is not one of them: it carries no links and gets no control
+  // that would only ever offer a write the store comes back refusing.
+  const workitem = detail.level === 'campaign' || detail.level === 'mission' || detail.level === 'task'
+  if (!workitem && detail.links.length === 0) return undefined
   const box = document.createElement('section')
   box.className = 'board-detail-links'
   box.append(heading('Validated by'))
@@ -389,6 +605,7 @@ function linksFor(detail: EntityDetailView, on: DetailActions): HTMLElement | un
     if (link.bug !== undefined) row.append(tag('board-detail-row-bug', link.bug))
     box.append(row)
   }
+  if (workitem) box.append(addTestFor(detail, on))
   return box
 }
 
@@ -425,23 +642,46 @@ export function renderDetail(detail: EntityDetailView, on: DetailActions, under:
     )
     box.append(line)
   }
-  box.append(detail.description === '' ? blankLine() : prose(detail.description, on))
+  // The lead is editable prose: click it and it becomes the raw markdown in a
+  // textarea, and the save is a `description` patch.
+  box.append(
+    editableProse(detail.description, 'Describe this', (next) => {
+      on.edit(detail.folderPath, { description: next })
+    }, on),
+  )
   // A test has no status, so there is nothing for a select to write.
   if (detail.status !== '') box.append(statusFor(detail, on))
   for (const section of detail.sections) {
     box.append(heading(section.heading))
     if (section.heading === 'Acceptance Criteria') {
       box.append(criteriaFor(detail, on))
+      box.append(addCriterionFor(detail, on))
       continue
     }
-    // A section this level does not own carries no blank case: main sends it
-    // only when it has content, since a heading no level asked for is not an
-    // invitation to fill anything in.
-    if (section.stray === true) box.append(sectionFinding(detail.level, section.heading))
-    box.append(section.body.trim() === '' ? blankLine() : prose(section.body, on))
+    if (section.stray === true) {
+      // A stray section stays read-only. It is a section this level does not
+      // own, drawn under a finding because the file is the only place it can be
+      // fixed; making it editable here would write the malformed body back
+      // through a save — which patches nothing for a heading the level does not
+      // own anyway — as if it belonged, the exact repair the board's rule for
+      // malformed data refuses to make. A section this level does not own carries
+      // no blank case either: main sends it only when it has content.
+      box.append(sectionFinding(detail.level, section.heading))
+      box.append(section.body.trim() === '' ? blankLine() : prose(section.body, on))
+      continue
+    }
+    // A modelled section the level owns is editable, the same way the lead is,
+    // saving one `section` patch named by its heading.
+    box.append(
+      editableProse(section.body, `Add ${section.heading.toLowerCase()}`, (next) => {
+        on.edit(detail.folderPath, { section: { heading: section.heading, body: next } })
+      }, on),
+    )
   }
   const stray = strayCriteriaFor(detail)
   if (stray !== undefined) box.append(stray)
+  const docs = documentsFor(detail)
+  if (docs !== undefined) box.append(docs)
   if (detail.children.length > 0) {
     const kids = document.createElement('section')
     kids.className = 'board-detail-children'
