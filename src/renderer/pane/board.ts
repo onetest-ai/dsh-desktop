@@ -1,7 +1,8 @@
 import { backButton, type DetailActions, renderDetail, type Surface, tag } from './board-detail.ts'
-import { BOARD_STATUSES, chipOf, groupBoard, statusLabel, type EntityView, type LaneView } from './board-rows.ts'
+import { BOARD_STATUSES, groupBoard, statusLabel, type EntityView, type LaneView } from './board-rows.ts'
 import './bridge.ts'
 import type { BoardViewData, EntityDetailView, SuiteView, TestView } from './bridge.ts'
+import { statusGlyph, verdictDot } from './status-glyph.ts'
 import { followHarnessTheme } from './theme.ts'
 
 // Applies the harness's dark-mode attribute to this page; every colour here
@@ -169,6 +170,15 @@ function cardFor(entity: EntityView): HTMLElement {
   card.className = 'board-card'
   card.draggable = true
   card.dataset.folder = entity.folderPath
+  // The slug — the folder's own last segment — above the name: it is the
+  // thing an agent's commit message or a terminal path names, and the name is
+  // the reader's own words for the same entity. Ordering them slug-first reads
+  // like a file header, machine line above human one.
+  const segments = entity.folderPath.split('/').filter((segment) => segment !== '')
+  const slug = document.createElement('span')
+  slug.className = 'board-card-slug'
+  slug.textContent = segments.length > 0 ? segments[segments.length - 1] : entity.folderPath
+  card.append(slug)
   const name = document.createElement('span')
   name.className = 'board-card-name'
   name.textContent = entity.name
@@ -180,11 +190,17 @@ function cardFor(entity: EntityView): HTMLElement {
   // The tree reveals a task or a bug as its own card: a lane of thirty cards
   // highlighted whole is the hunt the reveal was meant to end.
   if (entity.folderPath === revealed) card.classList.add('board-card-revealed')
-  const chip = chipOf(entity)
-  if (chip !== undefined) {
-    const node = tag('board-chip', chip.text)
-    if (chip.failing) node.classList.add('board-chip-failing')
-    card.append(node)
+  // The dot carries the verdict now — pass, fail, or none — so the word
+  // "passing" and the failing-red text it used to colour are both gone from
+  // here; a card with nothing to validate it draws no dot and no count, the
+  // same absence `chipOf` used to answer with.
+  const { pass, total } = entity.verdicts
+  if (total > 0) {
+    const verdicts = document.createElement('span')
+    verdicts.className = 'board-card-verdicts'
+    verdicts.append(verdictDot(pass, total))
+    verdicts.append(tag('board-card-verdict-count', `${String(pass)}/${String(total)}`))
+    card.append(verdicts)
   }
   card.addEventListener('click', () => {
     // The detail, not the file. The file is a document now and worth opening,
@@ -238,10 +254,24 @@ function columnFor(status: string, cards: EntityView[]): HTMLElement {
   column.className = `board-column board-column-${status}`
   const title = document.createElement('p')
   title.className = 'board-column-title'
+  // The glyph first, so a column reads by its shape before anyone reads the
+  // word beside it — the same mark this status draws on every card sitting
+  // under it and on the lane tag alongside it, so one status is one shape
+  // wherever the board draws it.
+  title.append(statusGlyph(status))
   // The label, not the stored value: `validation` is the file's word and
-  // Validation is the reader's. The class beside it keeps the raw one, which
-  // is what the stylesheet and the drop both address the column by.
-  title.textContent = statusLabel(status)
+  // Validation is the reader's. The class on the column itself keeps the raw
+  // one, which is what the stylesheet and the drop both address it by.
+  const label = document.createElement('span')
+  label.className = 'board-column-label'
+  label.textContent = statusLabel(status)
+  title.append(label)
+  // How many cards sit under the label, so a column empty enough to matter
+  // does not need counting by eye.
+  const count = document.createElement('span')
+  count.className = 'board-column-count'
+  count.textContent = String(cards.length)
+  title.append(count)
   column.append(title)
   for (const card of cards) column.append(cardFor(card))
   column.addEventListener('dragover', (event) => {
@@ -278,8 +308,14 @@ function laneFor(lane: LaneView): HTMLElement {
   head.append(title)
   // The label, as the column heading beside it reads: the same status on the
   // same screen, drawn twice, should not read as `executing` in one place and
-  // Executing in the other.
-  if (lane.status !== '') head.append(tag('board-lane-status', statusLabel(lane.status)))
+  // Executing in the other. The glyph beside it is the same one that heading
+  // draws too, so the lane's own status and the column it points into read as
+  // one shape rather than two spellings of it.
+  if (lane.status !== '') {
+    const statusTag = tag('board-lane-status', statusLabel(lane.status))
+    statusTag.prepend(statusGlyph(lane.status))
+    head.append(statusTag)
+  }
   const add = document.createElement('button')
   add.type = 'button'
   add.className = 'board-lane-add'

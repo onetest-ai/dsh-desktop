@@ -250,9 +250,22 @@ describe('the board', () => {
   // the file uses.
   it('draws a column for every status, empty ones included', async () => {
     await load(bridge(oneMission()))
-    const headings = [...document.querySelectorAll('.board-column-title')].map((node) => node.textContent)
+    const headings = [...document.querySelectorAll('.board-column-label')].map((node) => node.textContent)
     expect(headings).toEqual(['Idea', 'Backlog', 'Executing', 'Validation', 'Done'])
     expect(document.querySelectorAll('.board-column-validation').length).toBe(1)
+  })
+
+  // reason: a column used to be its raw stored value, lowercase, with nothing
+  // marking which shape belongs to which status — this is the glyph that
+  // fixes that, and it has to sit before the label rather than after it.
+  it('marks every column heading with the status’s own glyph, before the label', async () => {
+    await load(bridge(oneMission()))
+    const title = document.querySelector('.board-column-validation .board-column-title')
+    const glyph = title?.querySelector('.status-glyph')
+    expect(glyph).not.toBeNull()
+    expect((glyph as HTMLElement | null)?.dataset.status).toBe('validation')
+    const label = title?.querySelector('.board-column-label')
+    expect(glyph?.compareDocumentPosition(label as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   })
 
   // reason: the lane tag was the last status on this surface drawn raw, so
@@ -261,6 +274,15 @@ describe('the board', () => {
   it('draws a lane’s own status as a label too', async () => {
     await load(bridge(oneMission()))
     expect(document.querySelector('.board-lane-status')?.textContent).toBe('Idea')
+  })
+
+  // reason: the lane's status tag carries only a word today; the column
+  // heading beside it now leads with the status's shape, and the two should
+  // read as the same status rather than the lane looking bare next to it.
+  it('marks the lane’s status tag with the status’s own glyph', async () => {
+    await load(bridge(oneMission()))
+    const glyph = document.querySelector('.board-lane-status .status-glyph')
+    expect((glyph as HTMLElement | null)?.dataset.status).toBe('idea')
   })
 
   it('puts a card in the column its status names', async () => {
@@ -286,10 +308,43 @@ describe('the board', () => {
   })
 
   // reason: a test has no status, so there is no column it belongs in — the
-  // workitem that names it carries a chip instead.
-  it('shows a validation chip rather than a card for a test', async () => {
+  // workitem that names it carries a verdict instead, and the verdict is now
+  // a coloured dot rather than a word: a failing card must not read the same
+  // as one with nothing run against it yet.
+  it('shows a verdict dot on a card, not a bare validation word', async () => {
     await load(bridge(oneMission({ verdicts: { pass: 1, total: 2 } })))
-    expect(document.querySelector('.board-chip')?.textContent).toBe('1/2 passing')
+    const dot = document.querySelector('.board-card .verdict-dot')
+    expect(dot).not.toBeNull()
+    expect(dot?.classList.contains('verdict-dot-fail')).toBe(true)
+    expect(document.querySelector('.board-card .board-card-verdict-count')?.textContent).toBe('1/2')
+  })
+
+  it('draws a passing dot when every verdict passed, and none when nothing has run', async () => {
+    await load(bridge(oneMission({ verdicts: { pass: 2, total: 2 } })))
+    expect(document.querySelector('.board-card .verdict-dot')?.classList.contains('verdict-dot-pass')).toBe(true)
+    await load(bridge(oneMission({ verdicts: { pass: 0, total: 0 } })))
+    expect(document.querySelector('.board-card .verdict-dot')).toBeNull()
+    expect(document.querySelector('.board-card .board-card-verdict-count')).toBeNull()
+  })
+
+  // reason: the slug is the folder's own last segment — what an agent's own
+  // path calls the card — and it has to sit above the human name rather than
+  // beside or after it.
+  it('shows the folder’s last segment as a slug above the card’s name', async () => {
+    await load(bridge(oneMission()))
+    const card = document.querySelector('.board-card')
+    const slug = card?.querySelector('.board-card-slug')
+    const name = card?.querySelector('.board-card-name')
+    expect(slug?.textContent).toBe('t1')
+    expect(slug?.compareDocumentPosition(name as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+
+  // reason: the dot replaced the text chip on a card, not the type tag a bug
+  // carries — the two say different things and only one of them changed.
+  it('still shows a bug’s type tag beside its slug and verdict', async () => {
+    await load(bridge(oneMission({ campaignBug: true })))
+    const bugCard = [...document.querySelectorAll('.board-card')].find((card) => card.textContent?.includes('B1'))
+    expect(bugCard?.querySelector('.board-card-kind')?.textContent).toBe('bug')
   })
 
   // reason: this is the complaint the whole change is about — a click used to
