@@ -55,6 +55,23 @@ let refusal: string | undefined
 let revealed: string | undefined
 
 /**
+ * A folder path the tree named before the first read had landed, to replay once it has.
+ *
+ * The reveal handler decides what a path is — a test or an entity — by looking
+ * it up in the last read, and before that read lands there is no last read to
+ * look in. An entity revealed that early comes right on its own: `revealed`
+ * holds the path across the redraw the read triggers, and that redraw marks the
+ * card the path names. A test does not, and this is the difference the user
+ * found: mis-taken for an entity it never matched, it left `revealed` pointing
+ * at a path no card carries, and the panel sat on the columns rather than
+ * opening the test's detail. So the reveal is held here instead of guessed at,
+ * and `refresh` replays it through the same handler the moment the board it
+ * needs to read is in hand — the panel-local twin of main's own `revealPending`,
+ * which holds a reveal that arrives before the window has anything to show.
+ */
+let pendingReveal: string | undefined
+
+/**
  * The folder paths of the campaigns and missions the reader has folded shut.
  *
  * A posture and not a decision, so it lives here rather than in a file: a board
@@ -549,14 +566,24 @@ function testRow(test: TestView): HTMLElement {
   row.type = 'button'
   row.className = 'board-tests-row'
   const name = document.createElement('span')
-  name.className = 'board-detail-row-name'
+  name.className = 'board-tests-name'
   name.textContent = test.name
   row.append(name)
+  // The dot and the count sit in a column of their own, right-aligned and
+  // tabular, so `1/2` on one row and `10/20` on the next line up their slashes
+  // rather than drifting with the name beside them — a card's dot is one mark
+  // per card, but a list of tests is read straight down this edge. The column
+  // is drawn even for a test with nothing to prove, so the names it holds apart
+  // keep their measure; the dot and count are what stay absent, as they do on a
+  // card that has nothing to validate it.
+  const verdict = document.createElement('span')
+  verdict.className = 'board-tests-verdict'
   const { pass, total } = test.validates
   if (total > 0) {
-    row.append(verdictDot(pass, total))
-    row.append(tag('board-card-verdict-count', `${String(pass)}/${String(total)}`))
+    verdict.append(verdictDot(pass, total))
+    verdict.append(tag('board-card-verdict-count', `${String(pass)}/${String(total)}`))
   }
+  row.append(verdict)
   row.addEventListener('click', () => {
     // The detail, which is the surface everything else on this board opens
     // into: a list that could only be looked at would be a dead end, and the
@@ -567,11 +594,27 @@ function testRow(test: TestView): HTMLElement {
 }
 
 /**
+ * How many tests sit anywhere beneath a suite.
+ *
+ * The count a suite heading carries, the same figure a column head draws over
+ * its cards: a section says how much is under it before the reader opens it, so
+ * a suite of thirty and a suite of one do not read alike at a glance.
+ * @param suite - the suite to count through.
+ * @returns the number of tests it holds, at every depth.
+ */
+function testsUnder(suite: SuiteView): number {
+  return suite.tests.length + suite.suites.reduce((sum, child) => sum + testsUnder(child), 0)
+}
+
+/**
  * One suite and everything beneath it, headings first.
  *
  * Depth is drawn as indentation rather than as a fold: the list is read at a
  * glance and a suite tree is shallow, so a twisty here would be a control
- * whose only use is putting back what it just took away.
+ * whose only use is putting back what it just took away. A campaign group on
+ * this board shows its name over its lanes and steps them in under a rule; a
+ * suite is the same shape one surface over — a quiet heading, its own tests
+ * beneath it, and its sub-suites stepped in the same way.
  * @param suite - the suite to draw.
  * @param depth - how far in it sits, the root being zero.
  * @returns the suite's block, ready to append.
@@ -579,11 +622,20 @@ function testRow(test: TestView): HTMLElement {
 function suiteBlock(suite: SuiteView, depth: number): HTMLElement {
   const box = document.createElement('div')
   box.className = 'board-tests-suite-box'
+  // The root has no heading of its own — the surface's own Tests title is it —
+  // so only a nested suite draws the slug-and-count header that names it.
   if (depth > 0) {
+    const header = document.createElement('div')
+    header.className = 'board-tests-suite-head'
     const heading = document.createElement('h3')
     heading.className = 'board-tests-suite'
     heading.textContent = suite.slug
-    box.append(heading)
+    header.append(heading)
+    const count = document.createElement('span')
+    count.className = 'board-tests-suite-count'
+    count.textContent = String(testsUnder(suite))
+    header.append(count)
+    box.append(header)
   }
   for (const test of suite.tests) box.append(testRow(test))
   // Sub-suites after the tests directly in this one, so a suite's own cases
@@ -623,9 +675,13 @@ function drawTests(into: HTMLElement, empty: HTMLElement): void {
   box.append(head)
   const root = latest?.tests
   if (root === undefined || !suiteHolds(root)) {
+    // A worded empty rather than a bare gap, the way the columns say their own:
+    // an empty suite tree is a board waiting for its first test, and a reader
+    // who reached this surface on purpose is owed a line saying so and where
+    // one comes from.
     const line = document.createElement('p')
     line.className = 'board-detail-blank'
-    line.textContent = 'No tests yet.'
+    line.textContent = 'No tests yet. Ask the agent to write one, or add a suite under tests/.'
     box.append(line)
   } else {
     box.append(suiteBlock(root, 0))
@@ -1025,6 +1081,15 @@ async function refresh(): Promise<void> {
     trouble = `The board could not be read: ${(error as Error).message}`
   }
   draw()
+  // A reveal the tree sent before this read had landed, replayed now that it
+  // has. Cleared before the call so a read that still answers with nothing —
+  // an error left `latest` unset — simply holds it again for the next read
+  // rather than dropping it, and so the replay is never a second thing to undo.
+  if (pendingReveal !== undefined) {
+    const held = pendingReveal
+    pendingReveal = undefined
+    reveal(held)
+  }
 }
 
 /**
@@ -1045,9 +1110,24 @@ function isTest(suite: SuiteView | undefined, folderPath: string): boolean {
   )
 }
 
-// Sent by main when the tree names a folder. The tab comes forward with it: a
-// lane scrolled to inside a panel nobody can see looks like nothing happened.
-window.pane.onReveal((folderPath) => {
+/**
+ * Show the row the tree named: mark a card, or open a test's detail.
+ *
+ * Sent by main when the tree names a folder. The tab comes forward with it: a
+ * lane scrolled to inside a panel nobody can see looks like nothing happened.
+ *
+ * A reveal that arrives before the first read is held rather than acted on: the
+ * whole thing this does — tell a test from an entity — is asked of that read,
+ * and there is no answer to give until it lands. `refresh` replays it then,
+ * against the board it named, so the test that used to be lost to the columns
+ * opens its detail the moment the board is there to prove it is a test.
+ * @param folderPath - the folder path the tree selected.
+ */
+function reveal(folderPath: string): void {
+  if (latest === undefined) {
+    pendingReveal = folderPath
+    return
+  }
   // A test is the one thing the tree can name that this board draws no card
   // for, so a highlight would point at nothing. The panel is the side that
   // knows which paths are tests — the tree sends the same message for every
@@ -1091,7 +1171,9 @@ window.pane.onReveal((folderPath) => {
   // Guarded because not every environment this page runs in implements it,
   // and a highlight that landed is worth more than the scroll that did not.
   if (typeof target?.scrollIntoView === 'function') target.scrollIntoView({ block: 'nearest' })
-})
+}
+
+window.pane.onReveal(reveal)
 
 // Main says when: the project moved, or something under `.dsh/tasks/` did.
 // There is no polling, and this view never asks off its own timer.

@@ -1637,40 +1637,96 @@ button.board-lane-title:hover {
 }
 
 /* Indented under its parent with a rule down the group, as a campaign's lanes
-   are: a nested suite and a sibling one are otherwise the same shape. */
+   are: a nested suite and a sibling one are otherwise the same shape. The rule
+   runs the height of the block, so the tests under a suite read as belonging to
+   the heading above them and not to the surface. */
 .board-tests-suite-box .board-tests-suite-box {
   margin-left: 8px;
-  padding-left: 8px;
+  padding-left: 10px;
   border-left: 1px solid var(--dsw-alias-border-l2);
 }
 
+/* The slug and its count on one line, ruled off from the rows beneath so a
+   heading reads as the head of a section rather than as the first row of it —
+   the same separation a campaign's name has from its lanes. */
+.board-tests-suite-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* A quiet heading, as a campaign's is: small, weighted, and in the secondary
+   label so the test names beneath it are what the eye lands on first. Uppercase
+   with a little tracking, the way the detail's own section headings are, so a
+   suite reads as a divider and not as another name in the list. */
 .board-tests-suite {
-  margin: 10px 0 2px;
+  margin: 0;
+  overflow: hidden;
   color: var(--dsw-alias-label-secondary);
   font-size: 11px;
   font-weight: 600;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* How many tests the suite holds at every depth, the figure a column head draws
+   over its cards — tabular so a column of them lines up, and tertiary so it is
+   read as context beside the slug rather than as a second heading. */
+.board-tests-suite-count {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* A whole line, as a detail's child row is — this list is read down the page
    and the name is what the eye runs along. Ruled off from the next with a
    hairline, the same way a card is: a test has no status, so there is no glyph
-   here, only the count it carries. */
+   here, only the verdict column it carries at the right. */
 .board-tests-row {
   display: flex;
-  gap: 6px;
-  align-items: baseline;
+  gap: 8px;
+  align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 5px 6px;
+  padding: 6px;
   border: none;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 4px;
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+/* The name takes the row and elides rather than wraps: the verdict column to
+   its right is a fixed edge, and a name that wrapped under it would break the
+   straight line the counts are read down. */
+.board-tests-name {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The dot and count, right-aligned in a column of their own so the slashes line
+   up down the list. A minimum measure holds the column open even on the rows
+   with nothing to prove, so a test with a verdict and one without do not shift
+   the edge between them. */
+.board-tests-verdict {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 44px;
 }
 
 .board-tests-row:hover {

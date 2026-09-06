@@ -999,6 +999,22 @@ describe('the Tests destination', () => {
     expect(document.querySelector('.board-column')).toBeNull()
   })
 
+  // reason: the layout the user called "much better" — the dot and count are a
+  // column of their own at the row's right, not two things trailing the name,
+  // and the suite heading carries the figure a column head does, so a section
+  // says how much is under it before it is read.
+  it('draws the verdict in its own column and counts the suite', async () => {
+    await load(bridge(withTests()))
+    document.getElementById('board-tests')?.click()
+    const verdict = document.querySelector('.board-tests-row .board-tests-verdict')
+    expect(verdict?.querySelector('.verdict-dot')).not.toBeNull()
+    expect(verdict?.querySelector('.board-card-verdict-count')?.textContent).toBe('1/2')
+    // The name is not inside the verdict column — it is the row's other half.
+    expect(verdict?.querySelector('.board-tests-name')).toBeNull()
+    // The suite heading shows the count of tests beneath it, as a column does.
+    expect(document.querySelector('.board-tests-suite-count')?.textContent).toBe('1')
+  })
+
   // reason: a row that only listed tests would be a dead end — the detail is
   // the surface everything else on this board opens into, tests included.
   it('opens a test’s detail from a row', async () => {
@@ -1060,6 +1076,36 @@ describe('the Tests destination', () => {
     await load(stub)
     stub.reveal('tests/auth/login')
     for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(stub.calls).toContainEqual(['detail', 'tests/auth/login'])
+    expect(document.querySelector('.board-detail-title')?.textContent).toBe('Login holds')
+    expect(document.querySelector('.board-card-revealed')).toBeNull()
+  })
+
+  // reason: found on the running app — clicking a test in the tree showed the
+  // columns, not the test. The tree can name a folder before the board's first
+  // read has landed, and the panel tells a test from an entity by looking that
+  // read up: with no read yet, a test falls through to the entity branch, which
+  // leaves `revealed` on a path no card carries and the panel on the columns.
+  // An entity revealed that early comes right on its own — the next redraw marks
+  // its card — so this is the case that does not, and the one that has to be
+  // held and replayed once the read is in hand.
+  it('opens a test the tree named before the first read had landed', async () => {
+    // A read gated by hand, so the reveal can be fired while `latest` is still
+    // unset — the window the running app hit and `load` never leaves open.
+    let land: (() => void) | undefined
+    const data = withTests()
+    const stub = bridge(data, { detail: detail({ level: 'test', status: '', name: 'Login holds' }) })
+    stub.readTasks = () => new Promise((resolve) => (land = () => resolve(data)))
+    ;(globalThis as unknown as { pane: unknown }).pane = stub
+    vi.resetModules()
+    await import('./board.ts')
+    stub.reveal('tests/auth/login')
+    for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    // Nothing yet: the board it needs to prove this is a test has not been read.
+    expect(document.querySelector('.board-detail-title')).toBeNull()
+    land?.()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    // Replayed against the read: the detail the columns used to swallow.
     expect(stub.calls).toContainEqual(['detail', 'tests/auth/login'])
     expect(document.querySelector('.board-detail-title')?.textContent).toBe('Login holds')
     expect(document.querySelector('.board-card-revealed')).toBeNull()
@@ -1232,5 +1278,27 @@ describe('the board stylesheet', () => {
   // readable measure rather than run to the panel's width.
   it('caps the detail prose at a measure', async () => {
     expect(rule(await css(), '.board-detail-prose')).toMatch(/max-width\s*:/)
+  })
+
+  // reason: the Tests list is read straight down its right edge, so the counts
+  // form a column of their own rather than trailing the name — right-aligned,
+  // tabular, and held open by a measure so a row with a verdict and one without
+  // do not shift the edge between them. A list that let `1/2` drift with the
+  // name beside it is the bare list the layout was reworked out of.
+  it('aligns the test verdict into a tabular right column', async () => {
+    const verdict = rule(await css(), '.board-tests-verdict')
+    expect(verdict).toMatch(/justify-content\s*:\s*flex-end/)
+    expect(verdict).toMatch(/min-width\s*:/)
+    expect(rule(await css(), '.board-card-verdict-count')).toMatch(/font-variant-numeric\s*:\s*tabular-nums/)
+  })
+
+  // reason: a row without a hairline is the bare list again — the rule between
+  // rows is what makes the names read as a table rather than as a stack. The
+  // suite heading carries its own rule above it, so a section reads as headed
+  // rather than as one more row.
+  it('rules the test rows and suite headings off from one another', async () => {
+    const text = await css()
+    expect(rule(text, '.board-tests-row')).toMatch(/border-bottom\s*:\s*1px solid var\(--dsw-alias-border-l1\)/)
+    expect(rule(text, '.board-tests-suite-head')).toMatch(/border-bottom\s*:\s*1px solid var\(--dsw-alias-border-l2\)/)
   })
 })
