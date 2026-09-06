@@ -7,3 +7,7 @@ playwright-report/
 .DS_Store
 plugin/node_modules
 plugin/lib
+
+# Working notes and SDD plans/specs — kept on disk, not committed
+docs/notes/
+docs/superpowers/
