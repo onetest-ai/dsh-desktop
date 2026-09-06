@@ -859,8 +859,13 @@ describe('the Tests destination', () => {
     expect([...document.querySelectorAll('.board-tests-suite')].map((node) => node.textContent)).toEqual(['auth'])
     const row = document.querySelector('.board-tests-row')
     expect(row?.textContent).toContain('Login holds')
-    // The reverse of a card's chip: what the test proves, and how much holds.
-    expect(row?.textContent).toContain('1/2')
+    // The reverse of a card's dot: what the test proves, and how much holds —
+    // drawn the same way, a coloured dot plus a neutral count, not the old
+    // text chip.
+    const dot = row?.querySelector('.verdict-dot')
+    expect(dot).not.toBeNull()
+    expect(dot?.classList.contains('verdict-dot-fail')).toBe(true)
+    expect(row?.querySelector('.board-card-verdict-count')?.textContent).toBe('1/2')
     // It is a destination, not an overlay: the columns are gone while it is up.
     expect(document.querySelector('.board-column')).toBeNull()
   })

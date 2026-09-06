@@ -436,9 +436,10 @@ function suiteHolds(suite: SuiteView): boolean {
 /**
  * One test, as a row of the Tests list.
  *
- * The count is the reverse of a card's chip — what this test proves, rather
- * than what proves that card — and it reads as failing on the same rule: one
- * unproven check is the thing worth seeing.
+ * The count is the reverse of a card's dot — what this test proves, rather
+ * than what proves that card — but the drawing is the same one `cardFor`
+ * settled on: a coloured dot for the verdict, a neutral count beside it, and
+ * neither one at all when there is nothing here to validate.
  * @param test - the test to draw.
  * @returns the row, ready to append.
  */
@@ -452,9 +453,8 @@ function testRow(test: TestView): HTMLElement {
   row.append(name)
   const { pass, total } = test.validates
   if (total > 0) {
-    const chip = tag('board-chip', `${String(pass)}/${String(total)}`)
-    if (pass < total) chip.classList.add('board-chip-failing')
-    row.append(chip)
+    row.append(verdictDot(pass, total))
+    row.append(tag('board-card-verdict-count', `${String(pass)}/${String(total)}`))
   }
   row.addEventListener('click', () => {
     // The detail, which is the surface everything else on this board opens
