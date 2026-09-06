@@ -532,6 +532,135 @@ describe('a reveal from the tree', () => {
 })
 
 /**
+ * Folding a campaign or a mission: a posture the board keeps for the session.
+ *
+ * The state lives in the module, not the DOM, so what these turn on is that a
+ * fold survives the redraw every write triggers and is keyed by the folder
+ * path, not the row — folding one campaign leaves the next alone, and a project
+ * change forgets all of them.
+ */
+describe('folding a campaign or a mission', () => {
+  /**
+   * Two campaigns, each with its own mission, so a per-path claim has a second
+   * row to leave alone.
+   * @returns the board, as `readTasks` answers it.
+   */
+  function twoCampaigns(): Record<string, unknown> {
+    const taskA = node('task', 'TA', 'campaigns/a/missions/ma/tasks/ta')
+    const taskB = node('task', 'TB', 'campaigns/b/missions/mb/tasks/tb')
+    return {
+      project: '/p/one',
+      present: true,
+      campaigns: [
+        // Executing sorts above backlog, so Alpha is the first group drawn and
+        // the order the cases index by is fixed.
+        node('campaign', 'Alpha', 'campaigns/a', {
+          status: 'executing',
+          children: [node('mission', 'MA', 'campaigns/a/missions/ma', { children: [taskA] })],
+        }),
+        node('campaign', 'Beta', 'campaigns/b', {
+          status: 'backlog',
+          children: [node('mission', 'MB', 'campaigns/b/missions/mb', { children: [taskB] })],
+        }),
+      ],
+      tests: { path: 'tests', slug: 'tests', suites: [], tests: [] },
+      findings: [],
+    }
+  }
+
+  // reason: the spec says a campaign folds and a folded one still says what it
+  // holds — the heading and a marker, no lanes. The heading has to be a real
+  // control for the keyboard to reach it, not a span with a click.
+  it('folds a campaign to its heading, hiding its lanes', async () => {
+    await load(bridge(oneMission()))
+    const fold = document.querySelector<HTMLElement>('.board-group-fold')
+    expect(fold?.tagName).toBe('BUTTON')
+    expect(document.querySelector('.board-lane')).not.toBeNull()
+    fold?.click()
+    expect(document.querySelector('.board-lane')).toBeNull()
+    expect(document.querySelector('.board-group-title')?.textContent).toBe('Q3')
+    expect(document.querySelector('.board-group-fold .board-fold-chevron-collapsed')).not.toBeNull()
+  })
+
+  // reason: a mission folds the same way, and a folded lane keeps what it is —
+  // its title, its status glyph, its plus — and drops only the columns, so
+  // folding is putting the work down rather than losing sight of the lane.
+  it('folds a mission to its header, keeping its title, glyph and plus', async () => {
+    await load(bridge(oneMission()))
+    const head = document.querySelector<HTMLElement>('.board-lane .board-lane-title')
+    expect(head?.tagName).toBe('BUTTON')
+    expect(document.querySelector('.board-column')).not.toBeNull()
+    head?.click()
+    expect(document.querySelector('.board-column')).toBeNull()
+    expect(document.querySelector('.board-lane-name')?.textContent).toBe('M1')
+    expect(document.querySelector('.board-lane-status .status-glyph')).not.toBeNull()
+    expect(document.querySelector('.board-lane-add')).not.toBeNull()
+  })
+
+  // reason: a bug lane is a campaign's overflow and not a unit of work someone
+  // puts down, so it does not fold — its title stays a plain span rather than a
+  // button, and there is nothing to press it shut with.
+  it('leaves a bug lane unfoldable', async () => {
+    await load(bridge(oneMission({ campaignBug: true })))
+    const bugTitle = [...document.querySelectorAll('.board-lane-title')].find((node) => node.textContent === 'Bugs')
+    expect(bugTitle?.tagName).toBe('SPAN')
+  })
+
+  // reason: the fold is keyed by folder path, so folding one campaign is not
+  // folding a flag every campaign shares — the next group is left as it was.
+  it('folds one campaign without folding another', async () => {
+    await load(bridge(twoCampaigns()))
+    const folds = document.querySelectorAll<HTMLElement>('.board-group-fold')
+    expect(folds.length).toBe(2)
+    folds[0].click()
+    const groups = document.querySelectorAll('.board-group')
+    expect(groups[0].querySelector('.board-lane')).toBeNull()
+    expect(groups[1].querySelector('.board-lane')).not.toBeNull()
+  })
+
+  // reason: every write an agent makes re-reads the board and rebuilds the DOM,
+  // so a fold written into the DOM would spring open on the next `tasks:changed`
+  // — it lives in module state precisely so it does not.
+  it('keeps a fold across a tasks:changed redraw', async () => {
+    const stub = bridge(oneMission())
+    await load(stub)
+    document.querySelector<HTMLElement>('.board-group-fold')?.click()
+    expect(document.querySelector('.board-lane')).toBeNull()
+    stub.fire()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.board-lane')).toBeNull()
+  })
+
+  // reason: a fold is keyed by folder path and a path is another project's work
+  // in the next repository — a campaign left folded across the change would be
+  // this state describing a board it was never about.
+  it('clears folds when the project changes', async () => {
+    const stub = bridge(oneMission())
+    await load(stub)
+    document.querySelector<HTMLElement>('.board-group-fold')?.click()
+    expect(document.querySelector('.board-lane')).toBeNull()
+    stub.readTasks = async () => oneMission({ project: '/p/other' })
+    stub.fire()
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    expect(document.querySelector('.board-lane')).not.toBeNull()
+  })
+
+  // reason: the spec says a reveal unfolds whatever it has to. A card in a
+  // folded mission under a folded campaign is a target nothing could see, so
+  // both are opened before the mark is drawn.
+  it('unfolds the campaign and mission a reveal lands inside', async () => {
+    const stub = bridge(oneMission())
+    await load(stub)
+    document.querySelector<HTMLElement>('.board-lane .board-lane-title')?.click()
+    document.querySelector<HTMLElement>('.board-group-fold')?.click()
+    expect(document.querySelector('.board-lane')).toBeNull()
+    stub.reveal('campaigns/q3/missions/m1/tasks/t1')
+    expect(document.querySelector('.board-column')).not.toBeNull()
+    expect(document.querySelector('.board-card-revealed')?.textContent).toContain('T1')
+  })
+})
+
+/**
  * The detail, as the panel puts it in place of the columns.
  *
  * What `board-detail.spec.ts` does not cover: that surface is a pure function

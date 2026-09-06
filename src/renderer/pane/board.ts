@@ -55,6 +55,68 @@ let refusal: string | undefined
 let revealed: string | undefined
 
 /**
+ * The folder paths of the campaigns and missions the reader has folded shut.
+ *
+ * A posture and not a decision, so it lives here rather than in a file: a board
+ * folded away last Tuesday that reopened folded would have decided something
+ * for the reader, the way a remembered detail would. It is a `Set` of paths and
+ * not a flag per row for the tree's own reason — the fold state cannot outlive
+ * a redraw if it is written into the DOM, and every write an agent makes throws
+ * the DOM away and draws it again from this. One `Set` for both kinds because a
+ * campaign path and a mission path never collide: a mission's path is its
+ * campaign's with `/missions/…` on the end, so `has` answers for exactly the
+ * row that owns the path and never the one above or below it. Cleared on a
+ * project change beside `refusal` and `revealed`, because `campaigns/q3` names
+ * different work in the next repository and a fold carried across is a board
+ * this state was never about.
+ */
+const folded = new Set<string>()
+
+/**
+ * Fold or unfold one row, then redraw from the new posture.
+ *
+ * The toggle a campaign heading and a mission's header both call. It draws
+ * rather than patches for the reason the whole panel does: the fold is one bit
+ * of the board's shape, and a board rebuilt whole from `folded` cannot show a
+ * chevron pointing one way over columns that went the other.
+ * @param path - the folder path of the row that was activated.
+ */
+function toggleFold(path: string): void {
+  if (folded.has(path)) folded.delete(path)
+  else folded.add(path)
+  draw()
+}
+
+/**
+ * A disclosure chevron that points down when open and right when shut.
+ *
+ * An inline SVG rather than a glyph font or a character, so it is one shape the
+ * stylesheet rotates rather than two the markup swaps — and drawn in
+ * `currentColor` so the one token its class sets is the only colour it can be,
+ * the same discipline every mark on this board keeps. `aria-hidden` because the
+ * button around it is already named by the row's own words; the chevron is the
+ * affordance, not a second label of it.
+ * @param collapsed - whether the row it marks is folded, which rotates it.
+ * @returns the chevron, ready to prepend to a fold control.
+ */
+function chevron(collapsed: boolean): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('viewBox', '0 0 12 12')
+  svg.setAttribute('aria-hidden', 'true')
+  svg.classList.add('board-fold-chevron')
+  if (collapsed) svg.classList.add('board-fold-chevron-collapsed')
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+  path.setAttribute('d', 'M3 4.5 L6 7.5 L9 4.5')
+  path.setAttribute('fill', 'none')
+  path.setAttribute('stroke', 'currentColor')
+  path.setAttribute('stroke-width', '1.5')
+  path.setAttribute('stroke-linecap', 'round')
+  path.setAttribute('stroke-linejoin', 'round')
+  svg.append(path)
+  return svg
+}
+
+/**
  * Where the panel is: which of its three surfaces is on screen, and — for the
  * detail — which one it was opened over.
  *
@@ -302,9 +364,30 @@ function laneFor(lane: LaneView): HTMLElement {
   row.dataset.folder = lane.folderPath
   const head = document.createElement('div')
   head.className = 'board-lane-head'
-  const title = document.createElement('span')
+  // A mission's header is its own toggle, so folding it is one press on the
+  // thing it folds. A bug lane is not a mission and does not fold — it is a
+  // campaign's overflow, never a unit of work someone puts down — so its title
+  // stays a plain span, and only the mission's becomes a button reachable by
+  // tab and pressed by Enter. The chevron leads the title either way it points.
+  const collapsed = lane.kind === 'mission' && folded.has(lane.folderPath)
+  let title: HTMLElement
+  if (lane.kind === 'mission') {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.append(chevron(collapsed))
+    const label = document.createElement('span')
+    label.className = 'board-lane-name'
+    label.textContent = lane.title
+    button.append(label)
+    button.addEventListener('click', () => {
+      toggleFold(lane.folderPath)
+    })
+    title = button
+  } else {
+    title = document.createElement('span')
+    title.textContent = lane.title
+  }
   title.className = 'board-lane-title'
-  title.textContent = lane.title
   head.append(title)
   // The label, as the column heading beside it reads: the same status on the
   // same screen, drawn twice, should not read as `executing` in one place and
@@ -328,10 +411,16 @@ function laneFor(lane: LaneView): HTMLElement {
   })
   head.append(add)
   row.append(head)
-  const columns = document.createElement('div')
-  columns.className = 'board-columns'
-  for (const status of BOARD_STATUSES) columns.append(columnFor(status, lane.columns[status]))
-  row.append(columns)
+  // A folded lane keeps its head — the chevron, the title, the status, the plus
+  // — and drops only its columns: folding is putting the work down where it is,
+  // not losing sight of the lane it was in, and the plus stays so a new card can
+  // still be filed into a lane the reader is not looking through right now.
+  if (!collapsed) {
+    const columns = document.createElement('div')
+    columns.className = 'board-columns'
+    for (const status of BOARD_STATUSES) columns.append(columnFor(status, lane.columns[status]))
+    row.append(columns)
+  }
   // Only a mission's lane answers to its own path. A bug lane's path is its
   // campaign's, so matching one here would give a campaign's click the Bugs
   // lane instead of the heading it asked for.
@@ -560,15 +649,32 @@ function drawColumns(into: HTMLElement, empty: HTMLElement): void {
   for (const group of groups) {
     const section = document.createElement('section')
     section.className = 'board-group'
+    const collapsed = folded.has(group.campaign.folderPath)
     const heading = document.createElement('h2')
     heading.className = 'board-group-title'
-    heading.textContent = group.campaign.name
+    // The heading is the fold control, drawn as a button inside the h2 rather
+    // than as the h2 itself: a campaign is a heading on this board, and a
+    // heading that is also a landmark keeps that role while the button inside it
+    // is what a tab reaches and Enter presses. The chevron leads the name and
+    // rotates with the state; a folded campaign shows exactly this and no lanes.
+    const toggle = document.createElement('button')
+    toggle.type = 'button'
+    toggle.className = 'board-group-fold'
+    toggle.append(chevron(collapsed))
+    const name = document.createElement('span')
+    name.className = 'board-group-name'
+    name.textContent = group.campaign.name
+    toggle.append(name)
+    toggle.addEventListener('click', () => {
+      toggleFold(group.campaign.folderPath)
+    })
+    heading.append(toggle)
     // A campaign is a heading on this board and nothing else, so its heading
     // is what a campaign row reveals. Matched here, above the lanes, so the
     // Bugs lane that shares its folder path never answers in its place.
     if (group.campaign.folderPath === revealed) heading.classList.add('board-group-revealed')
     section.append(heading)
-    for (const lane of group.lanes) section.append(laneFor(lane))
+    if (!collapsed) for (const lane of group.lanes) section.append(laneFor(lane))
     into.append(section)
   }
 }
@@ -883,6 +989,10 @@ async function refresh(): Promise<void> {
     if (latest !== undefined && next.project !== latest.project) {
       refusal = undefined
       revealed = undefined
+      // The fold posture is keyed by folder path too, and a path is another
+      // project's work in the next repository: a campaign left folded across
+      // the change would be this state describing a board it was never about.
+      folded.clear()
       // Out of the detail and no further: what it walks out to is the Tests
       // list when that is what it was opened over, which survives the change
       // because it names a destination rather than a path.
@@ -955,6 +1065,15 @@ window.pane.onReveal((folderPath) => {
     return
   }
   revealed = folderPath
+  // A reveal unfolds whatever it has to: a card in a folded lane, or a lane
+  // under a folded campaign, is a target the mark would land on with nothing
+  // to see it against. Every folded ancestor of the named path is opened — a
+  // path is an ancestor when the target is it or sits beneath it — and the
+  // target itself if it is a folded row, so the campaign and the mission it
+  // lives in are both open by the time the draw below marks it.
+  for (const path of [...folded]) {
+    if (folderPath === path || folderPath.startsWith(`${path}/`)) folded.delete(path)
+  }
   // A reveal always lands on the columns: it names a card, a lane or a
   // heading, and all three are drawn there. Whatever stood over them — a
   // detail, or the Tests list — is precisely what the reader is being taken

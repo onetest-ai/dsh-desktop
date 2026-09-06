@@ -1167,6 +1167,51 @@ body {
   font-weight: 600;
 }
 
+/* The heading is a landmark and the fold is a button inside it, so the button
+   carries no chrome of its own — it borrows the h2's size and weight and adds
+   only the pointer and the chevron's gap. Folding a campaign is a press on the
+   name that names it, which is why the whole line, not a twisty beside it, is
+   the target. */
+.board-group-fold {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-group-fold:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.board-group-name {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One shape the stylesheet turns rather than two the markup swaps: it points
+   down when the row is open and a quarter-turn left — to the right, toward the
+   name — when it is shut. Muted like the lane's own plus, since it is chrome
+   the reader reaches for and not a status. */
+.board-fold-chevron {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--dsw-alias-label-secondary);
+  transition: transform 0.12s ease;
+}
+
+.board-fold-chevron-collapsed {
+  transform: rotate(-90deg);
+}
+
 /* The campaign the tree asked for. A campaign is a heading on this board and
    nothing else, so the heading is what a campaign row reveals. */
 .board-group-revealed {
@@ -1196,6 +1241,9 @@ body {
 }
 
 .board-lane-title {
+  display: flex;
+  gap: 4px;
+  align-items: center;
   overflow: hidden;
   /* Without this the title's max-content contribution (overflow: hidden does
      not shrink it) widens `.board-group`, and the ellipsis below never
@@ -1204,6 +1252,34 @@ body {
   flex: 1;
   min-width: 0;
   font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A mission's title is the button that folds it; a bug lane's is a plain span
+   sharing the class above for its layout. The button strips its own chrome and
+   borrows the head's, so it reads as the title it is and not a control bolted
+   beside one — the chevron is the only mark that says it can be pressed. */
+button.board-lane-title {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.board-lane-title:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The button's own text, held apart from the chevron so the ellipsis clips the
+   name and not the mark beside it. */
+.board-lane-name {
+  overflow: hidden;
+  min-width: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
