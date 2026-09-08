@@ -55,7 +55,8 @@
       "icon": "assets/icon.icns",
       "target": [
         "dir",
-        "dmg"
+        "dmg",
+        "zip"
       ],
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
@@ -69,13 +70,19 @@
         }
       ]
     },
-    "afterPack": "build/adhoc-sign.js"
+    "afterPack": "build/adhoc-sign.js",
+    "publish": {
+      "provider": "github",
+      "owner": "onetest-ai",
+      "repo": "dsh-desktop"
+    }
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
+    "electron-updater": "6.3.9",
     "js-yaml": "^4.3.1",
     "node-pty": "^1.1.0",
     "vscode-icons-js": "^11.6.1",
