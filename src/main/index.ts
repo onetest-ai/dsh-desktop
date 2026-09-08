@@ -14,7 +14,7 @@ import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { mcpConfigPath, readMcpConfig, writeMcpConfig, type McpServerEntry } from './mcp-config'
 import { migrateMcpConfig } from './mcp-migrate'
 import { createMcpProber } from './mcp-probe'
-import { alignDefaultPlugins, ensureDefaultPlugins } from './plugin-defaults'
+import { alignDefaultPlugins, ensureDefaultPlugins, migrateRenamedPlugins } from './plugin-defaults'
 import { repairablePlugins, runHealthcheck, type Finding } from './healthcheck'
 import { repairPlugins } from './repair'
 import { closeStartup, pushFindings, pushPhase, pushProgress, showStartup } from './startup-window'
@@ -2626,6 +2626,11 @@ if (!app.requestSingleInstanceLock()) {
     // Before anything reads `mcp.json`: converts the superseded `mcp` section
     // and token store, once, and is a no-op afterwards.
     migrateMcpConfig(DSH_HOME)
+    // Rewrites a default whose package was renamed (e.g. the per-project MCP
+    // bridge moving to the @onetest scope) so the fix reaches an install that
+    // still names the old one — before the reconcile pass and healthcheck read
+    // the config. Only rewrites entries already present; idempotent afterwards.
+    migrateRenamedPlugins(DSH_HOME)
     // Offers each shipped default once, recorded by generation so a default
     // the user removes stays removed.
     ensureDefaultPlugins(DSH_HOME)

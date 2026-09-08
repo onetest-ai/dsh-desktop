@@ -7,10 +7,11 @@ import { isOlder } from './version-order'
 /**
  * The per-project MCP bridge, shipped by default.
  *
- * Pinned rather than floating. The package is two weeks old, publishes no
- * public repository, and spawns processes from project-supplied
- * configuration — so an update must be a deliberate act, not something that
- * arrives on the next install. Raising this version is a review, not a bump.
+ * Floated to `latest` rather than pinned: it now ships from the `@onetest`
+ * scope and moves in step with this app, so a bugfix reaches installs on the
+ * next resolve rather than waiting for a version bump here. (It spawns
+ * processes from project-supplied configuration, so `latest` does trust each
+ * published build — a deliberate trade for the scoped, first-party package.)
  *
  * It exists in the default set because the official client mounts one
  * connection per profile row, shared by every session: its `cwd` therefore
@@ -19,7 +20,7 @@ import { isOlder } from './version-order'
  * `<session cwd>/.dsh/mcp.json` on `agent/created` and spawns per agent, so
  * each session's server runs in that session's own directory.
  */
-export const PROJECT_MCP_BRIDGE = '@onetest/dsh-project-mcp-bridge@0.2.2'
+export const PROJECT_MCP_BRIDGE = '@onetest/dsh-project-mcp-bridge'
 
 /**
  * Plugins every install gets unless the user removes them.
@@ -48,6 +49,74 @@ export const PROJECT_MCP_BRIDGE = '@onetest/dsh-project-mcp-bridge@0.2.2'
 export const DESKTOP_PANE = '@onetest/dsh-desktop-pane@0.2.2'
 
 export const DEFAULT_PLUGIN_SPECS: readonly string[] = [PROJECT_MCP_BRIDGE, DESKTOP_PANE]
+
+/**
+ * Default plugins whose package was renamed, mapped old package name → new spec.
+ *
+ * A rename is not a version bump: `alignDefaultPlugins` and
+ * `ensureDefaultPlugins` both match a default to an install by package name,
+ * so neither notices when the package itself changed. Without this, an install
+ * that already names the old package keeps it forever and never sees the new,
+ * fixed one.
+ */
+const RENAMED_PLUGINS: Record<string, string> = {
+  // The per-project MCP bridge moved to the @onetest scope with a bugfix; the
+  // old unscoped `dsh-project-mcp-bridge` stops at 0.2.1.
+  'dsh-project-mcp-bridge': PROJECT_MCP_BRIDGE,
+}
+
+/**
+ * Rewrite an install that names a renamed default to the new spec.
+ *
+ * Runs once at startup, before the reconcile pass and the healthcheck read the
+ * config: only rewrites entries that are already present (so a bridge the user
+ * deliberately removed is not reinstated), drops the recorded version with the
+ * old spec (the resolved version was the old package's, and startup repair
+ * installs what the new spec names), keeps any per-entry config, and drops the
+ * old entry outright when the new package is already present rather than
+ * leaving two rows for the same package. Idempotent — after it runs no entry
+ * names an old package, so a second run finds nothing.
+ *
+ * Never throws — an unreadable or unwritable config leaves the install as it was.
+ * @param dshHome - the resolved `$DSH_HOME` directory.
+ * @returns whether the config was changed.
+ */
+export function migrateRenamedPlugins(dshHome: string): boolean {
+  const file = join(dshHome, 'desktop.json')
+  let config: Record<string, unknown>
+  try {
+    config = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  } catch {
+    return false
+  }
+  const entries = Array.isArray(config.plugins) ? (config.plugins as PluginEntry[]) : []
+  const present = new Set(entries.map((entry) => parseSpec(String(entry.spec)).package))
+  let changed = false
+  const migrated: PluginEntry[] = []
+  for (const entry of entries) {
+    const pkg = parseSpec(String(entry.spec)).package
+    const renamedTo = RENAMED_PLUGINS[pkg]
+    if (renamedTo === undefined) {
+      migrated.push(entry)
+      continue
+    }
+    changed = true
+    const newPkg = parseSpec(renamedTo).package
+    // Both the old and the new already recorded: drop the old rather than
+    // leave the same package listed twice.
+    if (newPkg !== pkg && present.has(newPkg)) continue
+    present.add(newPkg)
+    const { version: _version, ...rest } = entry
+    migrated.push({ ...rest, spec: renamedTo })
+  }
+  if (!changed) return false
+  try {
+    writeFileAtomic(file, `${JSON.stringify({ ...config, plugins: migrated }, undefined, 2)}\n`)
+  } catch {
+    return false
+  }
+  return true
+}
 
 /**
  * The defaults generation this build ships.

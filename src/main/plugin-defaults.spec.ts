@@ -8,6 +8,7 @@ import {
   DEFAULTS_GENERATION,
   DESKTOP_PANE,
   ensureDefaultPlugins,
+  migrateRenamedPlugins,
   PROJECT_MCP_BRIDGE,
 } from './plugin-defaults'
 import { parseSpec } from './plugin-entries'
@@ -43,8 +44,9 @@ describe('ensureDefaultPlugins', () => {
     expect(specs(dir)).toContain('@onetest/dsh-project-mcp-bridge@0.1.0')
   })
 
-  it('pins whatever it ships, so an unaudited package cannot change under the user', () => {
-    expect(PROJECT_MCP_BRIDGE).toMatch(/@\d+\.\d+\.\d+$/)
+  it('floats the bridge to latest under the @onetest scope, so a fix arrives on the next resolve', () => {
+    expect(PROJECT_MCP_BRIDGE).toBe('@onetest/dsh-project-mcp-bridge')
+    expect(parseSpec(PROJECT_MCP_BRIDGE).pinnedVersion).toBeUndefined()
   })
 
   it('keeps the plugins already configured', () => {
@@ -89,8 +91,68 @@ describe('the default set', () => {
     expect(DEFAULTS_GENERATION).toBe(DEFAULT_PLUGIN_SPECS.length)
   })
 
-  it('pins every default to an exact version', () => {
-    for (const spec of DEFAULT_PLUGIN_SPECS) expect(parseSpec(spec).pinnedVersion).toBeDefined()
+  it('pins the desktop pane to an exact version (the bridge floats to latest by design)', () => {
+    expect(parseSpec(DESKTOP_PANE).pinnedVersion).toBeDefined()
+  })
+})
+
+describe('migrateRenamedPlugins', () => {
+  it('rewrites the old unscoped bridge to the new scoped default, dropping the stale version', () => {
+    const dir = home({ plugins: [{ spec: 'dsh-project-mcp-bridge@0.2.1', version: '0.2.1' }] })
+    expect(migrateRenamedPlugins(dir)).toBe(true)
+    expect(stored(dir).plugins).toEqual([{ spec: PROJECT_MCP_BRIDGE }])
+  })
+
+  it("keeps the entry's config while renaming", () => {
+    const dir = home({ plugins: [{ spec: 'dsh-project-mcp-bridge@0.2.1', version: '0.2.1', config: { base: '/bridge' } }] })
+    migrateRenamedPlugins(dir)
+    expect(stored(dir).plugins).toEqual([{ spec: PROJECT_MCP_BRIDGE, config: { base: '/bridge' } }])
+  })
+
+  it('is a no-op when the old package is not present', () => {
+    const dir = home({ plugins: [{ spec: '@onetest/dsh-deck', version: '0.2.2' }] })
+    expect(migrateRenamedPlugins(dir)).toBe(false)
+    expect(specs(dir)).toEqual(['@onetest/dsh-deck'])
+  })
+
+  it('is idempotent — the second run changes nothing', () => {
+    const dir = home({ plugins: [{ spec: 'dsh-project-mcp-bridge@0.2.1', version: '0.2.1' }] })
+    expect(migrateRenamedPlugins(dir)).toBe(true)
+    expect(migrateRenamedPlugins(dir)).toBe(false)
+  })
+
+  it('drops the old entry rather than duplicating when the new package is already present', () => {
+    const dir = home({
+      plugins: [
+        { spec: 'dsh-project-mcp-bridge@0.2.1', version: '0.2.1' },
+        { spec: '@onetest/dsh-project-mcp-bridge', version: '0.2.2' },
+      ],
+    })
+    expect(migrateRenamedPlugins(dir)).toBe(true)
+    expect(specs(dir)).toEqual(['@onetest/dsh-project-mcp-bridge'])
+  })
+
+  it('never reinstates a bridge the user removed (it only rewrites present entries)', () => {
+    const dir = home({ plugins: [] })
+    expect(migrateRenamedPlugins(dir)).toBe(false)
+    expect(specs(dir)).toEqual([])
+  })
+
+  it('leaves other plugins untouched', () => {
+    const dir = home({
+      plugins: [
+        { spec: 'dsh-project-mcp-bridge@0.2.1', version: '0.2.1' },
+        { spec: DESKTOP_PANE, version: '0.2.2' },
+      ],
+    })
+    migrateRenamedPlugins(dir)
+    expect(specs(dir)).toEqual([PROJECT_MCP_BRIDGE, DESKTOP_PANE])
+  })
+
+  it('leaves an unreadable config alone rather than throwing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-defaults-bad-'))
+    writeFileSync(join(dir, 'desktop.json'), 'not json')
+    expect(migrateRenamedPlugins(dir)).toBe(false)
   })
 })
 
