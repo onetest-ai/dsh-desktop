@@ -19,7 +19,7 @@ import { isOlder } from './version-order'
  * `<session cwd>/.dsh/mcp.json` on `agent/created` and spawns per agent, so
  * each session's server runs in that session's own directory.
  */
-export const PROJECT_MCP_BRIDGE = 'dsh-project-mcp-bridge@0.2.1'
+export const PROJECT_MCP_BRIDGE = '@onetest/dsh-project-mcp-bridge@0.2.2'
 
 /**
  * Plugins every install gets unless the user removes them.

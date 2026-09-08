@@ -37,10 +37,10 @@ describe('ensureDefaultPlugins', () => {
   })
 
   it('does not add a default the user already has, under any version', () => {
-    const dir = home({ plugins: [{ spec: 'dsh-project-mcp-bridge@0.1.0', version: '0.1.0' }] })
+    const dir = home({ plugins: [{ spec: '@onetest/dsh-project-mcp-bridge@0.1.0', version: '0.1.0' }] })
     ensureDefaultPlugins(dir)
     expect(specs(dir)).not.toContain(PROJECT_MCP_BRIDGE)
-    expect(specs(dir)).toContain('dsh-project-mcp-bridge@0.1.0')
+    expect(specs(dir)).toContain('@onetest/dsh-project-mcp-bridge@0.1.0')
   })
 
   it('pins whatever it ships, so an unaudited package cannot change under the user', () => {
