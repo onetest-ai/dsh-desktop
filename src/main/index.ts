@@ -2,6 +2,8 @@ import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, n
 import { accessSync, constants, existsSync, mkdirSync, renameSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { autoUpdater } from 'electron-updater'
+import { createAppUpdater, type AppUpdater } from './app-update'
 import { loadDeclaredPatchRows } from './bundle-patch'
 import { checkBinaries } from './check-binaries'
 import { DEFAULT_VIEW_TOOLS_PORT, loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
@@ -1326,6 +1328,43 @@ function checkForUpdate(config: DesktopConfig): void {
 }
 
 /**
+ * Build the app self-updater and schedule its checks.
+ *
+ * Packaged-only, and deliberately never touches electron-updater's
+ * `autoUpdater` at all unless packaged: the module's `autoUpdater` is a lazy
+ * getter that constructs a platform updater on first read, which calls
+ * `app.getVersion()` — a dev/test launch (an unpackaged Electron app, or a
+ * mocked `app` under Vitest) throws there, so simply referencing the getter
+ * is unsafe, not just calling into it. The first check is delayed so it does
+ * not compete with harness startup; thereafter a long interval keeps a
+ * long-running app current without noise.
+ */
+function startAppUpdates(): void {
+  if (!app.isPackaged) {
+    appUpdater = { checkNow: () => {}, quitAndInstall: () => {} }
+    return
+  }
+  appUpdater = createAppUpdater(
+    {
+      onReady: (version) => {
+        if (quitting) return
+        tray?.setAppUpdate(version)
+        settingsContents()?.send('settings:app-update', { state: 'ready', version })
+        if (!appUpdateNotified) {
+          appUpdateNotified = true
+          new Notification({ title: 'DeepSeek Harness', body: `Update ${version} downloaded — restart to install.` }).show()
+        }
+      },
+      onAvailable: (version) => settingsContents()?.send('settings:app-update', { state: 'available', version }),
+      onError: () => settingsContents()?.send('settings:app-update', { state: 'error' }),
+    },
+    { packaged: true, backend: autoUpdater },
+  )
+  setTimeout(() => appUpdater?.checkNow(), 10_000)
+  appUpdateTimer = setInterval(() => appUpdater?.checkNow(), 6 * 60 * 60 * 1000)
+}
+
+/**
  * Tell this app's own pages which theme to draw in.
  *
  * The harness owns the setting — its Appearance row writes it — so every
@@ -1481,6 +1520,9 @@ let revealPending = false
 let quitting = false
 let tray: TrayController | undefined
 let notifier: NotifyServer | undefined
+let appUpdater: AppUpdater | undefined
+let appUpdateTimer: ReturnType<typeof setInterval> | undefined
+let appUpdateNotified = false
 /** A deep link that arrived before the window existed; see the `open-url` handler. */
 let deepLinkPending = false
 
@@ -2448,6 +2490,10 @@ async function shutdown(): Promise<void> {
   themeWatcher = undefined
   workspaceWatcher?.close()
   workspaceWatcher = undefined
+  if (appUpdateTimer !== undefined) {
+    clearInterval(appUpdateTimer)
+    appUpdateTimer = undefined
+  }
   projectWatcher?.close()
   projectWatcher = undefined
   closeGitWatchers()
@@ -3239,6 +3285,7 @@ if (!app.requestSingleInstanceLock()) {
       restart: () => void restartOnce(),
       openSettings: showSettings,
       quit: () => app.quit(),
+      restartToInstall: () => appUpdater?.quitAndInstall(),
     })
     const hotkey = safeHotkey()
     if (hotkey !== undefined && !globalShortcut.register(hotkey, toggleWindow)) {
@@ -3278,6 +3325,7 @@ if (!app.requestSingleInstanceLock()) {
     // about.
     await startViewTools(stored.config)
     checkForUpdate(stored.config)
+    startAppUpdates()
     await enqueue(bootNow)
   })
 
