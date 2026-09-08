@@ -1365,6 +1365,24 @@ function startAppUpdates(): void {
 }
 
 /**
+ * Settings-window IPC for the app self-updater.
+ *
+ * `appUpdater` is module-scoped and assigned by `startAppUpdates()` in both
+ * the packaged and unpackaged cases (a dev launch gets an inert stub), so
+ * `appUpdater?.checkNow()`/`quitAndInstall()` below are safe no-ops before
+ * `startAppUpdates()` has run and in dev. Registered once here, at module
+ * load, so the channels exist before the Settings window can open.
+ */
+ipcMain.handle('settings:app-version', () => app.getVersion())
+ipcMain.handle('settings:check-app-update', () => {
+  settingsContents()?.send('settings:app-update', { state: 'checking' })
+  appUpdater?.checkNow()
+})
+ipcMain.handle('settings:install-app-update', () => {
+  appUpdater?.quitAndInstall()
+})
+
+/**
  * Tell this app's own pages which theme to draw in.
  *
  * The harness owns the setting — its Appearance row writes it — so every
