@@ -15,7 +15,7 @@
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "test:smoke": "playwright test tests/smoke.spec.ts",
-    "release": "npm run build && electron-builder --mac dmg -c.mac.notarize=true --publish never",
+    "release": "npm run build && electron-builder --mac dmg zip -c.mac.notarize=true --publish never",
     "pty:permissions": "node scripts/pty-permissions.mjs",
     "postinstall": "node scripts/pty-permissions.mjs"
   },
