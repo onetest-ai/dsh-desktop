@@ -564,6 +564,10 @@ async function load(
     onPluginUpdateAvailable: vi.fn((listener: (pkg: string, latest: string) => void) => {
       pluginUpdateListener = listener
     }),
+    appVersion: vi.fn(async () => '0.0.0-test'),
+    checkAppUpdate: vi.fn(async () => undefined),
+    installAppUpdate: vi.fn(async () => undefined),
+    onAppUpdate: vi.fn((_listener: (msg: { state: string; version?: string }) => void) => () => {}),
   }
 
   const context: { window: { settings: unknown }; document: unknown } = {
@@ -1441,9 +1445,9 @@ describe('load', () => {
 describe('tabs', () => {
   it('declares real tab semantics: role, aria-selected, and tabpanels', () => {
     expect(MARKUP).toMatch(/role="tablist"/)
-    expect((MARKUP.match(/role="tab"/g) ?? []).length).toBe(5)
-    expect((MARKUP.match(/role="tabpanel"/g) ?? []).length).toBe(5)
-    expect(declaredTabIds()).toEqual(['harness', 'plugins', 'mcp', 'notifications', 'advanced'])
+    expect((MARKUP.match(/role="tab"/g) ?? []).length).toBe(6)
+    expect((MARKUP.match(/role="tabpanel"/g) ?? []).length).toBe(6)
+    expect(declaredTabIds()).toEqual(['harness', 'plugins', 'mcp', 'notifications', 'advanced', 'updates'])
   })
 
   it('starts on the harness tab, with the rest hidden', async () => {
@@ -1489,16 +1493,16 @@ describe('tabs', () => {
     expect(renderer.activeTab()).toBe('harness')
 
     expect(renderer.pressTabKey('harness', 'ArrowLeft')).toBe(true)
-    expect(renderer.activeTab()).toBe('advanced')
+    expect(renderer.activeTab()).toBe('updates')
   })
 
   it('Home and End jump to the first and last tab, and suppress the default action', async () => {
     const renderer = await load(async () => ({ ok: true, warnings: [] }))
 
     expect(renderer.pressTabKey('harness', 'End')).toBe(true)
-    expect(renderer.activeTab()).toBe('advanced')
+    expect(renderer.activeTab()).toBe('updates')
 
-    expect(renderer.pressTabKey('advanced', 'Home')).toBe(true)
+    expect(renderer.pressTabKey('updates', 'Home')).toBe(true)
     expect(renderer.activeTab()).toBe('harness')
   })
 
