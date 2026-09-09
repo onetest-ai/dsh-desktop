@@ -28,6 +28,9 @@
     <button type="button" role="tab" id="tab-advanced" aria-controls="panel-advanced" aria-selected="false" tabindex="-1" class="tab">
       Advanced<span class="tab-error-dot" id="tab-advanced-error-dot" aria-hidden="true" hidden></span>
     </button>
+    <button type="button" role="tab" id="tab-updates" aria-controls="panel-updates" aria-selected="false" tabindex="-1" class="tab">
+      Updates<span class="tab-error-dot" id="tab-updates-error-dot" aria-hidden="true" hidden></span>
+    </button>
   </div>
 </nav>
 
@@ -58,7 +61,7 @@
       <p class="error" id="error-version"></p>
       <p class="hint update-hint" id="update-hint" hidden>
         Version <span id="latest-version"></span> is available.
-        <button id="use-latest" type="button">Use it</button>
+        <button id="use-latest" type="button">Update and install</button>
       </p>
       <div class="field-label-row">
         <label for="workspace">Workspace folder</label>
@@ -286,6 +289,19 @@
       <button type="button" id="open-config-file" class="open-config-file">Open config file…</button>
       <p class="check-result" id="open-config-file-result" role="status"></p>
     </section>
+  </section>
+
+  <section id="panel-updates" role="tabpanel" aria-labelledby="tab-updates" tabindex="0" class="panel" hidden>
+    <p class="group-label">This app</p>
+    <div class="group">
+      <label>Version</label>
+      <p id="app-version" class="hint">—</p>
+      <p id="app-update-state" class="hint">Up to date.</p>
+      <div class="field-label-row">
+        <button id="check-app-update" type="button">Check for updates</button>
+        <button id="install-app-update" type="button" hidden>Update and install</button>
+      </div>
+    </div>
   </section>
 
 </main>

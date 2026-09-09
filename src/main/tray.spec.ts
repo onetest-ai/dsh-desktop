@@ -36,3 +36,39 @@ describe('tray note', () => {
     tray.destroy()
   })
 })
+
+describe('tray app update', () => {
+  function lastBuiltTemplate(): { label?: string; click?: () => void }[] {
+    return menus[menus.length - 1]
+  }
+
+  it('renders a Restart-to-install row when an app update is set, wired to restartToInstall', () => {
+    menus.length = 0
+    const restartToInstall = vi.fn()
+    const controller = createTray({ toggleWindow() {}, restart() {}, openSettings() {}, quit() {}, restartToInstall })
+    controller.setAppUpdate('1.4.0')
+    const template = lastBuiltTemplate()
+    const row = template.find((item) => typeof item.label === 'string' && item.label.includes('Restart to install'))
+    expect(row).toBeDefined()
+    expect(row?.label).toContain('1.4.0')
+    ;(row as { click: () => void }).click()
+    expect(restartToInstall).toHaveBeenCalledTimes(1)
+    controller.destroy()
+  })
+
+  it('drops the app-update row when set back to undefined', () => {
+    menus.length = 0
+    const controller = createTray({
+      toggleWindow() {},
+      restart() {},
+      openSettings() {},
+      quit() {},
+      restartToInstall() {},
+    })
+    controller.setAppUpdate('1.4.0')
+    controller.setAppUpdate(undefined)
+    const template = lastBuiltTemplate()
+    expect(template.find((i) => String(i.label).includes('Restart to install'))).toBeUndefined()
+    controller.destroy()
+  })
+})

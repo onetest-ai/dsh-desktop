@@ -8,6 +8,8 @@ export interface TrayActions {
   restart(): void
   openSettings(): void
   quit(): void
+  /** Quit and install a downloaded APP update (distinct from the harness update). */
+  restartToInstall(): void
 }
 
 /** Live handle on the tray icon. */
@@ -28,6 +30,15 @@ export interface TrayController {
    * @param version - the version available, or undefined to drop the row.
    */
   setUpdate(version: string | undefined): void
+  /**
+   * Show that a newer build of THIS app has been downloaded and is ready.
+   *
+   * Distinct from `setUpdate`, which is the managed-harness npm update: two
+   * different update concepts get two different rows so neither is mistaken
+   * for the other.
+   * @param version - the version downloaded, or undefined to drop the row.
+   */
+  setAppUpdate(version: string | undefined): void
   destroy(): void
 }
 
@@ -67,6 +78,7 @@ export function createTray(actions: TrayActions): TrayController {
   const tray = new Tray(icon('starting'))
 
   let update: string | undefined
+  let appUpdate: string | undefined
   /** What the menu is currently showing, so the update row can be added without it. */
   let current: { status: ServerStatus; note?: string } = { status: 'starting' }
 
@@ -92,6 +104,9 @@ export function createTray(actions: TrayActions): TrayController {
         ...(update === undefined
           ? []
           : [{ label: `Update available: ${update}`, click: () => actions.openSettings() }]),
+        ...(appUpdate === undefined
+          ? []
+          : [{ label: `Restart to install DeepSeek Harness ${appUpdate}`, click: () => actions.restartToInstall() }]),
         { type: 'separator' },
         { label: 'Quit', click: () => actions.quit() },
       ]),
@@ -107,6 +122,10 @@ export function createTray(actions: TrayActions): TrayController {
       update = version
       // Re-rendered with what the menu is already showing: the update row is
       // one line in a menu whose other lines are not this function's to know.
+      render(current.status, current.note)
+    },
+    setAppUpdate: (version) => {
+      appUpdate = version
       render(current.status, current.note)
     },
     destroy: () => tray.destroy(),

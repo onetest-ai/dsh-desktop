@@ -9,7 +9,7 @@ const kindOf = () => document.querySelector('input[name="kind"]:checked').value
 // Save, and never appears in a save result — so an Add error never drives a
 // tab switch; `plugins` names the accumulated-list error Save can still
 // return (see `error-plugins` in the Plugins panel).
-const TABS = ['harness', 'plugins', 'mcp', 'notifications', 'advanced']
+const TABS = ['harness', 'plugins', 'mcp', 'notifications', 'advanced', 'updates']
 const FIELD_TAB = {
   repo: 'harness',
   package: 'harness',
@@ -1582,6 +1582,37 @@ window.settings.onPluginUpdateAvailable((pkg, latest) => {
   if (plugin === undefined || plugin.version === latest) return
   pluginUpdates.set(pkg, latest)
   renderPluginRows()
+})
+
+// The app's own version + update controls. Receive-only for state, like the
+// harness update-available push; the buttons call main over invoke.
+void window.settings.appVersion().then((version) => {
+  el('app-version').textContent = version
+})
+
+el('check-app-update').addEventListener('click', () => {
+  void window.settings.checkAppUpdate()
+})
+el('install-app-update').addEventListener('click', () => {
+  void window.settings.installAppUpdate()
+})
+
+window.settings.onAppUpdate((msg) => {
+  const state = el('app-update-state')
+  const install = el('install-app-update')
+  if (msg.state === 'checking') {
+    state.textContent = 'Checking…'
+    install.hidden = true
+  } else if (msg.state === 'available') {
+    state.textContent = `Update available: ${msg.version}. Downloading…`
+    install.hidden = true
+  } else if (msg.state === 'ready') {
+    state.textContent = `Update ${msg.version} downloaded.`
+    install.hidden = false
+  } else {
+    state.textContent = 'Could not check for updates.'
+    install.hidden = true
+  }
 })
 
 // The harness owns the light/dark choice and main resolves it; this window

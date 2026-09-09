@@ -86,4 +86,12 @@ contextBridge.exposeInMainWorld('settings', {
     ipcRenderer.on('settings:plugin-update-available', handler)
     return () => ipcRenderer.removeListener('settings:plugin-update-available', handler)
   },
+  appVersion: () => ipcRenderer.invoke('settings:app-version'),
+  checkAppUpdate: () => ipcRenderer.invoke('settings:check-app-update'),
+  installAppUpdate: () => ipcRenderer.invoke('settings:install-app-update'),
+  onAppUpdate: (listener: (msg: { state: string; version?: string }) => void) => {
+    const handler = (_event: IpcRendererEvent, msg: { state: string; version?: string }) => listener(msg)
+    ipcRenderer.on('settings:app-update', handler)
+    return () => ipcRenderer.removeListener('settings:app-update', handler)
+  },
 })

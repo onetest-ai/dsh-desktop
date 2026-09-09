@@ -2,6 +2,8 @@ import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, n
 import { accessSync, constants, existsSync, mkdirSync, renameSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { autoUpdater } from 'electron-updater'
+import { createAppUpdater, type AppUpdater } from './app-update'
 import { loadDeclaredPatchRows } from './bundle-patch'
 import { checkBinaries } from './check-binaries'
 import { DEFAULT_VIEW_TOOLS_PORT, loadConfig, writeConfig, type ConfigResult, type DesktopConfig } from './config'
@@ -12,7 +14,7 @@ import { createManagedInstaller, createUpdateChecker } from './managed-install'
 import { mcpConfigPath, readMcpConfig, writeMcpConfig, type McpServerEntry } from './mcp-config'
 import { migrateMcpConfig } from './mcp-migrate'
 import { createMcpProber } from './mcp-probe'
-import { alignDefaultPlugins, ensureDefaultPlugins } from './plugin-defaults'
+import { alignDefaultPlugins, ensureDefaultPlugins, migrateRenamedPlugins } from './plugin-defaults'
 import { repairablePlugins, runHealthcheck, type Finding } from './healthcheck'
 import { repairPlugins } from './repair'
 import { closeStartup, pushFindings, pushPhase, pushProgress, showStartup } from './startup-window'
@@ -1326,6 +1328,61 @@ function checkForUpdate(config: DesktopConfig): void {
 }
 
 /**
+ * Build the app self-updater and schedule its checks.
+ *
+ * Packaged-only, and deliberately never touches electron-updater's
+ * `autoUpdater` at all unless packaged: the module's `autoUpdater` is a lazy
+ * getter that constructs a platform updater on first read, which calls
+ * `app.getVersion()` — a dev/test launch (an unpackaged Electron app, or a
+ * mocked `app` under Vitest) throws there, so simply referencing the getter
+ * is unsafe, not just calling into it. The first check is delayed so it does
+ * not compete with harness startup; thereafter a long interval keeps a
+ * long-running app current without noise.
+ */
+function startAppUpdates(): void {
+  if (!app.isPackaged) {
+    appUpdater = { checkNow: () => {}, quitAndInstall: () => {} }
+    return
+  }
+  appUpdater = createAppUpdater(
+    {
+      onReady: (version) => {
+        if (quitting) return
+        tray?.setAppUpdate(version)
+        settingsContents()?.send('settings:app-update', { state: 'ready', version })
+        if (!appUpdateNotified) {
+          appUpdateNotified = true
+          new Notification({ title: 'DeepSeek Harness', body: `Update ${version} downloaded — restart to install.` }).show()
+        }
+      },
+      onAvailable: (version) => settingsContents()?.send('settings:app-update', { state: 'available', version }),
+      onError: () => settingsContents()?.send('settings:app-update', { state: 'error' }),
+    },
+    { packaged: true, backend: autoUpdater },
+  )
+  setTimeout(() => appUpdater?.checkNow(), 10_000)
+  appUpdateTimer = setInterval(() => appUpdater?.checkNow(), 6 * 60 * 60 * 1000)
+}
+
+/**
+ * Settings-window IPC for the app self-updater.
+ *
+ * `appUpdater` is module-scoped and assigned by `startAppUpdates()` in both
+ * the packaged and unpackaged cases (a dev launch gets an inert stub), so
+ * `appUpdater?.checkNow()`/`quitAndInstall()` below are safe no-ops before
+ * `startAppUpdates()` has run and in dev. Registered once here, at module
+ * load, so the channels exist before the Settings window can open.
+ */
+ipcMain.handle('settings:app-version', () => app.getVersion())
+ipcMain.handle('settings:check-app-update', () => {
+  settingsContents()?.send('settings:app-update', { state: 'checking' })
+  appUpdater?.checkNow()
+})
+ipcMain.handle('settings:install-app-update', () => {
+  appUpdater?.quitAndInstall()
+})
+
+/**
  * Tell this app's own pages which theme to draw in.
  *
  * The harness owns the setting — its Appearance row writes it — so every
@@ -1481,6 +1538,9 @@ let revealPending = false
 let quitting = false
 let tray: TrayController | undefined
 let notifier: NotifyServer | undefined
+let appUpdater: AppUpdater | undefined
+let appUpdateTimer: ReturnType<typeof setInterval> | undefined
+let appUpdateNotified = false
 /** A deep link that arrived before the window existed; see the `open-url` handler. */
 let deepLinkPending = false
 
@@ -2448,6 +2508,10 @@ async function shutdown(): Promise<void> {
   themeWatcher = undefined
   workspaceWatcher?.close()
   workspaceWatcher = undefined
+  if (appUpdateTimer !== undefined) {
+    clearInterval(appUpdateTimer)
+    appUpdateTimer = undefined
+  }
   projectWatcher?.close()
   projectWatcher = undefined
   closeGitWatchers()
@@ -2562,6 +2626,11 @@ if (!app.requestSingleInstanceLock()) {
     // Before anything reads `mcp.json`: converts the superseded `mcp` section
     // and token store, once, and is a no-op afterwards.
     migrateMcpConfig(DSH_HOME)
+    // Rewrites a default whose package was renamed (e.g. the per-project MCP
+    // bridge moving to the @onetest scope) so the fix reaches an install that
+    // still names the old one — before the reconcile pass and healthcheck read
+    // the config. Only rewrites entries already present; idempotent afterwards.
+    migrateRenamedPlugins(DSH_HOME)
     // Offers each shipped default once, recorded by generation so a default
     // the user removes stays removed.
     ensureDefaultPlugins(DSH_HOME)
@@ -3239,6 +3308,7 @@ if (!app.requestSingleInstanceLock()) {
       restart: () => void restartOnce(),
       openSettings: showSettings,
       quit: () => app.quit(),
+      restartToInstall: () => appUpdater?.quitAndInstall(),
     })
     const hotkey = safeHotkey()
     if (hotkey !== undefined && !globalShortcut.register(hotkey, toggleWindow)) {
@@ -3278,6 +3348,7 @@ if (!app.requestSingleInstanceLock()) {
     // about.
     await startViewTools(stored.config)
     checkForUpdate(stored.config)
+    startAppUpdates()
     await enqueue(bootNow)
   })
 
