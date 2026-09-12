@@ -611,6 +611,18 @@ button:disabled {
   white-space: nowrap;
 }
 
+/* The install-in-flight state: the accent colour plus a gentle pulse so a row
+   that is being installed reads as active rather than merely unresolved. */
+.plugin-meta-installing {
+  color: var(--accent);
+  animation: plugin-installing-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes plugin-installing-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
 .plugin-row-actions {
   display: flex;
   align-items: center;

@@ -384,12 +384,20 @@ export async function ensureGitInstalled(
   onLine?: (line: string) => void,
   priorPackage?: string,
 ): Promise<GitInstallResult> {
+  // Emit progress for the steps npm cannot narrate on its own: resolving the
+  // ref is a silent network call, and the cache-hit path runs no npm at all, so
+  // without these the UI's install log would sit empty until (or unless) npm
+  // itself starts streaming.
+  const ref = source.ref ?? 'HEAD'
+  onLine?.(`Resolving github:${source.owner}/${source.repo}#${ref}…`)
   const sha = await resolveGitRef(deps, git, source.owner, source.repo, source.ref)
   const dir = managedDir(dshHome, cacheKey, sha)
   // Cache hit: the same commit is already installed and its name is known.
   if (priorPackage !== undefined && deps.exists(join(dir, 'node_modules', ...priorPackage.split('/'), 'package.json'))) {
+    onLine?.(`Already installed at ${sha.slice(0, 10)}.`)
     return { version: sha, package: priorPackage }
   }
+  onLine?.(`Installing github:${source.owner}/${source.repo} at ${sha.slice(0, 10)}…`)
 
   const staging = managedStagingDir(dshHome, cacheKey, sha)
   deps.rm(staging)
@@ -420,6 +428,7 @@ export async function ensureGitInstalled(
     deps.rm(staging)
     throw error
   }
+  onLine?.(`Installed ${pkg} at ${sha.slice(0, 10)}.`)
 
   deps.rm(dir)
   deps.rename(staging, dir)

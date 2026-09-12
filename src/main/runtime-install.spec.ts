@@ -345,6 +345,24 @@ describe('ensureGitInstalled', () => {
     expect(deps.rename).toHaveBeenCalledWith(managedStagingDir(DSH_HOME, KEY, SHA), dir)
   })
 
+  it('streams progress for the resolve and install steps npm cannot narrate', async () => {
+    const staging = managedStagingDir(DSH_HOME, KEY, SHA)
+    const lines: string[] = []
+    const deps = fakeDeps({ run: gitRun() }, new Set([`${staging}/node_modules/dsh-model-switch/lib/index.js`]), gitFiles(staging))
+    await ensureGitInstalled(deps, NPM, GIT, DSH_HOME, { owner: 'owner', repo: 'repo', ref: 'main' }, KEY, (line) => lines.push(line))
+    expect(lines.some((l) => /Resolving github:owner\/repo#main/.test(l))).toBe(true)
+    expect(lines.some((l) => /Installing github:owner\/repo at/.test(l))).toBe(true)
+    expect(lines.some((l) => /Installed dsh-model-switch/.test(l))).toBe(true)
+  })
+
+  it('reports the cache hit as progress instead of a silent skip', async () => {
+    const dir = managedDir(DSH_HOME, KEY, SHA)
+    const lines: string[] = []
+    const deps = fakeDeps({ run: gitRun() }, new Set([`${dir}/node_modules/dsh-model-switch/package.json`]))
+    await ensureGitInstalled(deps, NPM, GIT, DSH_HOME, { owner: 'owner', repo: 'repo', ref: 'main' }, KEY, (line) => lines.push(line), 'dsh-model-switch')
+    expect(lines.some((l) => /Already installed/.test(l))).toBe(true)
+  })
+
   it('skips npm entirely when the commit is already installed with a known name', async () => {
     const dir = managedDir(DSH_HOME, KEY, SHA)
     const run = gitRun()

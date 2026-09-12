@@ -951,8 +951,17 @@ function renderPluginRows() {
 
     const meta = document.createElement('span')
     meta.className = 'plugin-meta'
-    const state = plugin.version === undefined ? 'not installed yet' : `v${plugin.version} installed`
-    meta.textContent = plugin.pinned ? `pinned, ${state}` : state
+    // A row with no resolved version yet is installed by the next Save. While
+    // that Save is in flight, saying "Installing…" is what turns the disabled
+    // Save button into visible feedback — a git resolve then an install can run
+    // for seconds with little else to see (see `#progress`).
+    if (plugin.version === undefined && saveInFlight) {
+      meta.textContent = 'Installing…'
+      meta.classList.add('plugin-meta-installing')
+    } else {
+      const state = plugin.version === undefined ? 'not installed yet' : `v${plugin.version} installed`
+      meta.textContent = plugin.pinned ? `pinned, ${state}` : state
+    }
     main.append(meta)
 
     top.append(main)
