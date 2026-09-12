@@ -53,9 +53,9 @@ export interface SettingsForm {
    */
   viewTools: boolean
   /**
-   * Whether to show the harness's built-in file tree and document preview (the
-   * two tabs in its right sidebar). Off by default: this app has its own file
-   * tree, so those two are redundant. The dock itself always stays.
+   * Whether to show the harness's own built-in right sidebar. Off by default:
+   * this app has its own right rail, so it is redundant. Its plugin stays
+   * loaded (the chat UI needs its service); only its UI is hidden.
    */
   showBuiltinRightSidebar: boolean
 }

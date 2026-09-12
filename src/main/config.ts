@@ -91,15 +91,14 @@ export interface DesktopConfig {
   /** The loopback port those tools are served on. */
   viewToolsPort?: number
   /**
-   * Whether to show the harness's built-in file tree and document preview (the
-   * two tabs in its own right sidebar).
+   * Whether to show the harness's own built-in right sidebar (its dock with a
+   * file tree and document preview, and the expand button that opens it).
    *
-   * Absent means off: this app supplies its own file tree, so those two are
-   * redundant and hidden by default. When absent or false, the generated
-   * overlay disables the bundle's `ui-sidebar-files` and
-   * `ui-sidebar-documentpreview` entries; `true` leaves them mounted. The dock
-   * itself (`ui-sidebar-right`) is never disabled — the chat UI requires its
-   * `sidebarRight` service.
+   * Absent means off: this app supplies its own right rail, so the harness's is
+   * redundant and hidden by default. When absent or false, dsh-desktop injects
+   * CSS into the harness view hiding the sidebar's own elements; `true` injects
+   * nothing. The dock's plugin is never disabled — the chat UI requires its
+   * `sidebarRight` service — so only its UI is hidden, not the service.
    */
   showBuiltinRightSidebar?: boolean
 }
