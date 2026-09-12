@@ -797,7 +797,6 @@ describe('boot', () => {
       undefined,
       expect.any(Function),
       expect.any(Function),
-      true,
     )
   })
 
@@ -1001,7 +1000,6 @@ describe('plugin-caused boot failures', () => {
       undefined,
       expect.any(Function),
       expect.any(Function),
-      true,
     )
     expect(fake.harness.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining(`${DECK} disabled`))
@@ -1041,7 +1039,6 @@ describe('plugin-caused boot failures', () => {
       undefined,
       expect.any(Function),
       expect.any(Function),
-      true,
     )
     expect(fake.harness.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('disabled'))
@@ -2371,7 +2368,7 @@ describe('the side columns', () => {
       // A stored config predating the terminal opens it closed, at its
       // default size, rather than refusing to load.
       terminal: { width: 720, height: 240, open: false },
-    })
+    }, expect.any(Function))
   })
 
   // reason: the renderer names the root it wants to read. Without this it

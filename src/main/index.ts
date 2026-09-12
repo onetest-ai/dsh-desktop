@@ -1605,9 +1605,10 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
     // — only reaches the harness through a respawn. Compared by value
     // because the section is rebuilt fresh on every save.
     mcpChanged(previous, next) ||
-    // The built-in-sidebar switch adds or removes the overlay's
-    // `ui-sidebar-files`/`-documentpreview` disable rows, fixed at spawn, so a
-    // change only reaches the harness through a respawn.
+    // The built-in-sidebar switch decides whether the harness view gets the
+    // sidebar-hiding CSS, which is injected on the harness's `dom-ready`. A
+    // respawn is what reloads the harness so that injection re-evaluates the
+    // new choice.
     previous.showBuiltinRightSidebar !== next.showBuiltinRightSidebar
   )
 }
@@ -2461,7 +2462,7 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
       const declaredPath = bundlePatchDeclaration(status.packageDir)
       return declaredPath !== undefined ? loadDeclaredPatchRows(status.packageDir, declaredPath) : undefined
     }
-    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses, undefined, resolveName, resolveDeclaredPatch, config.showBuiltinRightSidebar !== true)
+    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses, undefined, resolveName, resolveDeclaredPatch)
     reconcilePluginLinks(DSH_HOME, PROFILE, linked)
     reconcilePluginPresets(DSH_HOME, presetIds)
     patchPath = files.patchPath
@@ -2578,6 +2579,23 @@ const restartOnce = singleFlight(restart)
 function currentDark(): boolean {
   const preference = harnessTheme(DSH_HOME)
   return preference === 'dark' || (preference === 'system' && nativeTheme.shouldUseDarkColors)
+}
+
+/**
+ * Whether the harness's own right sidebar should be hidden right now — off
+ * unless `showBuiltinRightSidebar` is explicitly on, this app having its own
+ * right rail. Read live from disk on each harness load so a Save that flips it
+ * (which respawns the harness) takes effect on the reload without capturing a
+ * stale value. A config that cannot be read hides it, matching the default.
+ * @returns whether to inject the sidebar-hiding CSS.
+ */
+function hideBuiltinSidebar(): boolean {
+  try {
+    const stored = loadConfig(CONFIG_PATH)
+    return !stored.configured || stored.config.showBuiltinRightSidebar !== true
+  } catch {
+    return true
+  }
 }
 
 function showSettings(): void {
@@ -2723,7 +2741,7 @@ if (!app.requestSingleInstanceLock()) {
       // An unreadable config is reported further down, where it can open
       // Settings; the columns simply start at their defaults until then.
     }
-    views = createWindow(columns)
+    views = createWindow(columns, hideBuiltinSidebar)
     window = views.window
     // Sent, not invoked: a divider drag reports a coordinate per pointer move
     // and wants no answer. Which divider is dragging comes with it, since the

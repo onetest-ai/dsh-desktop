@@ -39,6 +39,29 @@ button, a, input, textarea, select, [role="button"], [contenteditable="true"], [
 }
 `
 
+/**
+ * Hide the harness's own right sidebar — its dock, its float host, and the
+ * expand button in the session header that opens it.
+ *
+ * The dock cannot be disabled as a plugin: it provides the `sidebarRight`
+ * service the chat UI requires, so disabling it strands the chat plugin and the
+ * client shows "Failed to load plugins". So the plugin stays loaded and only
+ * its UI is hidden, styling what already renders (the same way `DRAG_REGION_CSS`
+ * does). The hooks are the sidebar's own stable data attributes, not its hashed
+ * CSS-module class names: `data-sidebar-right-expand` on the header button,
+ * `data-sidebar-right-panel` (always present) on the dock, and
+ * `data-sidebar-right-float-host` on its floating layer. Every other header
+ * control — the "…" menu, download, open-in — is untouched.
+ */
+export const HIDE_BUILTIN_SIDEBAR_CSS = `
+[data-sidebar-right-expand],
+[data-sidebar-right-toggle],
+[data-sidebar-right-panel],
+[data-sidebar-right-float-host] {
+  display: none !important;
+}
+`
+
 /** The window and the views it holds. */
 export interface MainWindow {
   window: BrowserWindow
@@ -156,7 +179,7 @@ export function servePane(projectRoots: () => string[]): void {
  * @param columns - each column's stored width and whether it starts open.
  * @returns the window and its views.
  */
-export function createWindow(columns: Columns): MainWindow {
+export function createWindow(columns: Columns, hideBuiltinSidebar: () => boolean = () => false): MainWindow {
   const window = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -320,6 +343,10 @@ export function createWindow(columns: Columns): MainWindow {
   // prior `insertCSS` call.
   harness.webContents.on('dom-ready', () => {
     void harness.webContents.insertCSS(DRAG_REGION_CSS)
+    // Read per load, not captured once: the setting can change and the harness
+    // reloads (a Save that changes it respawns the child), so the freshly
+    // loaded document reflects the current choice.
+    if (hideBuiltinSidebar()) void harness.webContents.insertCSS(HIDE_BUILTIN_SIDEBAR_CSS)
   })
 
   return views

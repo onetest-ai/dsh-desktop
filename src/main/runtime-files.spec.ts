@@ -282,25 +282,9 @@ describe('patchOverlay', () => {
     expect(overlay).not.toContain('ignored')
   })
 
-  it('does not disable any built-in sidebar entry by default', () => {
+  it('never disables a built-in sidebar entry — hiding is done with injected CSS, not the overlay', () => {
     const { overlay } = patchOverlay([], [])
-    expect(overlay).not.toContain('ui-sidebar-files')
-    expect(overlay).not.toContain('ui-sidebar-documentpreview')
-  })
-
-  it('disables the built-in file-tree and preview tabs when asked, but never the dock itself', () => {
-    // The desktop shell supplies its own right rail, so the harness's own file
-    // tree and document preview are redundant. But the dock (`ui-sidebar-right`)
-    // provides the `sidebarRight` service the chat UI requires, so it is left
-    // enabled: disabling it strands the chat plugin and the client shows
-    // "Failed to load plugins".
-    const { overlay } = patchOverlay([], [], true)
-    for (const id of ['ui-sidebar-documentpreview', 'ui-sidebar-files']) {
-      expect(overlay).toContain(`- id: ${id}`)
-    }
-    expect(overlay).toContain('disabled: true')
-    // The dock is never disabled — that is the whole point of this fix.
-    expect(overlay).not.toContain('ui-sidebar-right')
+    expect(overlay).not.toContain('ui-sidebar')
   })
 })
 
