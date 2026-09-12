@@ -70,7 +70,8 @@
             "dsh"
           ]
         }
-      ]
+      ],
+      "artifactName": "DeepSeek-Harness-${version}-${arch}.${ext}"
     },
     "afterPack": "build/adhoc-sign.js",
     "publish": {
