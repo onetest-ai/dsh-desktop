@@ -14,6 +14,8 @@ It is a **shell, not a fork**: it never modifies the harness. Point it at a chec
   - **a local harness checkout** with its frontend built (`pnpm run build:web`), plus `pnpm` on your `PATH`, or
   - **a managed install**, to run the published `@deepseek-ai/dsh` package instead — Settings installs it under `$DSH_HOME` on save, no checkout required
 
+> **Harness compatibility.** The app is a shell around whatever `@deepseek-ai/dsh` you point it at and tracks the latest release; it is verified against DeepSeek Harness **0.1.5** (`latest` is fine). A managed source defaults to `latest`, so a fresh managed install picks up the current harness on its own.
+
 ## Running it
 
 ### From source
@@ -92,8 +94,10 @@ Tokens are deliberately absent from that file; see MCP below.
 For a managed source, `harness` takes this form instead:
 
 ```json
-{ "kind": "managed", "package": "@deepseek-ai/dsh", "version": "latest", "workspace": "/path/to/work/in" }
+{ "kind": "managed", "package": "@deepseek-ai/dsh", "version": "latest" }
 ```
+
+The managed harness runs in `$DSH_HOME`; the project you work in is chosen from the harness's own Workspaces, not from this file. `version` may be a dist-tag (`latest`) or an exact version.
 
 `pnpmPath` and `npmPath` are optional. Set them when a launch from Finder cannot find the binary — a Finder launch inherits a minimal `PATH` with no Homebrew or Corepack shim, so a packaged app often needs the absolute path from `which pnpm` or `which npm`. Running from a terminal usually does not.
 
