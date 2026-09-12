@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { managedBin, managedDir, managedStagingDir } from './harness-source'
 import { envWithLauncherDir } from './server'
 
@@ -14,6 +15,8 @@ export interface InstallDeps {
   ): Promise<{ code: number; stdout: string; stderr: string }>
   /** Whether a path exists on disk. */
   exists(path: string): boolean
+  /** Reads a file as UTF-8 text; throws when it is absent or unreadable. */
+  readText(path: string): string
   /** Creates a directory, including parents. */
   mkdir(path: string): void
   /** Removes a directory and its contents; succeeds when it is already absent. */
@@ -221,4 +224,204 @@ export function latestVersion(deps: InstallDeps, npm: string, pkg: string): Prom
  */
 export function updateAvailable(installed: string, latest: string): boolean {
   return installed !== latest
+}
+
+/**
+ * Upper bound on one `git ls-remote` lookup — one network round trip to
+ * resolve a ref to a commit, on the same Save path `resolveVersion` runs on.
+ */
+const LS_REMOTE_TIMEOUT_MS = 60_000
+
+/** The HTTPS clone URL for a public GitHub repository. */
+function githubHttpsUrl(owner: string, repo: string): string {
+  return `https://github.com/${owner}/${repo}.git`
+}
+
+/**
+ * Resolve a GitHub repo's ref to the exact commit it points at.
+ *
+ * A ref (a branch or tag) is mutable, so it is resolved to an immutable commit
+ * SHA here and only that SHA is ever installed or stored — the git equivalent
+ * of {@link resolveVersion} turning a dist-tag into a concrete version, which
+ * is what keeps a repeat install a cache hit. `git ls-remote` reads the remote
+ * without cloning and needs no credentials for a public repo.
+ * @param deps - injected effects.
+ * @param git - the resolved `git` binary.
+ * @param owner - the repo owner.
+ * @param repo - the repo name.
+ * @param ref - the branch, tag, or SHA to resolve; the default branch when omitted.
+ * @returns the 40-character commit SHA.
+ */
+export async function resolveGitRef(
+  deps: InstallDeps,
+  git: string,
+  owner: string,
+  repo: string,
+  ref?: string,
+): Promise<string> {
+  const url = githubHttpsUrl(owner, repo)
+  const args = ref === undefined ? ['ls-remote', url, 'HEAD'] : ['ls-remote', url, ref]
+  const result = await deps.run(git, args, { timeoutMs: LS_REMOTE_TIMEOUT_MS })
+  if (result.code !== 0) {
+    throw new Error(`dsh-desktop: git ls-remote ${url} ${ref ?? 'HEAD'} failed:\n${result.stderr}`)
+  }
+  // `<sha>\t<ref>` lines, one per matching ref. A branch/tag/HEAD matches one;
+  // the first field of the first line is the commit.
+  const sha = result.stdout.split('\n')[0]?.split('\t')[0]?.trim()
+  if (sha === undefined || !/^[0-9a-f]{40}$/.test(sha)) {
+    // A ref that matches nothing produces empty output with a zero exit; a SHA
+    // passed as the ref is not resolvable by ls-remote and lands here too.
+    if (ref !== undefined && /^[0-9a-f]{7,40}$/i.test(ref)) return ref.toLowerCase()
+    throw new Error(`dsh-desktop: git ls-remote ${url} found no ref "${ref ?? 'HEAD'}"`)
+  }
+  return sha
+}
+
+/**
+ * The npm package name a `github:` install actually landed, read from the tree
+ * npm wrote into the staging prefix.
+ *
+ * `npm install --prefix <dir> github:owner/repo#sha` writes a generated
+ * `<dir>/package.json` whose single `dependencies` key is the installed
+ * package's own name — verified live against `lincong1987/dsh-model-switch`,
+ * whose repo name and package name differ. That key is the authoritative name
+ * (the repo name is not it), and every downstream path — the profile link, the
+ * overlay row, the package directory — needs it.
+ * @param deps - injected effects.
+ * @param installDir - the `--prefix` directory the install wrote into.
+ * @returns the discovered package name.
+ * @throws when the generated manifest names no single dependency.
+ */
+export function discoverInstalledPackage(deps: InstallDeps, installDir: string): string {
+  const manifest = JSON.parse(deps.readText(join(installDir, 'package.json'))) as { dependencies?: Record<string, unknown> }
+  const names = Object.keys(manifest.dependencies ?? {})
+  if (names.length !== 1) {
+    throw new Error(`dsh-desktop: the git install wrote ${names.length} top-level dependencies, expected exactly one`)
+  }
+  return names[0]
+}
+
+/**
+ * Fail loudly when a freshly installed package ships no usable entry point.
+ *
+ * A GitHub repo that neither commits its build output nor declares a working
+ * `prepare` script installs "successfully" and then fails to load as a plugin
+ * — a silent broken state. This turns that into a clear install error naming
+ * the cause. The manifest is read inline (not through `plugin-entries.ts`) to
+ * keep this module free of a runtime import cycle.
+ * @param deps - injected effects.
+ * @param installDir - the `--prefix` directory the install wrote into.
+ * @param pkg - the discovered package name.
+ * @throws when the entry file, or a declared bundle patch, is absent.
+ */
+function assertPluginBuilt(deps: InstallDeps, installDir: string, pkg: string): void {
+  const packageDir = join(installDir, 'node_modules', ...pkg.split('/'))
+  const manifest = JSON.parse(deps.readText(join(packageDir, 'package.json'))) as {
+    main?: string
+    exports?: unknown
+    dsh?: { bundle?: { patch?: string } }
+  }
+  const exportsDot = typeof manifest.exports === 'string'
+    ? manifest.exports
+    : (() => {
+        const dot = (manifest.exports as Record<string, unknown> | null | undefined)?.['.']
+        if (typeof dot === 'string') return dot
+        if (dot !== null && typeof dot === 'object') {
+          const c = dot as Record<string, unknown>
+          const value = c.default ?? c.import ?? c.require ?? c.node
+          return typeof value === 'string' ? value : undefined
+        }
+        return undefined
+      })()
+  const entry = exportsDot ?? manifest.main
+  if (entry === undefined) {
+    throw new Error(`${pkg} declares no "main" or exports["."]: the repository ships no built entry point`)
+  }
+  if (!deps.exists(join(packageDir, entry))) {
+    throw new Error(`${pkg}'s entry "${entry}" is missing: the repository must commit its build output or declare a working "prepare" script`)
+  }
+  const patch = manifest.dsh?.bundle?.patch
+  if (typeof patch === 'string' && !deps.exists(join(packageDir, patch))) {
+    throw new Error(`${pkg}'s declared bundle patch "${patch}" is missing from the installed package`)
+  }
+}
+
+/** A resolved git install: the immutable commit it pinned, and the package it landed. */
+export interface GitInstallResult {
+  /** The 40-character commit SHA, stored where a version goes. */
+  version: string
+  /** The discovered npm package name, stored on the entry. */
+  package: string
+}
+
+/**
+ * Resolve, install, and verify a `github:` plugin source.
+ *
+ * Mirrors {@link ensureInstalled}: the ref resolves to a SHA (the immutable
+ * cache key), the install runs in a staging sibling and is renamed into place
+ * only on success, and a repeat install of the same SHA is a cache hit skipped
+ * without touching `git` or `npm`. Between the staging install and the rename —
+ * the one window a partial tree is visible — the package name is discovered and
+ * the entry point is verified, so a repo that ships no build fails here rather
+ * than as a broken plugin at boot.
+ * @param deps - injected effects.
+ * @param npm - the resolved `npm` binary.
+ * @param git - the resolved `git` binary.
+ * @param dshHome - the resolved `$DSH_HOME` directory.
+ * @param source - the parsed github source (owner, repo, optional ref).
+ * @param cacheKey - the entry key the managed cache is stored under (`github:owner/repo`).
+ * @param onLine - receives `npm install` output as it arrives.
+ * @param priorPackage - the last discovered name, for the cache-hit marker check.
+ * @returns the pinned SHA and the discovered package name.
+ */
+export async function ensureGitInstalled(
+  deps: InstallDeps,
+  npm: string,
+  git: string,
+  dshHome: string,
+  source: { owner: string; repo: string; ref?: string },
+  cacheKey: string,
+  onLine?: (line: string) => void,
+  priorPackage?: string,
+): Promise<GitInstallResult> {
+  const sha = await resolveGitRef(deps, git, source.owner, source.repo, source.ref)
+  const dir = managedDir(dshHome, cacheKey, sha)
+  // Cache hit: the same commit is already installed and its name is known.
+  if (priorPackage !== undefined && deps.exists(join(dir, 'node_modules', ...priorPackage.split('/'), 'package.json'))) {
+    return { version: sha, package: priorPackage }
+  }
+
+  const staging = managedStagingDir(dshHome, cacheKey, sha)
+  deps.rm(staging)
+  deps.mkdir(staging)
+
+  let result: { code: number; stdout: string; stderr: string }
+  try {
+    result = await runNpm(
+      deps,
+      npm,
+      ['install', '--prefix', staging, `github:${source.owner}/${source.repo}#${sha}`, '--no-audit', '--no-fund'],
+      { cwd: dshHome, onLine, timeoutMs: INSTALL_TIMEOUT_MS },
+    )
+  } catch (error) {
+    deps.rm(staging)
+    throw error
+  }
+  if (result.code !== 0) {
+    deps.rm(staging)
+    throw new Error(`dsh-desktop: npm install github:${source.owner}/${source.repo}#${sha} failed:\n${result.stderr}`)
+  }
+
+  let pkg: string
+  try {
+    pkg = discoverInstalledPackage(deps, staging)
+    assertPluginBuilt(deps, staging, pkg)
+  } catch (error) {
+    deps.rm(staging)
+    throw error
+  }
+
+  deps.rm(dir)
+  deps.rename(staging, dir)
+  return { version: sha, package: pkg }
 }

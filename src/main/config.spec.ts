@@ -186,6 +186,41 @@ describe('loadConfig', () => {
       expect(() => loadConfig(file)).toThrow(/plugin spec/)
     })
 
+    it('accepts a hand-edited github entry with its discovered package name', () => {
+      const file = writeConfigFile(
+        JSON.stringify({
+          harness: { kind: 'local', repo: '/tmp/harness' },
+          plugins: [{ spec: 'github:TTTPOB/dsh-task-models#main', version: 'abc123', package: 'dsh-task-models' }],
+        }),
+      )
+      const result = loadConfig(file)
+      expect(result.configured && result.config.plugins).toEqual([
+        { spec: 'github:TTTPOB/dsh-task-models#main', version: 'abc123', package: 'dsh-task-models' },
+      ])
+    })
+
+    it('rejects a github entry whose hand-edited package name is a traversal', () => {
+      // The discovered `package` reaches `packageDirIn`'s raw path join, so a
+      // traversal there is refused the same way a spec one is.
+      const file = writeConfigFile(
+        JSON.stringify({
+          harness: { kind: 'local', repo: '/tmp/harness' },
+          plugins: [{ spec: 'github:owner/repo#main', version: 'abc123', package: '../../etc' }],
+        }),
+      )
+      expect(() => loadConfig(file)).toThrow(/package/)
+    })
+
+    it('rejects a malformed github spec', () => {
+      const file = writeConfigFile(
+        JSON.stringify({
+          harness: { kind: 'local', repo: '/tmp/harness' },
+          plugins: [{ spec: 'github:../evil/repo' }],
+        }),
+      )
+      expect(() => loadConfig(file)).toThrow(/plugin spec/)
+    })
+
     it('accepts a well-shaped entry config', () => {
       const file = writeConfigFile(
         JSON.stringify({

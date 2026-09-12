@@ -1,18 +1,35 @@
 import { describe, expect, it, vi } from 'vitest'
 import { managedBin, managedDir, managedStagingDir } from './harness-source'
-import { ensureInstalled, isInstalled, latestVersion, resolveVersion, updateAvailable, type InstallDeps } from './runtime-install'
+import {
+  discoverInstalledPackage,
+  ensureGitInstalled,
+  ensureInstalled,
+  isInstalled,
+  latestVersion,
+  resolveGitRef,
+  resolveVersion,
+  updateAvailable,
+  type InstallDeps,
+} from './runtime-install'
 
 const PKG = '@deepseek-ai/dsh'
 const DSH_HOME = '/tmp/dsh-home'
 const NPM = '/usr/local/bin/npm'
+const GIT = '/usr/bin/git'
 
 /** Builds an `InstallDeps` backed by an in-memory set of "existing" paths and a fake `run`. */
 function fakeDeps(
   overrides: Partial<InstallDeps> & { run: InstallDeps['run'] },
   existingPaths: Set<string> = new Set(),
+  files: Map<string, string> = new Map(),
 ): InstallDeps {
   return {
     exists: (path) => existingPaths.has(path),
+    readText: (path) => {
+      const text = files.get(path)
+      if (text === undefined) throw new Error(`ENOENT: ${path}`)
+      return text
+    },
     mkdir: vi.fn(),
     rm: vi.fn(),
     rename: vi.fn(),
@@ -251,5 +268,109 @@ describe('updateAvailable', () => {
 
   it('is false when the registry latest matches the installed version', () => {
     expect(updateAvailable('0.1.1-rc.2', '0.1.1-rc.2')).toBe(false)
+  })
+})
+
+const SHA = '388de8a36cb3f6514a161e9e9dcc45ca04cd3a08'
+const KEY = 'github:owner/repo'
+
+/** A `run` that answers `git ls-remote` with a SHA and `npm install` with success. */
+function gitRun(sha = SHA): InstallDeps['run'] {
+  return vi.fn(async (command: string, args: string[]) => {
+    if (args[0] === 'ls-remote') return { code: 0, stdout: `${sha}\tHEAD\n`, stderr: '' }
+    return { code: 0, stdout: '', stderr: '' }
+  })
+}
+
+/** The generated top-level manifest npm writes, plus the installed package's own manifest. */
+function gitFiles(installDir: string, pkg = 'dsh-model-switch', pkgManifest: Record<string, unknown> = { main: 'lib/index.js' }): Map<string, string> {
+  return new Map([
+    [`${installDir}/package.json`, JSON.stringify({ dependencies: { [pkg]: `github:owner/repo#${SHA}` } })],
+    [`${installDir}/node_modules/${pkg}/package.json`, JSON.stringify(pkgManifest)],
+  ])
+}
+
+describe('resolveGitRef', () => {
+  it('resolves a ref to the commit ls-remote reports', async () => {
+    const deps = fakeDeps({ run: gitRun() })
+    expect(await resolveGitRef(deps, GIT, 'owner', 'repo', 'main')).toBe(SHA)
+  })
+
+  it('resolves HEAD when no ref is given', async () => {
+    const run = vi.fn(async (_c: string, args: string[]) => ({ code: 0, stdout: `${SHA}\tHEAD\n`, stderr: '' }))
+    const deps = fakeDeps({ run })
+    await resolveGitRef(deps, GIT, 'owner', 'repo')
+    expect(run.mock.calls[0][1]).toEqual(['ls-remote', 'https://github.com/owner/repo.git', 'HEAD'])
+  })
+
+  it('throws when the ref matches nothing', async () => {
+    const deps = fakeDeps({ run: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })) })
+    await expect(resolveGitRef(deps, GIT, 'owner', 'repo', 'nope')).rejects.toThrow(/no ref "nope"/)
+  })
+
+  it('accepts a full commit SHA passed as the ref, which ls-remote does not list', async () => {
+    const deps = fakeDeps({ run: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })) })
+    expect(await resolveGitRef(deps, GIT, 'owner', 'repo', SHA)).toBe(SHA)
+  })
+
+  it('throws with the stderr when git fails', async () => {
+    const deps = fakeDeps({ run: vi.fn(async () => ({ code: 128, stdout: '', stderr: 'not found' })) })
+    await expect(resolveGitRef(deps, GIT, 'owner', 'repo', 'main')).rejects.toThrow(/not found/)
+  })
+})
+
+describe('discoverInstalledPackage', () => {
+  it('reads the single dependency key npm wrote as the package name', () => {
+    const deps = fakeDeps({ run: vi.fn() }, new Set(), new Map([['/s/package.json', JSON.stringify({ dependencies: { 'dsh-model-switch': 'github:x/y#z' } })]]))
+    expect(discoverInstalledPackage(deps, '/s')).toBe('dsh-model-switch')
+  })
+
+  it('throws when the generated manifest names no single dependency', () => {
+    const deps = fakeDeps({ run: vi.fn() }, new Set(), new Map([['/s/package.json', JSON.stringify({ dependencies: {} })]]))
+    expect(() => discoverInstalledPackage(deps, '/s')).toThrow(/expected exactly one/)
+  })
+})
+
+describe('ensureGitInstalled', () => {
+  it('resolves the ref, installs the commit, discovers the name, and pins the SHA', async () => {
+    const dir = managedDir(DSH_HOME, KEY, SHA)
+    const staging = managedStagingDir(DSH_HOME, KEY, SHA)
+    const run = gitRun()
+    const deps = fakeDeps({ run }, new Set([`${staging}/node_modules/dsh-model-switch/lib/index.js`]), gitFiles(staging))
+    const result = await ensureGitInstalled(deps, NPM, GIT, DSH_HOME, { owner: 'owner', repo: 'repo', ref: 'main' }, KEY)
+    expect(result).toEqual({ version: SHA, package: 'dsh-model-switch' })
+    // Installed the exact commit, then renamed staging into the SHA-keyed dir.
+    const installArg = (run as ReturnType<typeof vi.fn>).mock.calls.find((c) => c[1][0] === 'install')?.[1]
+    expect(installArg).toContain(`github:owner/repo#${SHA}`)
+    expect(deps.rename).toHaveBeenCalledWith(managedStagingDir(DSH_HOME, KEY, SHA), dir)
+  })
+
+  it('skips npm entirely when the commit is already installed with a known name', async () => {
+    const dir = managedDir(DSH_HOME, KEY, SHA)
+    const run = gitRun()
+    const deps = fakeDeps({ run }, new Set([`${dir}/node_modules/dsh-model-switch/package.json`]))
+    const result = await ensureGitInstalled(deps, NPM, GIT, DSH_HOME, { owner: 'owner', repo: 'repo', ref: 'main' }, KEY, undefined, 'dsh-model-switch')
+    expect(result).toEqual({ version: SHA, package: 'dsh-model-switch' })
+    expect((run as ReturnType<typeof vi.fn>).mock.calls.some((c) => c[1][0] === 'install')).toBe(false)
+  })
+
+  it('fails loudly when the repository ships no built entry point', async () => {
+    const staging = managedStagingDir(DSH_HOME, KEY, SHA)
+    const deps = fakeDeps({ run: gitRun() }, new Set(), gitFiles(staging, 'dsh-model-switch', {}))
+    await expect(
+      ensureGitInstalled(deps, NPM, GIT, DSH_HOME, { owner: 'owner', repo: 'repo' }, KEY),
+    ).rejects.toThrow(/no "main" or exports/)
+    // The partial staging tree is cleaned up rather than left to be renamed.
+    expect(deps.rm).toHaveBeenCalledWith(staging)
+  })
+
+  it('fails when the declared bundle patch is missing from the install', async () => {
+    const staging = managedStagingDir(DSH_HOME, KEY, SHA)
+    // main resolves and its file exists, but the declared patch file does not.
+    const existing = new Set([`${staging}/node_modules/dsh-model-switch/lib/index.js`])
+    const deps = fakeDeps({ run: gitRun() }, existing, gitFiles(staging, 'dsh-model-switch', { main: 'lib/index.js', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+    await expect(
+      ensureGitInstalled(deps, NPM, GIT, DSH_HOME, { owner: 'owner', repo: 'repo' }, KEY),
+    ).rejects.toThrow(/bundle patch.*missing/)
   })
 })

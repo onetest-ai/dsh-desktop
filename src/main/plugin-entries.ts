@@ -30,7 +30,26 @@ export const HOOKS_PACKAGE = '@deepseek-ai/dsh-hooks-claude-code'
 export interface PluginEntry {
   spec: string
   version?: string
+  /**
+   * The resolved npm package name, for a `github:` entry whose real name is
+   * not its `owner/repo` and is only known after the first install (discovered
+   * from the tree npm writes — see `runtime-install.ts`). Absent for an npm
+   * entry, whose name is its spec, and absent for a github entry that has
+   * never installed. Stored so a boot resolves the entry's `node_modules`
+   * directory without re-running the install.
+   */
+  package?: string
   config?: Record<string, unknown>
+}
+
+/**
+ * What one install resolved: the concrete version (a version for an npm
+ * entry, a commit SHA for a github one) and, for a github entry, the npm
+ * package name discovered from the installed tree.
+ */
+export interface InstalledPlugin {
+  version: string
+  package?: string
 }
 
 /** The plugin list a fresh, never-configured install starts from. */
@@ -61,6 +80,63 @@ export function parseSpec(spec: string): ParsedSpec {
   return { package: spec.slice(0, at), pinnedVersion: spec.slice(at + 1) }
 }
 
+/** The `github:` shorthand prefix a public-GitHub plugin spec carries. */
+const GITHUB_PREFIX = 'github:'
+
+/**
+ * A parsed plugin source: an npm package (optionally version-pinned) or a
+ * public GitHub repository at an optional ref.
+ *
+ * The npm variant is the same pair `parseSpec` returns; the github variant is
+ * the whole identity the install path needs before the package's real npm name
+ * is known (it is discovered at install time, from the tree npm writes — see
+ * `runtime-install.ts`).
+ */
+export type PluginSource =
+  | { kind: 'npm'; package: string; pinnedVersion?: string }
+  | { kind: 'github'; owner: string; repo: string; ref?: string }
+
+/**
+ * Parse a plugin spec into its source.
+ *
+ * `github:<owner>/<repo>[#<ref>]` is a public-GitHub source; anything else is
+ * an npm spec, parsed exactly as {@link parseSpec} does. Shape is not validated
+ * here — {@link validSpecShape} owns that; this only splits the string.
+ * @param spec - as typed or stored, e.g. `github:owner/repo#main` or `pkg@1.0.0`.
+ * @returns the discriminated source.
+ */
+export function parsePluginSource(spec: string): PluginSource {
+  if (spec.startsWith(GITHUB_PREFIX)) {
+    const rest = spec.slice(GITHUB_PREFIX.length)
+    const hash = rest.indexOf('#')
+    const path = hash === -1 ? rest : rest.slice(0, hash)
+    const ref = hash === -1 ? '' : rest.slice(hash + 1)
+    const slash = path.indexOf('/')
+    const owner = slash === -1 ? path : path.slice(0, slash)
+    const repo = slash === -1 ? '' : path.slice(slash + 1)
+    return { kind: 'github', owner, repo, ...(ref === '' ? {} : { ref }) }
+  }
+  const { package: pkg, pinnedVersion } = parseSpec(spec)
+  return { kind: 'npm', package: pkg, ...(pinnedVersion === undefined ? {} : { pinnedVersion }) }
+}
+
+/**
+ * The stable identity a plugin entry is keyed by — the value used for the
+ * managed-cache directory, dedup, and matching against shipped defaults.
+ *
+ * An npm entry is keyed by its package name (its version is not part of its
+ * identity); a github entry by `github:<owner>/<repo>` with the ref dropped,
+ * because two refs of one repo are the same plugin. The github key is never an
+ * npm package name, so it never collides with one and never matches a
+ * (npm-only) shipped default.
+ * @param spec - the entry's spec.
+ * @returns the identity string.
+ */
+export function entryKey(spec: string): string {
+  const source = parsePluginSource(spec)
+  return source.kind === 'npm' ? source.package : `${GITHUB_PREFIX}${source.owner}/${source.repo}`
+}
+
 /**
  * Shape of a valid (optionally scoped) npm package name.
  * Deliberately narrower than npm's full grammar: it exists to keep a spec
@@ -78,6 +154,22 @@ const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$
 const VERSION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.+-]*$/
 
 /**
+ * Shape of one `owner` or `repo` path segment in a `github:` spec.
+ * A single GitHub path component: starts alphanumeric, then GitHub's own
+ * allowed characters. Deliberately narrow — like `PACKAGE_NAME_PATTERN`, its
+ * job is to keep a spec from reaching a filesystem path or a `git` argument as
+ * a traversal or multi-segment string, not to validate every legal GitHub name.
+ */
+const GITHUB_SEGMENT_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
+
+/**
+ * Shape of a git ref (branch, tag, or SHA). A branch may contain `/`
+ * (`feature/x`), so that is allowed, but never `..` (checked separately), a
+ * leading `-` (which `git` would read as an option), or whitespace.
+ */
+const GIT_REF_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/
+
+/**
  * Whether a spec's package name and, if present, its pinned version are
  * shaped safely enough to reach `managedDir`/`packageDirIn`.
  *
@@ -89,10 +181,28 @@ const VERSION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.+-]*$/
  * @param spec - as typed or as stored, e.g. `@onetest/dsh-deck@0.2.1`.
  * @returns whether the spec is safe to store and later resolve.
  */
+/**
+ * Whether a string is shaped like a safe npm package name.
+ *
+ * The discovered `package` field of a github entry reaches `packageDirIn`'s
+ * raw `join(..., ...pkg.split('/'))`, so a hand-edited `desktop.json` that set
+ * it to a traversal must be refused before boot — the same guard
+ * `validSpecShape` applies to an npm spec's own name.
+ * @param name - the candidate package name.
+ * @returns whether it matches the narrow package-name shape.
+ */
+export function validNpmPackageName(name: string): boolean {
+  return PACKAGE_NAME_PATTERN.test(name)
+}
+
 export function validSpecShape(spec: string): boolean {
-  const { package: pkg, pinnedVersion } = parseSpec(spec)
-  if (!PACKAGE_NAME_PATTERN.test(pkg)) return false
-  return pinnedVersion === undefined || VERSION_PATTERN.test(pinnedVersion)
+  const source = parsePluginSource(spec)
+  if (source.kind === 'github') {
+    if (!GITHUB_SEGMENT_PATTERN.test(source.owner) || !GITHUB_SEGMENT_PATTERN.test(source.repo)) return false
+    return source.ref === undefined || (GIT_REF_PATTERN.test(source.ref) && !source.ref.includes('..'))
+  }
+  if (!PACKAGE_NAME_PATTERN.test(source.package)) return false
+  return source.pinnedVersion === undefined || VERSION_PATTERN.test(source.pinnedVersion)
 }
 
 /**
@@ -321,28 +431,35 @@ export function pluginStatus(
   entry: PluginEntry,
   configPath?: string,
 ): PluginStatus {
-  const { package: pkg } = parseSpec(entry.spec)
-  if (entry.version === undefined) {
+  const source = parsePluginSource(entry.spec)
+  // The identity the managed cache is keyed by, and — separately — the npm
+  // name of the `node_modules` subdirectory. They are equal for an npm entry
+  // and diverge for a github entry, whose key is `github:owner/repo` while its
+  // real npm name was discovered at install and stored on the entry.
+  const key = entryKey(entry.spec)
+  const npmName = source.kind === 'npm' ? source.package : entry.package
+  const label = source.kind === 'npm' ? source.package : key
+  if (entry.version === undefined || npmName === undefined) {
     // No instruction here any more: startup repairs what the config declares
     // before the harness boots, so telling the user to save Settings would be
     // advice for a state the app resolves on its own.
-    return { kind: 'unavailable', package: pkg, reason: `${pkg} is not installed yet.` }
+    return { kind: 'unavailable', package: label, reason: `${label} is not installed yet.` }
   }
-  const installDir = managedDir(dshHome, pkg, entry.version)
-  if (!isInstalled(deps, dshHome, pkg, entry.version, (dir) => pluginInstallMarker(dir, pkg))) {
-    return { kind: 'unavailable', package: pkg, reason: `${pkg}@${entry.version} is pinned but not installed at ${installDir}` }
+  const installDir = managedDir(dshHome, key, entry.version)
+  if (!isInstalled(deps, dshHome, key, entry.version, (dir) => pluginInstallMarker(dir, npmName))) {
+    return { kind: 'unavailable', package: label, reason: `${label}@${entry.version} is pinned but not installed at ${installDir}` }
   }
   try {
     return {
       kind: 'ready',
-      package: pkg,
-      entryPath: resolvePluginEntry(installDir, pkg),
+      package: npmName,
+      entryPath: resolvePluginEntry(installDir, npmName),
       probeDirectory: installDir,
-      packageDir: packageDirIn(installDir, pkg),
+      packageDir: packageDirIn(installDir, npmName),
       configPath,
       config: entry.config,
     }
   } catch (error) {
-    return { kind: 'unavailable', package: pkg, reason: (error as Error).message }
+    return { kind: 'unavailable', package: label, reason: (error as Error).message }
   }
 }

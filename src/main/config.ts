@@ -3,7 +3,7 @@ import { dirname } from 'node:path'
 import { writeFileAtomic } from './atomic-write'
 import { ConfigurationError } from './configuration-error'
 import type { HarnessSource } from './harness-source'
-import { validSpecShape, type PluginEntry } from './plugin-entries'
+import { validNpmPackageName, validSpecShape, type PluginEntry } from './plugin-entries'
 
 /** Resolved desktop settings. `pnpmPath`/`npmPath` pin binaries when PATH cannot find them. */
 export interface DesktopConfig {
@@ -200,6 +200,12 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
       // a non-object overlay `config:` value — is rejected up front instead.
       if (entry.config !== undefined && (typeof entry.config !== 'object' || entry.config === null || Array.isArray(entry.config))) {
         throw new ConfigurationError(`dsh-desktop: ${filePath} plugin "${entry.spec}" config must be a JSON object`)
+      }
+      // A github entry's discovered `package` reaches `packageDirIn`'s raw path
+      // join, so a hand-edited traversal there is refused the same way a spec
+      // one is above.
+      if (entry.package !== undefined && (typeof entry.package !== 'string' || !validNpmPackageName(entry.package))) {
+        throw new ConfigurationError(`dsh-desktop: ${filePath} plugin "${entry.spec}" package "${String(entry.package)}" is not a valid package name`)
       }
     }
   }

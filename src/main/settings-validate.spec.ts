@@ -263,6 +263,28 @@ describe('validatePluginSpec', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.message).toBe('@onetest/dsh-deck is already in the list.')
   })
+
+  it('accepts a github spec, keyed by its repo and marked pinned when a ref is named', () => {
+    expect(validatePluginSpec('github:TTTPOB/dsh-task-models', [])).toEqual({
+      ok: true,
+      plugin: { spec: 'github:TTTPOB/dsh-task-models', package: 'github:TTTPOB/dsh-task-models', pinned: false },
+    })
+    expect(validatePluginSpec('github:TTTPOB/dsh-task-models#main', [])).toEqual({
+      ok: true,
+      plugin: { spec: 'github:TTTPOB/dsh-task-models#main', package: 'github:TTTPOB/dsh-task-models', pinned: true },
+    })
+  })
+
+  it('rejects a malformed github spec', () => {
+    const result = validatePluginSpec('github:../evil/repo', [])
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects a github repo already in the list, regardless of the ref', () => {
+    const result = validatePluginSpec('github:TTTPOB/dsh-task-models#other', ['github:TTTPOB/dsh-task-models'])
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/already in the list/)
+  })
 })
 
 describe('validateSettings — port and hotkey', () => {

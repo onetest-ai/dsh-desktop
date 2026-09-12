@@ -8,12 +8,15 @@ import {
   bundlePatchDeclaration,
   declaresClientHalf,
   defaultPlugins,
+  entryKey,
   HOOKS_PACKAGE,
   parseSpec,
+  parsePluginSource,
   pluginInstallMarker,
   pluginStatus,
   presetsDeclaration,
   resolvePluginEntry,
+  validSpecShape,
 } from './plugin-entries'
 import type { InstallDeps } from './runtime-install'
 
@@ -69,6 +72,60 @@ describe('parseSpec', () => {
 
   it('parses a scoped spec without a version as floating', () => {
     expect(parseSpec('@onetest/dsh-deck')).toEqual({ package: '@onetest/dsh-deck' })
+  })
+})
+
+describe('parsePluginSource', () => {
+  it('reads an npm spec as an npm source', () => {
+    expect(parsePluginSource('@onetest/dsh-deck@0.2.1')).toEqual({ kind: 'npm', package: '@onetest/dsh-deck', pinnedVersion: '0.2.1' })
+    expect(parsePluginSource('left-pad')).toEqual({ kind: 'npm', package: 'left-pad' })
+  })
+
+  it('reads a github spec with a ref', () => {
+    expect(parsePluginSource('github:lincong1987/dsh-model-switch#main')).toEqual({
+      kind: 'github', owner: 'lincong1987', repo: 'dsh-model-switch', ref: 'main',
+    })
+  })
+
+  it('reads a github spec without a ref', () => {
+    expect(parsePluginSource('github:TTTPOB/dsh-task-models')).toEqual({
+      kind: 'github', owner: 'TTTPOB', repo: 'dsh-task-models',
+    })
+  })
+})
+
+describe('entryKey', () => {
+  it('keys an npm entry by its package name, dropping the version', () => {
+    expect(entryKey('@onetest/dsh-deck@0.2.1')).toBe('@onetest/dsh-deck')
+    expect(entryKey('left-pad')).toBe('left-pad')
+  })
+
+  it('keys a github entry by owner/repo, dropping the ref', () => {
+    expect(entryKey('github:TTTPOB/dsh-task-models#main')).toBe('github:TTTPOB/dsh-task-models')
+    expect(entryKey('github:TTTPOB/dsh-task-models')).toBe('github:TTTPOB/dsh-task-models')
+  })
+})
+
+describe('validSpecShape', () => {
+  it.each([
+    'github:owner/repo',
+    'github:owner-1/repo.js#main',
+    'github:a/b#v1.2.3',
+    'github:a/b#feature/x',
+  ])('accepts the github spec %s', (spec) => {
+    expect(validSpecShape(spec)).toBe(true)
+  })
+
+  it.each([
+    'github:/repo',
+    'github:owner/',
+    'github:owner',
+    'github:../evil/repo',
+    'github:owner/repo#..',
+    'github:owner/re po',
+    'github:owner/repo#a b',
+  ])('rejects the malformed github spec %s', (spec) => {
+    expect(validSpecShape(spec)).toBe(false)
   })
 })
 
@@ -162,6 +219,37 @@ describe('pluginStatus', () => {
     const status = pluginStatus(fakeDeps(), DSH_HOME, { spec: PKG })
     expect(status.kind).toBe('unavailable')
     if (status.kind === 'unavailable') expect(status.reason).toMatch(/not installed yet/)
+  })
+
+  it('is unavailable for a github entry whose discovered package name is not yet stored', () => {
+    // A github entry that resolved its SHA but has no `package` yet cannot be
+    // located in `node_modules`; it reads as not installed, keyed by its repo.
+    const status = pluginStatus(fakeDeps(), DSH_HOME, { spec: 'github:owner/repo#main', version: 'abc123' })
+    expect(status.kind).toBe('unavailable')
+    if (status.kind === 'unavailable') expect(status.package).toBe('github:owner/repo')
+  })
+
+  it('resolves a github entry under its repo-keyed cache using the discovered package name', () => {
+    // The cache is keyed by `github:owner/repo` and the SHA, while the
+    // node_modules subpath is the discovered npm name — the two diverge.
+    const installDir = managedDir(DSH_HOME, 'github:owner/repo', 'abc123')
+    const pkgDir = join(installDir, 'node_modules', 'dsh-model-switch')
+    mkdirSync(join(pkgDir, 'lib'), { recursive: true })
+    writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ main: 'lib/index.js' }))
+    writeFileSync(join(pkgDir, 'lib', 'index.js'), 'module.exports = {}\n')
+
+    const deps = fakeDeps([join(pkgDir, 'package.json')])
+    const status = pluginStatus(deps, DSH_HOME, { spec: 'github:owner/repo#main', version: 'abc123', package: 'dsh-model-switch' })
+
+    expect(status).toEqual({
+      kind: 'ready',
+      package: 'dsh-model-switch',
+      entryPath: join(pkgDir, 'lib', 'index.js'),
+      probeDirectory: installDir,
+      packageDir: pkgDir,
+      configPath: undefined,
+      config: undefined,
+    })
   })
 
   it('is unavailable, naming the missing directory, when the resolved version is not on disk', () => {

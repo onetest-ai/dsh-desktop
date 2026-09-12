@@ -533,6 +533,26 @@ vi.mock('./plugin-entries', () => ({
     const at = spec.indexOf('@', spec.startsWith('@') ? 1 : 0)
     return at === -1 ? { package: spec } : { package: spec.slice(0, at), pinnedVersion: spec.slice(at + 1) }
   },
+  parsePluginSource: (spec: string) => {
+    if (spec.startsWith('github:')) {
+      const rest = spec.slice('github:'.length)
+      const hash = rest.indexOf('#')
+      const path = hash === -1 ? rest : rest.slice(0, hash)
+      const ref = hash === -1 ? undefined : rest.slice(hash + 1)
+      const slash = path.indexOf('/')
+      return { kind: 'github', owner: path.slice(0, slash), repo: path.slice(slash + 1), ...(ref ? { ref } : {}) }
+    }
+    const at = spec.indexOf('@', spec.startsWith('@') ? 1 : 0)
+    return at === -1 ? { kind: 'npm', package: spec } : { kind: 'npm', package: spec.slice(0, at), pinnedVersion: spec.slice(at + 1) }
+  },
+  entryKey: (spec: string) => {
+    if (spec.startsWith('github:')) {
+      const path = spec.slice('github:'.length).split('#')[0]
+      return `github:${path}`
+    }
+    const at = spec.indexOf('@', spec.startsWith('@') ? 1 : 0)
+    return at === -1 ? spec : spec.slice(0, at)
+  },
   HOOKS_PACKAGE: '@deepseek-ai/dsh-hooks-claude-code',
   declaresClientHalf: (...args: unknown[]) => declaresClientHalfMock(...(args as [string])),
   presetsDeclaration: (...args: unknown[]) => presetsDeclarationMock(...(args as [string])),

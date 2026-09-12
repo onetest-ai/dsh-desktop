@@ -7,7 +7,7 @@ import { parseMcpBlock, type McpServerEntry } from './mcp-config'
 import type { ProbeResult, ProbeTarget } from './mcp-probe'
 import type { McpPreset } from './mcp-presets'
 import { MCP_CLIENT_PACKAGE, mcpErrors } from './mcp-servers'
-import { parseSpec, type PluginEntry } from './plugin-entries'
+import { entryKey, parsePluginSource, parseSpec, type InstalledPlugin, type PluginEntry } from './plugin-entries'
 import {
   formFor,
   parsePluginConfig,
@@ -48,11 +48,12 @@ export interface SettingsDeps {
    * cannot use the same marker `installManaged` checks for the harness.
    */
   installPlugin(
-    pkg: string,
-    version: string,
+    spec: string,
+    priorVersion: string | undefined,
+    priorPackage: string | undefined,
     npmPath: string | undefined,
     onLine: (line: string) => void,
-  ): Promise<string>
+  ): Promise<InstalledPlugin>
   /**
    * The registry's current `latest` for a managed package, when it differs
    * from the installed version; `undefined` when it matches or the lookup
@@ -546,15 +547,27 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       // `install-process.ts`), so a quit landing between this check and the
       // spawn it guards is still caught there.
       if (deps.isQuitting()) break
-      const { package: pkg, pinnedVersion } = parseSpec(entry.spec)
-      const prior = previous.find((candidate) => parseSpec(candidate.spec).package === pkg)
-      const versionToInstall = pinnedVersion ?? prior?.version ?? 'latest'
+      // Keyed by identity, not the raw spec: a github entry's prior install
+      // (its resolved SHA and discovered name) is reused across a ref change,
+      // and version resolution for an npm entry is owned by `installPlugin`.
+      const key = entryKey(entry.spec)
+      const prior = previous.find((candidate) => entryKey(candidate.spec) === key)
       try {
-        const concrete = await deps.installPlugin(pkg, versionToInstall, npmPath, onProgress)
-        resolved.push({ spec: entry.spec, version: concrete, ...(entry.config === undefined ? {} : { config: entry.config }) })
+        const installed = await deps.installPlugin(entry.spec, prior?.version, prior?.package, npmPath, onProgress)
+        resolved.push({
+          spec: entry.spec,
+          version: installed.version,
+          ...(installed.package === undefined ? {} : { package: installed.package }),
+          ...(entry.config === undefined ? {} : { config: entry.config }),
+        })
       } catch (error) {
-        warnings.push(`${pkg} could not be installed: ${(error as Error).message}`)
-        resolved.push({ spec: entry.spec, version: prior?.version, ...(entry.config === undefined ? {} : { config: entry.config }) })
+        warnings.push(`${key} could not be installed: ${(error as Error).message}`)
+        resolved.push({
+          spec: entry.spec,
+          version: prior?.version,
+          ...(prior?.package === undefined ? {} : { package: prior.package }),
+          ...(entry.config === undefined ? {} : { config: entry.config }),
+        })
       }
     }
     return { resolved, warnings }
@@ -819,7 +832,11 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
 
     let concrete: string
     try {
-      concrete = await deps.installPlugin(pkg, version, previous.npmPath, onProgress ?? (() => {}))
+      // The update hint is npm-only (github entries are not version-checked),
+      // so this installs the target version of the entry's own spec and needs
+      // no discovered package name back.
+      const result = await deps.installPlugin(entries[index].spec, version, undefined, previous.npmPath, onProgress ?? (() => {}))
+      concrete = result.version
     } catch (error) {
       return { ok: false, errors: { kind: `${pkg} could not be updated: ${(error as Error).message}` } }
     }

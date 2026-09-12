@@ -1,4 +1,4 @@
-import { parseSpec } from './plugin-entries'
+import type { InstalledPlugin } from './plugin-entries'
 
 /** The effects repair needs, injected so tests spawn no `npm`. */
 export interface RepairDeps {
@@ -7,27 +7,38 @@ export interface RepairDeps {
    *
    * The same call a Settings save makes: an entry repaired at startup must be
    * indistinguishable from one installed by a save, so there is exactly one
-   * install path to reason about.
-   * @param pkg - the package name.
-   * @param version - the concrete version or dist-tag to install.
+   * install path to reason about. A repaired entry has never installed here, so
+   * it carries no prior version or discovered package name.
+   * @param spec - the entry's spec, as stored.
+   * @param priorVersion - the version last installed, if any (none, at repair).
+   * @param priorPackage - the github name last discovered, if any (none, at repair).
    * @param npmPath - the configured `npm` override.
    * @param onLine - receives install output as it arrives.
-   * @returns the concrete installed version.
+   * @returns the concrete version (or SHA) and, for github, the discovered name.
    */
-  installPlugin(pkg: string, version: string, npmPath: string | undefined, onLine: (line: string) => void): Promise<string>
+  installPlugin(
+    spec: string,
+    priorVersion: string | undefined,
+    priorPackage: string | undefined,
+    npmPath: string | undefined,
+    onLine: (line: string) => void,
+  ): Promise<InstalledPlugin>
   isQuitting(): boolean
 }
 
 /** What a repair pass managed and what it could not. */
 export interface RepairOutcome {
   /**
-   * Each repaired spec with the version `npm` actually resolved.
+   * Each repaired spec with the version `npm` actually resolved, and — for a
+   * github entry — the npm package name discovered from the installed tree.
    *
    * The version is carried out rather than discarded because an entry with no
    * recorded version reads as uninstalled: without writing it back, every
-   * launch would find the same plugin missing and install it again.
+   * launch would find the same plugin missing and install it again. The
+   * discovered name is carried out for the same reason: a github entry with no
+   * recorded name cannot be resolved to its `node_modules` directory at boot.
    */
-  installed: { spec: string; version: string }[]
+  installed: { spec: string; version: string; package?: string }[]
   failed: { spec: string; reason: string }[]
 }
 
@@ -51,14 +62,14 @@ export async function repairPlugins(
   deps: RepairDeps,
   onLine: (line: string) => void,
 ): Promise<RepairOutcome> {
-  const installed: { spec: string; version: string }[] = []
+  const installed: { spec: string; version: string; package?: string }[] = []
   const failed: { spec: string; reason: string }[] = []
   for (const spec of specs) {
     if (deps.isQuitting()) break
-    const { package: pkg, pinnedVersion } = parseSpec(spec)
     try {
-      const version = await deps.installPlugin(pkg, pinnedVersion ?? 'latest', npmPath, onLine)
-      installed.push({ spec, version })
+      // A repaired entry has never installed here: no prior version or name.
+      const result = await deps.installPlugin(spec, undefined, undefined, npmPath, onLine)
+      installed.push({ spec, version: result.version, ...(result.package === undefined ? {} : { package: result.package }) })
     } catch (error) {
       failed.push({ spec, reason: (error as Error).message })
     }

@@ -2,7 +2,7 @@ import { statSync } from 'node:fs'
 import { DEFAULT_HOTKEY, DEFAULT_NOTIFY_PORT, type ConfigResult, type DesktopConfig } from './config'
 import type { HarnessSource } from './harness-source'
 import { MCP_CLIENT_PACKAGE } from './mcp-servers'
-import { defaultPlugins, parseSpec, validSpecShape, type PluginEntry } from './plugin-entries'
+import { defaultPlugins, entryKey, parsePluginSource, validSpecShape, type PluginEntry } from './plugin-entries'
 
 /** The settings form's raw values. Every field is a string because HTML forms yield strings. */
 export interface SettingsForm {
@@ -140,7 +140,7 @@ function parsePluginsField(rows: { spec: string; config: string }[]): { ok: true
     if (!validSpecShape(spec)) {
       return { ok: false, message: `"${spec}" does not look like a package name, package@version, or a valid version.` }
     }
-    const { package: pkg } = parseSpec(spec)
+    const pkg = entryKey(spec)
     if (seen.has(pkg)) {
       return { ok: false, message: `${pkg} is listed more than once.` }
     }
@@ -193,7 +193,11 @@ export function validatePluginSpec(spec: string, existingPackages: string[]): Pl
       message: `"${trimmed}" does not look like a package name, package@version, or a valid version.`,
     }
   }
-  const { package: pkg, pinnedVersion } = parseSpec(trimmed)
+  const source = parsePluginSource(trimmed)
+  // The identity, not the raw spec: a github row is keyed by its repo, and a
+  // github "pin" is naming a ref just as an npm pin is naming a version.
+  const pkg = entryKey(trimmed)
+  const pinned = source.kind === 'npm' ? source.pinnedVersion !== undefined : source.ref !== undefined
   if (pkg === MCP_CLIENT_PACKAGE) {
     return {
       ok: false,
@@ -203,7 +207,7 @@ export function validatePluginSpec(spec: string, existingPackages: string[]): Pl
   if (existingPackages.includes(pkg)) {
     return { ok: false, message: `${pkg} is already in the list.` }
   }
-  return { ok: true, plugin: { spec: trimmed, package: pkg, pinned: pinnedVersion !== undefined } }
+  return { ok: true, plugin: { spec: trimmed, package: pkg, pinned } }
 }
 
 function isDirectory(path: string): boolean {
@@ -273,7 +277,7 @@ export function validateSettings(form: SettingsForm): ValidationResult {
   // first place; this is what clears one that a hand-edited `desktop.json`,
   // or a save from before the MCP tab existed, already stored.
   const parsedPlugins = parsePluginsField(
-    form.plugins.filter((row) => parseSpec(row.spec.trim()).package !== MCP_CLIENT_PACKAGE),
+    form.plugins.filter((row) => entryKey(row.spec.trim()) !== MCP_CLIENT_PACKAGE),
   )
   if (!parsedPlugins.ok) errors.plugins = parsedPlugins.message
 
