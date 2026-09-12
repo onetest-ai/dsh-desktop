@@ -1,5 +1,4 @@
 import { statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { DEFAULT_HOTKEY, DEFAULT_NOTIFY_PORT, type ConfigResult, type DesktopConfig } from './config'
 import type { HarnessSource } from './harness-source'
 import { MCP_CLIENT_PACKAGE } from './mcp-servers'
@@ -11,7 +10,6 @@ export interface SettingsForm {
   repo: string
   package: string
   version: string
-  workspace: string
   notifyPort: string
   hotkey: string
   pnpmPath: string
@@ -54,6 +52,11 @@ export interface SettingsForm {
    * page, show a proposed change, read the selection.
    */
   viewTools: boolean
+  /**
+   * Whether to show the harness's own built-in right sidebar. Off by default:
+   * this app has its own right rail, so the harness's dock is redundant.
+   */
+  showBuiltinRightSidebar: boolean
 }
 
 /** Per-field messages for a rejected form; absent keys validated cleanly. */
@@ -236,7 +239,6 @@ export function validateSettings(form: SettingsForm): ValidationResult {
     }
   } else {
     const pkg = form.package.trim()
-    const workspace = form.workspace.trim()
     const version = form.version.trim() === '' ? DEFAULT_VERSION : form.version.trim()
     if (pkg === '') {
       errors.package = 'A package name is required.'
@@ -246,15 +248,11 @@ export function validateSettings(form: SettingsForm): ValidationResult {
     if (!VERSION_PATTERN.test(version)) {
       errors.version = 'That does not look like a version or dist-tag.'
     }
-    if (workspace !== '' && !isDirectory(workspace)) {
-      errors.workspace = 'That path is not a folder on this machine.'
-    }
-    if (errors.package === undefined && errors.version === undefined && errors.workspace === undefined) {
+    if (errors.package === undefined && errors.version === undefined) {
       harness = {
         kind: 'managed',
         package: pkg,
         version,
-        workspace: workspace === '' ? homedir() : workspace,
       }
     }
   }
@@ -302,6 +300,9 @@ export function validateSettings(form: SettingsForm): ValidationResult {
       // Written only when the form says so: absent means on, so an install
       // that never touches this switch carries no field for it.
       ...(form.viewTools === false ? { viewTools: false } : {}),
+      // Written only when enabled: absent means off (hidden), so a default
+      // install carries no field for it.
+      ...(form.showBuiltinRightSidebar === true ? { showBuiltinRightSidebar: true } : {}),
       ...(pnpmPath === '' ? {} : { pnpmPath }),
       ...(npmPath === '' ? {} : { npmPath }),
       ...(extraPath === '' ? {} : { extraPath }),
@@ -321,7 +322,6 @@ export function formFor(result: ConfigResult): SettingsForm {
     repo: '',
     package: DEFAULT_PACKAGE,
     version: DEFAULT_VERSION,
-    workspace: '',
     notifyPort: String(DEFAULT_NOTIFY_PORT),
     hotkey: DEFAULT_HOTKEY,
     pnpmPath: '',
@@ -336,18 +336,22 @@ export function formFor(result: ConfigResult): SettingsForm {
     // third-party server on its own.
     mcpEnabled: false,
     viewTools: true,
+    // Off by default: the harness's own right sidebar duplicates this app's
+    // right rail.
+    showBuiltinRightSidebar: false,
   }
   if (!result.configured) return base
 
   const {
     harness, notifyPort, hotkey, pnpmPath, npmPath, extraPath, terminalShell, plugins, mcpEnabled, viewTools,
+    showBuiltinRightSidebar,
   } = result.config
   return {
     ...base,
     kind: harness.kind,
     ...(harness.kind === 'local'
       ? { repo: harness.repo }
-      : { package: harness.package, version: harness.version, workspace: harness.workspace }),
+      : { package: harness.package, version: harness.version }),
     notifyPort: String(notifyPort),
     hotkey,
     pnpmPath: pnpmPath ?? '',
@@ -359,5 +363,6 @@ export function formFor(result: ConfigResult): SettingsForm {
     })),
     mcpEnabled: mcpEnabled === true,
     viewTools: viewTools !== false,
+    showBuiltinRightSidebar: showBuiltinRightSidebar === true,
   }
 }

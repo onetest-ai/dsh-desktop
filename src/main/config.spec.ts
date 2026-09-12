@@ -30,7 +30,7 @@ describe('loadConfig', () => {
   it('reads a managed harness source', () => {
     const file = writeConfigFile(
       JSON.stringify({
-        harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+        harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest' },
       }),
     )
     const result = loadConfig(file)
@@ -39,7 +39,6 @@ describe('loadConfig', () => {
       kind: 'managed',
       package: '@deepseek-ai/dsh',
       version: 'latest',
-      workspace: '/tmp/ws',
     })
   })
 
@@ -89,7 +88,7 @@ describe('loadConfig', () => {
 
   it('throws when a managed harness has an empty package', () => {
     const file = writeConfigFile(
-      JSON.stringify({ harness: { kind: 'managed', package: '', version: 'latest', workspace: '/tmp' } }),
+      JSON.stringify({ harness: { kind: 'managed', package: '', version: 'latest' } }),
     )
     expect(() => loadConfig(file)).toThrow(/non-empty "package"/)
   })
@@ -138,7 +137,7 @@ describe('loadConfig', () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-desktop-config-'))
     const file = join(dir, 'nested', 'desktop.json')
     const config = {
-      harness: { kind: 'managed' as const, package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+      harness: { kind: 'managed' as const, package: '@deepseek-ai/dsh', version: 'latest' },
       notifyPort: 5000,
       hotkey: 'Alt+D',
     }
@@ -312,7 +311,7 @@ describe('writeConfig and a reader racing it', () => {
   it('never leaves a state a reader would reject', () => {
     const file = join(tempDir(), 'desktop.json')
     const config = {
-      harness: { kind: 'managed' as const, package: '@deepseek-ai/dsh', version: '0.1.0', workspace: '/tmp/ws' },
+      harness: { kind: 'managed' as const, package: '@deepseek-ai/dsh', version: '0.1.0' },
       notifyPort: 43117,
       hotkey: 'CommandOrControl+Shift+D',
     }

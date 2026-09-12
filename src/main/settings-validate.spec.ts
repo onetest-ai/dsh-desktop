@@ -24,7 +24,6 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
     repo: mkdtempSync(join(tmpdir(), 'dsh-repo-')),
     package: '@deepseek-ai/dsh',
     version: 'latest',
-    workspace: mkdtempSync(join(tmpdir(), 'dsh-ws-')),
     notifyPort: '43117',
     hotkey: 'CommandOrControl+Shift+D',
     pnpmPath: '',
@@ -74,19 +73,19 @@ describe('validateSettings — local source', () => {
   })
 
   it('ignores managed fields when the source is local', () => {
-    const result = validateSettings(form({ package: '', version: '', workspace: '' }))
+    const result = validateSettings(form({ package: '', version: '' }))
     expect(result.ok).toBe(true)
   })
 })
 
 describe('validateSettings — managed source', () => {
-  it('accepts a package and workspace', () => {
+  it('accepts a package and version', () => {
     const input = form({ kind: 'managed' })
     const result = validateSettings(input)
     expect(result).toEqual({
       ok: true,
       config: {
-        harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: input.workspace },
+        harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest' },
         notifyPort: 43117,
         hotkey: 'CommandOrControl+Shift+D',
         plugins: [{ spec: HOOKS_PACKAGE }],
@@ -108,11 +107,6 @@ describe('validateSettings — managed source', () => {
     }
   })
 
-  it('rejects a workspace that does not exist', () => {
-    const result = validateSettings(form({ kind: 'managed', workspace: '/definitely/not/here' }))
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.errors.workspace).toMatch(/not a folder|does not exist/i)
-  })
 
   it('ignores the repo field when the source is managed', () => {
     const result = validateSettings(form({ kind: 'managed', repo: '/definitely/not/here' }))
@@ -347,7 +341,7 @@ describe('formFor', () => {
 
   it('round-trips a stored managed config with no plugins as an empty list', () => {
     const config = {
-      harness: { kind: 'managed' as const, package: '@acme/dsh', version: '1.2.3', workspace: '/tmp/ws' },
+      harness: { kind: 'managed' as const, package: '@acme/dsh', version: '1.2.3' },
       notifyPort: 43117,
       hotkey: 'Alt+D',
     }
@@ -355,7 +349,6 @@ describe('formFor', () => {
     expect(filled.kind).toBe('managed')
     expect(filled.package).toBe('@acme/dsh')
     expect(filled.version).toBe('1.2.3')
-    expect(filled.workspace).toBe('/tmp/ws')
     expect(filled.plugins).toEqual([])
   })
 })
@@ -409,5 +402,44 @@ describe('the view tools switch', () => {
   it('writes the refusal when they are switched off', () => {
     const result = validateSettings(form({ viewTools: false }))
     expect(result.ok && result.config.viewTools).toBe(false)
+  })
+})
+
+describe('the built-in right sidebar switch', () => {
+  // reason: off (hidden) is the default, so an install that never touches the
+  // switch carries no field for it and gets the harness's sidebar hidden.
+  it('writes nothing when the sidebar is left hidden', () => {
+    const result = validateSettings(form({ showBuiltinRightSidebar: false }))
+    expect(result.ok && 'showBuiltinRightSidebar' in result.config).toBe(false)
+  })
+
+  it('writes the opt-in when the sidebar is switched on', () => {
+    const result = validateSettings(form({ showBuiltinRightSidebar: true }))
+    expect(result.ok && result.config.showBuiltinRightSidebar).toBe(true)
+  })
+
+  it('round-trips an on config back to a checked form', () => {
+    const filled = formFor({
+      configured: true,
+      config: {
+        harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest' },
+        notifyPort: 43117,
+        hotkey: 'x',
+        showBuiltinRightSidebar: true,
+      },
+    })
+    expect(filled.showBuiltinRightSidebar).toBe(true)
+  })
+
+  it('defaults an absent field to hidden', () => {
+    const filled = formFor({
+      configured: true,
+      config: {
+        harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest' },
+        notifyPort: 43117,
+        hotkey: 'x',
+      },
+    })
+    expect(filled.showBuiltinRightSidebar).toBe(false)
   })
 })

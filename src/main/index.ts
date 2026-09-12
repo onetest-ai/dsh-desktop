@@ -1566,7 +1566,7 @@ function harnessSourceChanged(previous: HarnessSource, next: HarnessSource): boo
     }
     case 'managed': {
       const prev = previous as Extract<HarnessSource, { kind: 'managed' }>
-      return prev.package !== next.package || prev.version !== next.version || prev.workspace !== next.workspace
+      return prev.package !== next.package || prev.version !== next.version
     }
     default: {
       const exhaustive: never = next
@@ -1601,7 +1601,11 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
     // section — the master switch, a server's URL, or which servers are on
     // — only reaches the harness through a respawn. Compared by value
     // because the section is rebuilt fresh on every save.
-    mcpChanged(previous, next)
+    mcpChanged(previous, next) ||
+    // The built-in-sidebar switch adds or removes the overlay's `ui-sidebar-*`
+    // disable rows, fixed at spawn, so a change only reaches the harness
+    // through a respawn.
+    previous.showBuiltinRightSidebar !== next.showBuiltinRightSidebar
   )
 }
 
@@ -2433,7 +2437,7 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
       const declaredPath = bundlePatchDeclaration(status.packageDir)
       return declaredPath !== undefined ? loadDeclaredPatchRows(status.packageDir, declaredPath) : undefined
     }
-    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses, undefined, resolveName, resolveDeclaredPatch)
+    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses, undefined, resolveName, resolveDeclaredPatch, config.showBuiltinRightSidebar !== true)
     reconcilePluginLinks(DSH_HOME, PROFILE, linked)
     reconcilePluginPresets(DSH_HOME, presetIds)
     patchPath = files.patchPath

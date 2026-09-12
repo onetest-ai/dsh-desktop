@@ -17,7 +17,7 @@ const STORED: DesktopConfig = {
 
 /** The same, with a managed harness — the only kind an update check applies to. */
 const MANAGED_STORED: DesktopConfig = {
-  harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: '0.1.0', workspace: '/tmp/ws' },
+  harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: '0.1.0' },
   notifyPort: 44444,
   hotkey: 'CommandOrControl+Shift+D',
 }
@@ -777,6 +777,7 @@ describe('boot', () => {
       undefined,
       expect.any(Function),
       expect.any(Function),
+      true,
     )
   })
 
@@ -980,6 +981,7 @@ describe('plugin-caused boot failures', () => {
       undefined,
       expect.any(Function),
       expect.any(Function),
+      true,
     )
     expect(fake.harness.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining(`${DECK} disabled`))
@@ -1019,6 +1021,7 @@ describe('plugin-caused boot failures', () => {
       undefined,
       expect.any(Function),
       expect.any(Function),
+      true,
     )
     expect(fake.harness.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('disabled'))

@@ -49,7 +49,7 @@ describe('dshWebCommand', () => {
   it('runs the installed binary directly for a managed source, with the PATH from npmPath', () => {
     const spec = dshWebCommand(
       {
-        harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+        harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest' },
         notifyPort: 1,
         hotkey: 'x',
         npmPath: '/usr/local/bin/npm',
@@ -59,7 +59,7 @@ describe('dshWebCommand', () => {
     )
     expect(spec.command).toBe(managedBin(managedDir(DSH_HOME, '@deepseek-ai/dsh', 'latest')))
     expect(spec.args).toEqual(['--profile', 'web', '--patch', '/tmp/desktop.patch.yml', '--no-open'])
-    expect(spec.cwd).toBe('/tmp/ws')
+    expect(spec.cwd).toBe(DSH_HOME)
     // The managed binary lives under $DSH_HOME/runtimes, where no `node` was
     // installed; the directory prepended must be npm's own (see
     // `envWithLauncherDir`), not the managed binary's own directory.
@@ -121,7 +121,7 @@ describe('dshWebCommand', () => {
       // does not eagerly touch pnpmPath.
       const spec = dshWebCommand(
         {
-          harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+          harness: { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest' },
           notifyPort: 1,
           hotkey: 'x',
           npmPath: '/opt/npm',

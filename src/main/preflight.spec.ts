@@ -30,7 +30,6 @@ describe('preflight', () => {
         kind: 'managed',
         package: '@deepseek-ai/dsh',
         version: 'latest',
-        workspace: '/definitely/not/here',
       }),
     ).toEqual({ ok: true })
   })

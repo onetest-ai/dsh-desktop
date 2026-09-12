@@ -90,6 +90,16 @@ export interface DesktopConfig {
   viewTools?: boolean
   /** The loopback port those tools are served on. */
   viewToolsPort?: number
+  /**
+   * Whether to show the harness's own built-in right sidebar (its dock with
+   * the file tree and file preview).
+   *
+   * Absent means off: this app supplies its own right rail, so the harness's
+   * own sidebar is a redundant surface hidden by default. When absent or
+   * false, the generated overlay disables the bundle's `ui-sidebar-*` entries;
+   * `true` leaves them mounted.
+   */
+  showBuiltinRightSidebar?: boolean
 }
 
 export const DEFAULT_NOTIFY_PORT = 43117
@@ -221,6 +231,7 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     ...(pane === undefined ? {} : { pane }),
     ...(typeof record.viewTools === 'boolean' ? { viewTools: record.viewTools } : {}),
     ...(typeof record.viewToolsPort === 'number' ? { viewToolsPort: record.viewToolsPort } : {}),
+    ...(typeof record.showBuiltinRightSidebar === 'boolean' ? { showBuiltinRightSidebar: record.showBuiltinRightSidebar } : {}),
   }
 }
 

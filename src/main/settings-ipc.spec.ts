@@ -26,7 +26,7 @@ function rows(text: string): SettingsForm['plugins'] {
 function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
   return {
     kind: 'local', repo: REPO, package: PKG, version: 'latest',
-    workspace: '', notifyPort: '43117', hotkey: 'CommandOrControl+Shift+D',
+    notifyPort: '43117', hotkey: 'CommandOrControl+Shift+D',
     pnpmPath: '', npmPath: '', extraPath: '', terminalShell: '', plugins: [], mcpEnabled: false, ...overrides,
   }
 }
@@ -38,7 +38,7 @@ const STORED: DesktopConfig = {
 }
 
 const MANAGED_STORED: DesktopConfig = {
-  harness: { kind: 'managed', package: PKG, version: '0.1.1-rc.2', workspace: REPO },
+  harness: { kind: 'managed', package: PKG, version: '0.1.1-rc.2' },
   notifyPort: 43117,
   hotkey: 'CommandOrControl+Shift+D',
 }
@@ -364,12 +364,12 @@ describe('save', () => {
     it('resolves and installs, storing the concrete version rather than the submitted tag', async () => {
       const installManaged = vi.fn(async () => '0.1.1-rc.2')
       const d = deps({ installManaged })
-      const result = await createSettingsHandlers(d).save(form({ kind: 'managed', version: 'latest', workspace: REPO }))
+      const result = await createSettingsHandlers(d).save(form({ kind: 'managed', version: 'latest' }))
 
       expect(result).toEqual({ ok: true, warnings: [] })
       expect(installManaged).toHaveBeenCalledWith(PKG, 'latest', undefined, expect.any(Function))
       expect(d.writeConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ harness: { kind: 'managed', package: PKG, version: '0.1.1-rc.2', workspace: REPO } }),
+        expect.objectContaining({ harness: { kind: 'managed', package: PKG, version: '0.1.1-rc.2' } }),
       )
     })
 
@@ -911,7 +911,7 @@ describe('checkBinaries', () => {
     const checkBinaries = vi.fn(async () => ({ pnpm: { ok: true as const, version: '9.0.0' }, npm: { ok: true as const, version: '10.0.0' } }))
     const handlers = createSettingsHandlers(deps({ installManaged, checkBinaries }))
 
-    const saving = handlers.save(form({ kind: 'managed', package: PKG, version: 'latest', workspace: REPO }))
+    const saving = handlers.save(form({ kind: 'managed', package: PKG, version: 'latest' }))
     const result = await handlers.checkBinaries('', '')
     expect(result).toEqual({ pnpm: { ok: true, version: '9.0.0' }, npm: { ok: true, version: '10.0.0' } })
 
@@ -953,7 +953,7 @@ describe('openConfigFile', () => {
     const openConfigFile = vi.fn(async () => ({ ok: true }) as const)
     const handlers = createSettingsHandlers(deps({ installManaged, openConfigFile }))
 
-    const saving = handlers.save(form({ kind: 'managed', package: PKG, version: 'latest', workspace: REPO }))
+    const saving = handlers.save(form({ kind: 'managed', package: PKG, version: 'latest' }))
     const result = await handlers.openConfigFile()
     expect(result).toEqual({ ok: true })
 
