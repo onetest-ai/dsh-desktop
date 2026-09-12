@@ -147,21 +147,24 @@ describe('spawnFor', () => {
     expect(spec.cwd).toBe('/tmp/harness')
   })
 
-  it('runs the installed binary directly for a managed source', () => {
+  it('runs the installed binary directly for a managed source, in the harness home', () => {
     const spec = spawnFor(
-      { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/tmp/ws' },
+      { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest' },
       { pnpm: unused('pnpm') },
       patch,
       dshHome,
     )
     expect(spec.command).toBe(managedBin(managedDir(dshHome, '@deepseek-ai/dsh', 'latest')))
     expect(spec.args).toEqual(['--profile', 'web', '--patch', patch, '--no-open'])
-    expect(spec.cwd).toBe('/tmp/ws')
+    // The managed harness runs in `$DSH_HOME`, not a user project: the working
+    // directory is not a workspace (the harness owns its own workspace list),
+    // and pinning it here keeps a project switch from restarting the harness.
+    expect(spec.cwd).toBe(dshHome)
   })
 
   it('resolves the install directory from the exact configured version', () => {
     const spec = spawnFor(
-      { kind: 'managed', package: '@deepseek-ai/dsh', version: '0.1.1-rc.2', workspace: '/tmp/ws' },
+      { kind: 'managed', package: '@deepseek-ai/dsh', version: '0.1.1-rc.2' },
       { pnpm: unused('pnpm') },
       patch,
       dshHome,
@@ -173,7 +176,7 @@ describe('spawnFor', () => {
     for (const spec of [
       spawnFor({ kind: 'local', repo: '/r' }, { pnpm: () => 'pnpm' }, patch, dshHome),
       spawnFor(
-        { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/w' },
+        { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest' },
         { pnpm: unused('pnpm') },
         patch,
         dshHome,
@@ -198,7 +201,7 @@ describe('spawnFor', () => {
   it('never calls pnpm for a managed source, even when it would throw', () => {
     expect(() =>
       spawnFor(
-        { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest', workspace: '/w' },
+        { kind: 'managed', package: '@deepseek-ai/dsh', version: 'latest' },
         { pnpm: unused('pnpm') },
         patch,
         dshHome,

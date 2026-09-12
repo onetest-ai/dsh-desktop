@@ -63,28 +63,26 @@
         Version <span id="latest-version"></span> is available.
         <button id="use-latest" type="button">Update and install</button>
       </p>
-      <div class="field-label-row">
-        <label for="workspace">Workspace folder</label>
-        <details class="field-info">
-          <summary aria-label="About the workspace folder"><span aria-hidden="true">i</span></summary>
-          <p>The working directory the harness runs in for a managed install — the folder the agent reads and writes files in. Defaults to your home folder.</p>
-        </details>
-      </div>
-      <div class="row">
-        <input id="workspace" type="text" placeholder="defaults to your home folder">
-        <button id="browse-workspace" type="button">Choose…</button>
-      </div>
-      <p class="error" id="error-workspace"></p>
     </section>
+
+    <div class="settings-list">
+      <div class="setting setting-switch">
+        <div class="setting-text">
+          <label for="show-builtin-right-sidebar">Show the harness's built-in right sidebar</label>
+          <p class="setting-note">The harness has its own right sidebar (a dock with a file tree and document preview, opened by the expand button in the session header). This app already provides its own file tree, git, and task panels, so the built-in one is hidden by default. Turn this on to show it. Every other header control — the "…" menu, download, open-in — is unaffected either way.</p>
+        </div>
+        <input type="checkbox" id="show-builtin-right-sidebar">
+      </div>
+    </div>
   </section>
 
   <section id="panel-plugins" role="tabpanel" aria-labelledby="tab-plugins" tabindex="0" class="panel" hidden>
     <p class="group-label" id="plugins-label">Plugins</p>
     <section class="group" aria-labelledby="plugins-label">
-      <p class="hint"><code>pkg</code> for the latest, offered updates later, or <code>pkg@version</code> to pin it exactly and never be offered an update. The notification hook bridge is pre-seeded below.</p>
+      <p class="hint"><code>pkg</code> for the latest, offered updates later, or <code>pkg@version</code> to pin it exactly and never be offered an update. A public GitHub repository works too: <code>github:owner/repo</code>, or <code>github:owner/repo#branch</code> to follow a branch or tag. The notification hook bridge is pre-seeded below.</p>
       <label for="plugin-spec">Add a package</label>
       <div class="row">
-        <input id="plugin-spec" type="text" placeholder="pkg or pkg@version" spellcheck="false">
+        <input id="plugin-spec" type="text" placeholder="pkg, pkg@version, or github:owner/repo" spellcheck="false">
         <button id="add-plugin" type="button">Add</button>
       </div>
       <p class="error" id="error-plugin-spec"></p>

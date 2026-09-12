@@ -1,5 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, shell, utilityProcess } from 'electron'
-import { accessSync, constants, existsSync, mkdirSync, renameSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs'
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { autoUpdater } from 'electron-updater'
@@ -25,11 +25,14 @@ import { openConfigFile } from './open-config-file'
 import {
   bundlePatchDeclaration,
   declaresClientHalf,
+  entryKey,
   HOOKS_PACKAGE,
+  parsePluginSource,
   parseSpec,
   pluginInstallMarker,
   pluginStatus,
   presetsDeclaration,
+  type InstalledPlugin,
   type PluginEntry,
   type PluginStatus,
 } from './plugin-entries'
@@ -38,7 +41,7 @@ import { ensurePluginPresets, reconcilePluginPresets } from './plugin-presets'
 import { preflight } from './preflight'
 import { attributeBootFailure, runtimeFilePaths, writeRuntimeFiles, type AttributionRow } from './runtime-files'
 import { readCachedShellPath, resolveShellPath, runShell, shellPathCachePath, writeCachedShellPath } from './shell-path'
-import type { InstallDeps } from './runtime-install'
+import { ensureGitInstalled, type InstallDeps } from './runtime-install'
 import { composePath, dshWebCommand, resolveBinary, startServer, type ServerHandle } from './server'
 import { createSettingsHandlers } from './settings-ipc'
 import { settingsContents, openSettings } from './settings-window'
@@ -1566,7 +1569,7 @@ function harnessSourceChanged(previous: HarnessSource, next: HarnessSource): boo
     }
     case 'managed': {
       const prev = previous as Extract<HarnessSource, { kind: 'managed' }>
-      return prev.package !== next.package || prev.version !== next.version || prev.workspace !== next.workspace
+      return prev.package !== next.package || prev.version !== next.version
     }
     default: {
       const exhaustive: never = next
@@ -1601,7 +1604,12 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
     // section — the master switch, a server's URL, or which servers are on
     // — only reaches the harness through a respawn. Compared by value
     // because the section is rebuilt fresh on every save.
-    mcpChanged(previous, next)
+    mcpChanged(previous, next) ||
+    // The built-in-sidebar switch decides whether the harness view gets the
+    // sidebar-hiding CSS, which is injected on the harness's `dom-ready`. A
+    // respawn is what reloads the harness so that injection re-evaluates the
+    // new choice.
+    previous.showBuiltinRightSidebar !== next.showBuiltinRightSidebar
   )
 }
 
@@ -1740,12 +1748,13 @@ async function runStartupPhases(config: DesktopConfig): Promise<void> {
  * @param config - the config this launch started from.
  * @param installed - each repaired spec with the version npm resolved.
  */
-function recordRepairedVersions(config: DesktopConfig, installed: { spec: string; version: string }[]): void {
+function recordRepairedVersions(config: DesktopConfig, installed: { spec: string; version: string; package?: string }[]): void {
   if (installed.length === 0) return
-  const resolved = new Map(installed.map(({ spec, version }) => [spec, version]))
+  const resolved = new Map(installed.map((entry) => [entry.spec, entry]))
   const plugins = (config.plugins ?? []).map((entry) => {
-    const version = resolved.get(entry.spec)
-    return version === undefined ? entry : { ...entry, version }
+    const result = resolved.get(entry.spec)
+    if (result === undefined) return entry
+    return { ...entry, version: result.version, ...(result.package === undefined ? {} : { package: result.package }) }
   })
   try {
     writeConfig(CONFIG_PATH, { ...config, plugins })
@@ -1899,38 +1908,58 @@ const probes = createMcpProber()
 const installDeps: InstallDeps = {
   run: (command, args, options) => installs.run(command, args, options),
   exists: existsSync,
+  readText: (path) => readFileSync(path, 'utf8'),
   mkdir: (path) => mkdirSync(path, { recursive: true }),
   rm: (path) => rmSync(path, { recursive: true, force: true }),
   rename: renameSync,
 }
 
 /**
- * Resolve and install one plugin entry.
+ * Resolve and install one plugin entry, npm or github.
  *
  * Named rather than inlined into the settings dependencies because startup
  * repair installs through it too: an entry installed at launch must be
  * indistinguishable from one installed by a save, and two call sites sharing
  * a definition is the only way that stays true.
- * @param pkg - the package name.
- * @param version - the concrete version or dist-tag to install.
+ *
+ * An npm spec resolves its dist-tag/version and installs as before. A github
+ * spec resolves its ref to a commit, installs `github:owner/repo#sha`,
+ * discovers the real package name, and verifies the entry point — returning
+ * that name alongside the SHA so the entry can be stored and later resolved.
+ * @param spec - the entry's spec, as typed or stored.
+ * @param priorVersion - the version last installed for this entry, if any.
+ * @param priorPackage - the npm name last discovered for a github entry, if any.
  * @param npmPath - the configured `npm` override.
- * @param onLine - receives `npm install` output as it arrives.
- * @returns the concrete installed version.
+ * @param onLine - receives install output as it arrives.
+ * @returns the concrete version (or SHA) and, for github, the discovered name.
  */
 function installPluginEntry(
-  pkg: string,
-  version: string,
+  spec: string,
+  priorVersion: string | undefined,
+  priorPackage: string | undefined,
   npmPath: string | undefined,
   onLine: (line: string) => void,
-): Promise<string> {
+): Promise<InstalledPlugin> {
+  const source = parsePluginSource(spec)
+  const npm = resolveBinary(npmPath, 'npm', process.env)
+  if (source.kind === 'github') {
+    // Not through `resolveBinary`: that helper is tuned for npm/pnpm, which
+    // live in a user PATH entry, and would reject `git` under a Finder-minimal
+    // PATH even though the Xcode command-line `git` sits at a system path. A
+    // public repo needs no credentials, so the on-disk system git, else the
+    // bare name (resolved by the spawn), is enough.
+    const git = existsSync('/usr/bin/git') ? '/usr/bin/git' : 'git'
+    return ensureGitInstalled(installDeps, npm, git, DSH_HOME, source, entryKey(spec), onLine, priorPackage)
+  }
+  const version = source.pinnedVersion ?? priorVersion ?? 'latest'
   return createManagedInstaller(
     installDeps,
-    resolveBinary(npmPath, 'npm', process.env),
+    npm,
     DSH_HOME,
     // A plugin entry links no `bin`, so its completion marker cannot be the
     // default `dsh` binary check; see `plugin-entries.ts`'s own doc.
-    (dir) => pluginInstallMarker(dir, pkg),
-  )(pkg, version, onLine)
+    (dir) => pluginInstallMarker(dir, source.package),
+  )(source.package, version, onLine).then((v) => ({ version: v }))
 }
 
 const settingsHandlers = createSettingsHandlers({
@@ -2540,6 +2569,35 @@ const restartOnce = singleFlight(restart)
  * exist and merely be broken, and quitting would take away the one window that
  * can repair it. The app stays in the tray, where Settings is reachable again.
  */
+/**
+ * Whether this app's own pages should render dark right now — the harness's
+ * chosen theme, or the machine's when it follows the system. The same rule
+ * `applyTheme` pushes to every page; read here so the Settings window opens on
+ * an opaque ground of the right colour rather than a see-through frame.
+ * @returns whether dark is in effect.
+ */
+function currentDark(): boolean {
+  const preference = harnessTheme(DSH_HOME)
+  return preference === 'dark' || (preference === 'system' && nativeTheme.shouldUseDarkColors)
+}
+
+/**
+ * Whether the harness's own right sidebar should be hidden right now — off
+ * unless `showBuiltinRightSidebar` is explicitly on, this app having its own
+ * right rail. Read live from disk on each harness load so a Save that flips it
+ * (which respawns the harness) takes effect on the reload without capturing a
+ * stale value. A config that cannot be read hides it, matching the default.
+ * @returns whether to inject the sidebar-hiding CSS.
+ */
+function hideBuiltinSidebar(): boolean {
+  try {
+    const stored = loadConfig(CONFIG_PATH)
+    return !stored.configured || stored.config.showBuiltinRightSidebar !== true
+  } catch {
+    return true
+  }
+}
+
 function showSettings(): void {
   openSettings(settingsHandlers, () => {
     let stored: ConfigResult
@@ -2550,7 +2608,7 @@ function showSettings(): void {
       return
     }
     if (!stored.configured) app.quit()
-  })
+  }, currentDark())
 }
 
 /** Show the window if hidden or unfocused, otherwise hide it. */
@@ -2683,7 +2741,7 @@ if (!app.requestSingleInstanceLock()) {
       // An unreadable config is reported further down, where it can open
       // Settings; the columns simply start at their defaults until then.
     }
-    views = createWindow(columns)
+    views = createWindow(columns, hideBuiltinSidebar)
     window = views.window
     // Sent, not invoked: a divider drag reports a coordinate per pointer move
     // and wants no answer. Which divider is dragging comes with it, since the

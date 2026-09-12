@@ -1,6 +1,6 @@
 // Dumb form: reads values, sends them to main, renders whatever comes back.
 // All validation lives in the main process.
-const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'extraPath', 'terminalShell']
+const FIELDS = ['repo', 'package', 'version', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'extraPath', 'terminalShell']
 const el = (id) => document.getElementById(id)
 const kindOf = () => document.querySelector('input[name="kind"]:checked').value
 
@@ -14,7 +14,6 @@ const FIELD_TAB = {
   repo: 'harness',
   package: 'harness',
   version: 'harness',
-  workspace: 'harness',
   notifyPort: 'notifications',
   hotkey: 'notifications',
   pnpmPath: 'advanced',
@@ -164,6 +163,7 @@ function collect() {
   form.plugins = pluginRows.map((plugin) => ({ spec: plugin.spec, config: plugin.config ?? '' }))
   form.mcpEnabled = el('mcp-enabled').checked
   form.viewTools = el('view-tools').checked
+  form.showBuiltinRightSidebar = el('show-builtin-right-sidebar').checked
   return form
 }
 
@@ -951,8 +951,17 @@ function renderPluginRows() {
 
     const meta = document.createElement('span')
     meta.className = 'plugin-meta'
-    const state = plugin.version === undefined ? 'not installed yet' : `v${plugin.version} installed`
-    meta.textContent = plugin.pinned ? `pinned, ${state}` : state
+    // A row with no resolved version yet is installed by the next Save. While
+    // that Save is in flight, saying "Installing…" is what turns the disabled
+    // Save button into visible feedback — a git resolve then an install can run
+    // for seconds with little else to see (see `#progress`).
+    if (plugin.version === undefined && saveInFlight) {
+      meta.textContent = 'Installing…'
+      meta.classList.add('plugin-meta-installing')
+    } else {
+      const state = plugin.version === undefined ? 'not installed yet' : `v${plugin.version} installed`
+      meta.textContent = plugin.pinned ? `pinned, ${state}` : state
+    }
     main.append(meta)
 
     top.append(main)
@@ -1464,6 +1473,7 @@ async function load() {
 
   el('mcp-enabled').checked = form.mcpEnabled
   el('view-tools').checked = form.viewTools
+  el('show-builtin-right-sidebar').checked = form.showBuiltinRightSidebar
   // The servers come from mcp.json through their own channel, not from the
   // form: that file is the portable one, and `save` writes desktop.json.
   mcpServers = await window.settings.readMcpServers()
@@ -1501,11 +1511,6 @@ for (const tab of TABS) {
 el('browse').addEventListener('click', async () => {
   const picked = await window.settings.pickFolder()
   if (picked !== undefined) el('repo').value = picked
-})
-
-el('browse-workspace').addEventListener('click', async () => {
-  const picked = await window.settings.pickFolder()
-  if (picked !== undefined) el('workspace').value = picked
 })
 
 el('save').addEventListener('click', performSave)

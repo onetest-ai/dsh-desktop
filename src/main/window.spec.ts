@@ -132,6 +132,33 @@ describe('the main window drag region', () => {
   })
 })
 
+describe('hiding the harness built-in sidebar', () => {
+  it('exports CSS that hides the dock, its float host, and the expand button by their stable data hooks', async () => {
+    const { HIDE_BUILTIN_SIDEBAR_CSS } = await import('./window')
+    expect(HIDE_BUILTIN_SIDEBAR_CSS).toContain('[data-sidebar-right-expand]')
+    expect(HIDE_BUILTIN_SIDEBAR_CSS).toContain('[data-sidebar-right-panel]')
+    expect(HIDE_BUILTIN_SIDEBAR_CSS).toContain('[data-sidebar-right-float-host]')
+    expect(HIDE_BUILTIN_SIDEBAR_CSS).toContain('display: none !important')
+  })
+
+  it('injects the hide CSS on dom-ready only when the callback says to', async () => {
+    const { createWindow } = await import('./window')
+    createWindow(CLOSED, () => true)
+    fake.domReadyHandlers[0]?.()
+    // Drag CSS plus the sidebar-hide CSS.
+    expect(fake.insertedCss).toHaveLength(2)
+    expect(fake.insertedCss.some((css) => css.includes('[data-sidebar-right-expand]'))).toBe(true)
+  })
+
+  it('injects only the drag CSS when the callback says not to hide it', async () => {
+    const { createWindow } = await import('./window')
+    createWindow(CLOSED, () => false)
+    fake.domReadyHandlers[0]?.()
+    expect(fake.insertedCss).toHaveLength(1)
+    expect(fake.insertedCss.some((css) => css.includes('data-sidebar-right'))).toBe(false)
+  })
+})
+
 describe('the window\'s views', () => {
   // reason: the harness Web UI is loaded unmodified and hosts other packages'
   // browser halves, so it must not get the pane's preload — its own exposes

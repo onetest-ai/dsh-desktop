@@ -26,7 +26,7 @@ function rows(text: string): SettingsForm['plugins'] {
 function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
   return {
     kind: 'local', repo: REPO, package: PKG, version: 'latest',
-    workspace: '', notifyPort: '43117', hotkey: 'CommandOrControl+Shift+D',
+    notifyPort: '43117', hotkey: 'CommandOrControl+Shift+D',
     pnpmPath: '', npmPath: '', extraPath: '', terminalShell: '', plugins: [], mcpEnabled: false, ...overrides,
   }
 }
@@ -38,7 +38,7 @@ const STORED: DesktopConfig = {
 }
 
 const MANAGED_STORED: DesktopConfig = {
-  harness: { kind: 'managed', package: PKG, version: '0.1.1-rc.2', workspace: REPO },
+  harness: { kind: 'managed', package: PKG, version: '0.1.1-rc.2' },
   notifyPort: 43117,
   hotkey: 'CommandOrControl+Shift+D',
 }
@@ -52,7 +52,7 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     apply: vi.fn(async () => []),
     isQuitting: () => false,
     installManaged: vi.fn(async (_pkg, version) => version),
-    installPlugin: vi.fn(async (_pkg, version) => version),
+    installPlugin: vi.fn(async (_spec, priorVersion) => ({ version: priorVersion ?? '0.2.1' })),
     checkManagedUpdate: vi.fn(async () => undefined),
     checkBinaries: vi.fn(async () => ({ pnpm: { ok: true, version: '9.0.0' }, npm: { ok: true, version: '10.0.0' } })),
     disabledPlugins: vi.fn(() => ({})),
@@ -364,12 +364,12 @@ describe('save', () => {
     it('resolves and installs, storing the concrete version rather than the submitted tag', async () => {
       const installManaged = vi.fn(async () => '0.1.1-rc.2')
       const d = deps({ installManaged })
-      const result = await createSettingsHandlers(d).save(form({ kind: 'managed', version: 'latest', workspace: REPO }))
+      const result = await createSettingsHandlers(d).save(form({ kind: 'managed', version: 'latest' }))
 
       expect(result).toEqual({ ok: true, warnings: [] })
       expect(installManaged).toHaveBeenCalledWith(PKG, 'latest', undefined, expect.any(Function))
       expect(d.writeConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ harness: { kind: 'managed', package: PKG, version: '0.1.1-rc.2', workspace: REPO } }),
+        expect.objectContaining({ harness: { kind: 'managed', package: PKG, version: '0.1.1-rc.2' } }),
       )
     })
 
@@ -418,20 +418,20 @@ describe('save', () => {
 
   describe('plugins', () => {
     it('installs a pinned entry at exactly its spec\'s version, reusing the shared installer', async () => {
-      const installPlugin = vi.fn(async (_pkg: string, version: string) => version)
+      const installPlugin = vi.fn(async (_spec: string, priorVersion: string | undefined) => ({ version: priorVersion ?? '0.2.1' }))
       const d = deps({ installPlugin })
 
       const result = await createSettingsHandlers(d).save(form({ plugins: rows(`${DECK}@0.2.1`) }))
 
       expect(result).toEqual({ ok: true, warnings: [] })
-      expect(installPlugin).toHaveBeenCalledWith(DECK, '0.2.1', undefined, expect.any(Function))
+      expect(installPlugin).toHaveBeenCalledWith(`${DECK}@0.2.1`, undefined, undefined, undefined, expect.any(Function))
       expect(d.writeConfig).toHaveBeenCalledWith(
         expect.objectContaining({ plugins: [{ spec: `${DECK}@0.2.1`, version: '0.2.1' }] }),
       )
     })
 
     it('persists a row config alongside the resolved entry', async () => {
-      const installPlugin = vi.fn(async (_pkg: string, version: string) => version)
+      const installPlugin = vi.fn(async (_spec: string, priorVersion: string | undefined) => ({ version: priorVersion ?? '0.2.1' }))
       const d = deps({ installPlugin })
 
       await createSettingsHandlers(d).save(form({ plugins: [{ spec: `${DECK}@0.2.1`, config: '{"base": "/x"}' }] }))
@@ -442,7 +442,7 @@ describe('save', () => {
     })
 
     it('rejects malformed row config before installing anything', async () => {
-      const installPlugin = vi.fn(async (_pkg: string, version: string) => version)
+      const installPlugin = vi.fn(async (_spec: string, priorVersion: string | undefined) => ({ version: priorVersion ?? '0.2.1' }))
       const d = deps({ installPlugin })
 
       const result = await createSettingsHandlers(d).save(form({ plugins: [{ spec: DECK, config: '{not json' }] }))
@@ -454,16 +454,16 @@ describe('save', () => {
     })
 
     it('resolves a floating entry with no prior version to latest', async () => {
-      const installPlugin = vi.fn(async () => '0.2.1')
+      const installPlugin = vi.fn(async () => ({ version: '0.2.1' }))
       const d = deps({ installPlugin })
 
       await createSettingsHandlers(d).save(form({ plugins: rows(DECK) }))
 
-      expect(installPlugin).toHaveBeenCalledWith(DECK, 'latest', undefined, expect.any(Function))
+      expect(installPlugin).toHaveBeenCalledWith(DECK, undefined, undefined, undefined, expect.any(Function))
     })
 
     it('reinstalls a floating entry at its previously resolved version, not latest again', async () => {
-      const installPlugin = vi.fn(async (_pkg: string, version: string) => version)
+      const installPlugin = vi.fn(async (_spec: string, priorVersion: string | undefined) => ({ version: priorVersion ?? '0.2.1' }))
       const d = deps({
         installPlugin,
         readConfig: () => ({ configured: true, config: { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }] } }),
@@ -471,11 +471,11 @@ describe('save', () => {
 
       await createSettingsHandlers(d).save(form({ plugins: rows(DECK) }))
 
-      expect(installPlugin).toHaveBeenCalledWith(DECK, '0.2.1', undefined, expect.any(Function))
+      expect(installPlugin).toHaveBeenCalledWith(DECK, '0.2.1', undefined, undefined, expect.any(Function))
     })
 
     it('adds and removes entries, round-tripping through config', async () => {
-      const installPlugin = vi.fn(async (_pkg: string, version: string) => (version === 'latest' ? '1.0.0' : version))
+      const installPlugin = vi.fn(async (_spec: string, priorVersion: string | undefined) => ({ version: priorVersion ?? '1.0.0' }))
       const d = deps({
         installPlugin,
         readConfig: () => ({
@@ -536,9 +536,9 @@ describe('save', () => {
       // any of this ran (see `performSave`'s provisional write), so quitting
       // mid-install only cuts the install/apply job short, not the save.
       let quitting = false
-      const installPlugin = vi.fn(async (pkg: string) => {
+      const installPlugin = vi.fn(async (spec: string) => {
         quitting = true
-        return pkg === '@onetest/a' ? '1.0.0' : 'unreachable'
+        return { version: spec === '@onetest/a' ? '1.0.0' : 'unreachable' }
       })
       const d = deps({ installPlugin, isQuitting: () => quitting })
 
@@ -562,13 +562,13 @@ describe('acceptPluginUpdate', () => {
     // spec is what pins an entry, so accepting an update must move `version`
     // alone and leave `spec` exactly as it was, or the plugin would silently
     // stop being offered any future update.
-    const installPlugin = vi.fn(async () => '0.3.0')
+    const installPlugin = vi.fn(async () => ({ version: '0.3.0' }))
     const d = deps({ installPlugin, readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }) })
 
     const result = await createSettingsHandlers(d).acceptPluginUpdate(DECK, '0.3.0')
 
     expect(result).toEqual({ ok: true, warnings: [], version: '0.3.0' })
-    expect(installPlugin).toHaveBeenCalledWith(DECK, '0.3.0', undefined, expect.any(Function))
+    expect(installPlugin).toHaveBeenCalledWith(DECK, '0.3.0', undefined, undefined, expect.any(Function))
     expect(d.writeConfig).toHaveBeenCalledWith(
       expect.objectContaining({ plugins: [{ spec: DECK, version: '0.3.0' }] }),
     )
@@ -580,7 +580,7 @@ describe('acceptPluginUpdate', () => {
     // is unlikely for an already-concrete version, but the caller must never
     // assume it: this is what lets `settings.js` show the row what actually
     // got written instead of echoing back what it asked for.
-    const installPlugin = vi.fn(async () => '0.3.1')
+    const installPlugin = vi.fn(async () => ({ version: '0.3.1' }))
     const d = deps({ installPlugin, readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }) })
 
     const result = await createSettingsHandlers(d).acceptPluginUpdate(DECK, '0.3.0')
@@ -592,7 +592,7 @@ describe('acceptPluginUpdate', () => {
   })
 
   it('never rewrites spec to pkg@version, even though the concrete version resolved matches', async () => {
-    const installPlugin = vi.fn(async () => '0.3.0')
+    const installPlugin = vi.fn(async () => ({ version: '0.3.0' }))
     const d = deps({ installPlugin, readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }) })
 
     await createSettingsHandlers(d).acceptPluginUpdate(DECK, '0.3.0')
@@ -604,7 +604,7 @@ describe('acceptPluginUpdate', () => {
   })
 
   it('refuses a pinned entry rather than reinstalling it', async () => {
-    const installPlugin = vi.fn(async () => '0.3.0')
+    const installPlugin = vi.fn(async () => ({ version: '0.3.0' }))
     const d = deps({
       installPlugin,
       readConfig: () => ({ configured: true, config: { ...STORED, plugins: [{ spec: `${DECK}@0.2.1`, version: '0.2.1' }] } }),
@@ -627,7 +627,7 @@ describe('acceptPluginUpdate', () => {
   })
 
   it('refuses while quitting, before installing anything', async () => {
-    const installPlugin = vi.fn(async () => '0.3.0')
+    const installPlugin = vi.fn(async () => ({ version: '0.3.0' }))
     const d = deps({
       installPlugin,
       isQuitting: () => true,
@@ -911,7 +911,7 @@ describe('checkBinaries', () => {
     const checkBinaries = vi.fn(async () => ({ pnpm: { ok: true as const, version: '9.0.0' }, npm: { ok: true as const, version: '10.0.0' } }))
     const handlers = createSettingsHandlers(deps({ installManaged, checkBinaries }))
 
-    const saving = handlers.save(form({ kind: 'managed', package: PKG, version: 'latest', workspace: REPO }))
+    const saving = handlers.save(form({ kind: 'managed', package: PKG, version: 'latest' }))
     const result = await handlers.checkBinaries('', '')
     expect(result).toEqual({ pnpm: { ok: true, version: '9.0.0' }, npm: { ok: true, version: '10.0.0' } })
 
@@ -953,7 +953,7 @@ describe('openConfigFile', () => {
     const openConfigFile = vi.fn(async () => ({ ok: true }) as const)
     const handlers = createSettingsHandlers(deps({ installManaged, openConfigFile }))
 
-    const saving = handlers.save(form({ kind: 'managed', package: PKG, version: 'latest', workspace: REPO }))
+    const saving = handlers.save(form({ kind: 'managed', package: PKG, version: 'latest' }))
     const result = await handlers.openConfigFile()
     expect(result).toEqual({ ok: true })
 
@@ -1077,7 +1077,7 @@ describe('MCP', () => {
     })
 
     it('stores the resolved client version', async () => {
-      const d = deps({ readMcpServers: vi.fn(() => [TAVILY]), installPlugin: vi.fn(async () => '1.2.3') })
+      const d = deps({ readMcpServers: vi.fn(() => [TAVILY]), installPlugin: vi.fn(async () => ({ version: '1.2.3' })) })
       await createSettingsHandlers(d).save(form({ mcpEnabled: true }))
       expect(vi.mocked(d.writeConfig).mock.calls.at(-1)![0].mcpClientVersion).toBe('1.2.3')
     })
@@ -1085,9 +1085,9 @@ describe('MCP', () => {
     it('never fails the whole save because the client could not be installed', async () => {
       const d = deps({
         readMcpServers: vi.fn(() => [TAVILY]),
-        installPlugin: vi.fn(async (pkg) => {
-          if (pkg === MCP_CLIENT) throw new Error('registry unreachable')
-          return '1.0.0'
+        installPlugin: vi.fn(async (spec) => {
+          if (spec === MCP_CLIENT) throw new Error('registry unreachable')
+          return { version: '1.0.0' }
         }),
       })
       const result = await createSettingsHandlers(d).save(form({ mcpEnabled: true }))

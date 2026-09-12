@@ -3,7 +3,7 @@ import { dirname } from 'node:path'
 import { writeFileAtomic } from './atomic-write'
 import { ConfigurationError } from './configuration-error'
 import type { HarnessSource } from './harness-source'
-import { validSpecShape, type PluginEntry } from './plugin-entries'
+import { validNpmPackageName, validSpecShape, type PluginEntry } from './plugin-entries'
 
 /** Resolved desktop settings. `pnpmPath`/`npmPath` pin binaries when PATH cannot find them. */
 export interface DesktopConfig {
@@ -90,6 +90,17 @@ export interface DesktopConfig {
   viewTools?: boolean
   /** The loopback port those tools are served on. */
   viewToolsPort?: number
+  /**
+   * Whether to show the harness's own built-in right sidebar (its dock with a
+   * file tree and document preview, and the expand button that opens it).
+   *
+   * Absent means off: this app supplies its own right rail, so the harness's is
+   * redundant and hidden by default. When absent or false, dsh-desktop injects
+   * CSS into the harness view hiding the sidebar's own elements; `true` injects
+   * nothing. The dock's plugin is never disabled — the chat UI requires its
+   * `sidebarRight` service — so only its UI is hidden, not the service.
+   */
+  showBuiltinRightSidebar?: boolean
 }
 
 export const DEFAULT_NOTIFY_PORT = 43117
@@ -191,6 +202,12 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
       if (entry.config !== undefined && (typeof entry.config !== 'object' || entry.config === null || Array.isArray(entry.config))) {
         throw new ConfigurationError(`dsh-desktop: ${filePath} plugin "${entry.spec}" config must be a JSON object`)
       }
+      // A github entry's discovered `package` reaches `packageDirIn`'s raw path
+      // join, so a hand-edited traversal there is refused the same way a spec
+      // one is above.
+      if (entry.package !== undefined && (typeof entry.package !== 'string' || !validNpmPackageName(entry.package))) {
+        throw new ConfigurationError(`dsh-desktop: ${filePath} plugin "${entry.spec}" package "${String(entry.package)}" is not a valid package name`)
+      }
     }
   }
 
@@ -221,6 +238,7 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     ...(pane === undefined ? {} : { pane }),
     ...(typeof record.viewTools === 'boolean' ? { viewTools: record.viewTools } : {}),
     ...(typeof record.viewToolsPort === 'number' ? { viewToolsPort: record.viewToolsPort } : {}),
+    ...(typeof record.showBuiltinRightSidebar === 'boolean' ? { showBuiltinRightSidebar: record.showBuiltinRightSidebar } : {}),
   }
 }
 

@@ -2,6 +2,8 @@ import { PANE_TABS, selectTab, type PaneTab, type TabView } from './tabs.ts'
 import { Editor } from './editor.ts'
 import { normalizeAddress } from './address.ts'
 import { isMarkdown, openMarkdownLink, renderMarkdown } from './markdown.ts'
+import { isCsv, renderCsvTable } from './csv.ts'
+import { isWebPage } from './web-page.ts'
 import { isMedia } from './media-kind.ts'
 import { monacoDocuments, setEditorTheme } from './monaco-surface.ts'
 import './bridge.ts'
@@ -139,12 +141,28 @@ function renderFileTabs(): void {
 }
 
 /**
- * Which open files are being shown rendered rather than as source.
+ * Which renderable files the user has flipped to source.
  *
- * Per file, not one flag for the pane: someone reading a report and editing a
- * spec wants each tab to stay as they left it.
+ * A renderable file — markdown or a CSV/TSV table — shows rendered by default;
+ * this set holds the exceptions. Per file, not one flag for the pane: someone
+ * reading a report and editing a spec wants each tab to stay as they left it.
  */
-const rendered = new Set<string>()
+const shownAsSource = new Set<string>()
+
+/** Whether a file has a rendered view — markdown prose or a delimited table. */
+function isRenderable(name: string): boolean {
+  return isMarkdown(name) || isCsv(name)
+}
+
+/**
+ * Render one renderable file to the HTML its preview shows, by kind.
+ * @param name - the file's name, which decides markdown vs. table.
+ * @param text - the file's current buffer text.
+ * @returns sanitized markdown HTML, or an HTML-escaped table.
+ */
+function previewHtml(name: string, text: string): string {
+  return isCsv(name) ? renderCsvTable(text) : renderMarkdown(text)
+}
 
 /** The key a tab is remembered by, unique across projects. */
 function keyOf(file: { root: string; relative: string }): string {
@@ -162,9 +180,14 @@ function renderPreview(): void {
   const file = editor.current
   const tab = editor.openTabs.find((each) => file !== undefined && each.file.relative === file.relative && each.file.root === file.root)
   const toggle = el('toggle-preview') as HTMLButtonElement
+  const openInWeb = el('open-in-web') as HTMLButtonElement
   const preview = el('preview')
 
-  if (file === undefined || tab === undefined || !isMarkdown(file.relative)) {
+  // A live page opens in the Web tab rather than rendering in place, so its
+  // button rides beside the editor for as long as such a file is showing.
+  openInWeb.hidden = !(file !== undefined && tab !== undefined && isWebPage(file.relative))
+
+  if (file === undefined || tab === undefined || !isRenderable(file.relative)) {
     toggle.hidden = true
     preview.hidden = true
     preview.textContent = ''
@@ -172,23 +195,32 @@ function renderPreview(): void {
     return
   }
   toggle.hidden = false
-  const showing = rendered.has(keyOf(file))
+  // Rendered by default: the set holds only the files flipped to source.
+  const showing = !shownAsSource.has(keyOf(file))
   toggle.textContent = showing ? 'Source' : 'Preview'
   toggle.setAttribute('aria-pressed', String(showing))
   preview.hidden = !showing
   el('editor-host').hidden = showing
-  // Sanitized in `renderMarkdown`; this is the only place the result reaches
-  // the DOM.
-  preview.innerHTML = showing ? renderMarkdown(tab.document.text()) : ''
+  // Sanitized (markdown) or HTML-escaped (table) at the source; this is the
+  // only place the result reaches the DOM.
+  preview.innerHTML = showing ? previewHtml(file.relative, tab.document.text()) : ''
 }
 
 el('toggle-preview').addEventListener('click', () => {
   const file = editor.current
   if (file === undefined) return
   const key = keyOf(file)
-  if (rendered.has(key)) rendered.delete(key)
-  else rendered.add(key)
+  if (shownAsSource.has(key)) shownAsSource.delete(key)
+  else shownAsSource.add(key)
   renderPreview()
+})
+
+// A live page is not rendered in place: this saves the file and hands it to
+// the Web tab, the same flow the tree's Open in Web uses.
+el('open-in-web').addEventListener('click', () => {
+  const file = editor.current
+  if (file === undefined) return
+  window.pane.openInWeb(file.root, file.relative)
 })
 
 // Asked for by main when the tree's Open in Web names a file. Saving first

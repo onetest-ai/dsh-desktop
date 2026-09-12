@@ -4,7 +4,7 @@ import { join } from 'node:path'
 /** Where the harness runtime comes from. */
 export type HarnessSource =
   | { kind: 'local'; repo: string }
-  | { kind: 'managed'; package: string; version: string; workspace: string }
+  | { kind: 'managed'; package: string; version: string }
 
 /**
  * Binary resolvers used to launch each source kind.
@@ -194,6 +194,12 @@ export function spawnFor(source: HarnessSource, launchers: Launchers, patchFile:
   return {
     command: managedBin(managedDir(dshHome, source.package, source.version)),
     args: profileArgs,
-    cwd: source.workspace,
+    // A managed harness runs in `$DSH_HOME`, not a user project. The harness
+    // owns its workspace list (`$DSH_HOME/storages/workspace.json`) and reads a
+    // command's directory from each session's own header, so the launch cwd is
+    // not a project root — pinning it to the home keeps a project switch from
+    // restarting the harness, and a single `$DSH_HOME/.env` is the harness's
+    // one env-file layer.
+    cwd: dshHome,
   }
 }

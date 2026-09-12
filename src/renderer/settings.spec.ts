@@ -107,7 +107,7 @@ function declaredKindRadios(): Array<{ value: string; checked: boolean }> {
 }
 
 /** The field ids `settings.js` collects; asserted against the page below. */
-const FIELDS = ['repo', 'package', 'version', 'workspace', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'extraPath', 'terminalShell']
+const FIELDS = ['repo', 'package', 'version', 'notifyPort', 'hotkey', 'pnpmPath', 'npmPath', 'extraPath', 'terminalShell']
 
 interface FakeElement {
   id: string
@@ -355,6 +355,9 @@ function readResult(overrides: Record<string, unknown> = {}): Record<string, unk
       // Absent means on, which is what `formFor` reports for a config that
       // has never touched the switch.
       viewTools: true,
+      // Off by default: `formFor` reports the harness's own right sidebar
+      // hidden unless the config opted in.
+      showBuiltinRightSidebar: false,
       ...(form as Record<string, unknown> | undefined),
     },
     plugins: [],
@@ -881,27 +884,6 @@ describe('install progress', () => {
 
     const insidePanel = panelRanges().some((range) => progressIndex > range.start && progressIndex < range.end)
     expect(insidePanel).toBe(false)
-  })
-})
-
-describe('workspace folder info affordance', () => {
-  it('is a native disclosure next to the workspace label, keyboard-reachable and labelled without any script', () => {
-    const labelIndex = MARKUP.indexOf('for="workspace"')
-    expect(labelIndex).toBeGreaterThan(-1)
-
-    const detailsIndex = MARKUP.indexOf('<details class="field-info">')
-    expect(detailsIndex).toBeGreaterThan(-1)
-    // Sits with the workspace label, not scattered elsewhere on the page.
-    expect(Math.abs(detailsIndex - labelIndex)).toBeLessThan(400)
-
-    const detailsMarkup = MARKUP.slice(detailsIndex, MARKUP.indexOf('</details>', detailsIndex))
-    const summaryLabel = /<summary aria-label="([^"]+)">/.exec(detailsMarkup)?.[1]
-    // `<summary>` is natively Tab-reachable and Enter/Space-toggleable; the
-    // `aria-label` is the accessible name a screen reader announces it by.
-    expect(summaryLabel).toMatch(/workspace/i)
-    expect(detailsMarkup).not.toMatch(/\btabindex="-1"/)
-    // The explanation itself, not just an empty toggle.
-    expect(detailsMarkup).toMatch(/<p>.+working directory.+<\/p>/)
   })
 })
 
@@ -2202,6 +2184,20 @@ describe('the view tools switch', () => {
     box.checked = false
     await renderer.save()
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ viewTools: false }))
+  })
+})
+
+describe('the built-in right sidebar switch', () => {
+  it('is unchecked by default and saves the opt-in as the form shows it', async () => {
+    const save = vi.fn(async () => ({ ok: true }))
+    const renderer = await load(save)
+    const box = renderer.elements.get('show-builtin-right-sidebar')
+    if (box === undefined) throw new Error('no switch')
+    // Off by default: the app's own right rail makes the harness's redundant.
+    expect(box.checked).toBe(false)
+    box.checked = true
+    await renderer.save()
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ showBuiltinRightSidebar: true }))
   })
 })
 

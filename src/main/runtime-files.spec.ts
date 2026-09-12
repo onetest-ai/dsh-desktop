@@ -281,6 +281,11 @@ describe('patchOverlay', () => {
     expect(overlay).toContain("configPath: '/tmp/hooks.json'")
     expect(overlay).not.toContain('ignored')
   })
+
+  it('never disables a built-in sidebar entry — hiding is done with injected CSS, not the overlay', () => {
+    const { overlay } = patchOverlay([], [])
+    expect(overlay).not.toContain('ui-sidebar')
+  })
 })
 
 describe('checkPackageLoadable', () => {
