@@ -288,6 +288,39 @@ body {
   border-top: 1px solid var(--dsw-alias-border-l2);
 }
 
+/* A CSV or TSV opens as a table by default. Unlike a markdown table — part of
+   a flowing document — a data file can be wide and long, so it sizes to its
+   own content and scrolls inside the preview (`overflow: auto` above), its
+   header stays put while the body scrolls, and its rows alternate so a long
+   row is easy to read across. */
+.preview .csv-table {
+  width: auto;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.preview .csv-table th,
+.preview .csv-table td {
+  max-width: 480px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.preview .csv-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--dsw-alias-bg-layer-3);
+  /* A collapsed border scrolls out from under a sticky header; drawing the
+     bottom edge on the cell itself with an inset shadow keeps it in place. */
+  box-shadow: inset 0 -1px 0 var(--dsw-alias-border-l2);
+}
+
+.preview .csv-table tbody tr:nth-child(even) td {
+  background: var(--dsw-alias-bg-layer-1);
+}
+
 /* The web panel holds only the address bar: the page is a view stacked below
    it, so the panel must not scroll or pad around a body it does not have. */
 .panel-web {
