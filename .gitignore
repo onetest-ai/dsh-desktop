@@ -14,3 +14,8 @@ docs/superpowers/
 
 # Local, uncommitted Claude notes (may reference credential locations)
 CLAUDE.local.md
+.mcp.json
+.agents
+.claude
+.playwright-mcp
+skills-lock.json
