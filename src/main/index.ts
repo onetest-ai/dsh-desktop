@@ -2568,6 +2568,18 @@ const restartOnce = singleFlight(restart)
  * exist and merely be broken, and quitting would take away the one window that
  * can repair it. The app stays in the tray, where Settings is reachable again.
  */
+/**
+ * Whether this app's own pages should render dark right now — the harness's
+ * chosen theme, or the machine's when it follows the system. The same rule
+ * `applyTheme` pushes to every page; read here so the Settings window opens on
+ * an opaque ground of the right colour rather than a see-through frame.
+ * @returns whether dark is in effect.
+ */
+function currentDark(): boolean {
+  const preference = harnessTheme(DSH_HOME)
+  return preference === 'dark' || (preference === 'system' && nativeTheme.shouldUseDarkColors)
+}
+
 function showSettings(): void {
   openSettings(settingsHandlers, () => {
     let stored: ConfigResult
@@ -2578,7 +2590,7 @@ function showSettings(): void {
       return
     }
     if (!stored.configured) app.quit()
-  })
+  }, currentDark())
 }
 
 /** Show the window if hidden or unfocused, otherwise hide it. */

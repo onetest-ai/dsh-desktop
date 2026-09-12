@@ -59,7 +59,7 @@ function pushToSender(sender: WebContents, channel: string, payload: unknown): v
  * @param handlers - the operations the renderer may invoke.
  * @param onClosed - called when the window closes, however it closes.
  */
-export function openSettings(handlers: SettingsHandlers, onClosed: () => void): void {
+export function openSettings(handlers: SettingsHandlers, onClosed: () => void, dark = false): void {
   if (isOpen()) {
     settingsWindow?.focus()
     return
@@ -112,6 +112,15 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
     width: 880,
     height: 640,
     title: 'DeepSeek Harness Settings',
+    // Never shown before it has painted: a frameless window shown immediately
+    // renders an empty, effectively see-through frame until the page's first
+    // paint, and while the harness is respawning after a Save the machine is
+    // busy enough that the gap is long and visible — the reported "settings
+    // didn't load and we saw through to the harness". Held until `ready-to-show`
+    // below, with an opaque theme-matched ground so any later repaint under
+    // load never flashes through either.
+    show: false,
+    backgroundColor: dark ? '#161618' : '#ffffff',
     // Genuinely frameless, matching the main window: this window owns its
     // markup, so it can carry a real drag strip (`.titlebar` in
     // settings.html) instead of the CSS-injection workaround the harness
@@ -128,6 +137,9 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void): 
   })
 
   void settingsWindow.loadFile(join(__dirname, '..', 'renderer', 'settings.html'))
+  // Reveal only once the page has painted its first frame, matching the main
+  // window's own pattern — the whole point of `show: false` above.
+  settingsWindow.once('ready-to-show', () => settingsWindow?.show())
 
   settingsWindow.on('closed', () => {
     settingsWindow = undefined

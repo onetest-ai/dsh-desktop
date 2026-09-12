@@ -49,6 +49,8 @@ const fake = vi.hoisted(() => {
     isDestroyed: () => false,
     loadFile: vi.fn(async () => {}),
     on: vi.fn(),
+    once: vi.fn(),
+    show: vi.fn(),
     focus: vi.fn(),
   }
 
@@ -97,6 +99,21 @@ beforeEach(() => {
 function event(sender: FakeSender): { sender: FakeSender } {
   return { sender }
 }
+
+describe('the window itself', () => {
+  it('is revealed only once it has painted, never as an unpainted frame', async () => {
+    const { openSettings } = await import('./settings-window')
+    openSettings(handlers(), () => {})
+    // Not shown at construction time — that would flash a see-through frame.
+    expect(fake.windowInstance.show).not.toHaveBeenCalled()
+    // The ready-to-show handler is what reveals it.
+    const once = fake.windowInstance.once as unknown as ReturnType<typeof vi.fn>
+    const readyToShow = once.mock.calls.find((c) => c[0] === 'ready-to-show')?.[1] as (() => void) | undefined
+    expect(readyToShow).toBeTypeOf('function')
+    readyToShow?.()
+    expect(fake.windowInstance.show).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('the save channel', () => {
   it('forwards each installed progress line to the window over settings:progress', async () => {
