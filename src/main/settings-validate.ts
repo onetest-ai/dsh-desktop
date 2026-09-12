@@ -53,8 +53,9 @@ export interface SettingsForm {
    */
   viewTools: boolean
   /**
-   * Whether to show the harness's own built-in right sidebar. Off by default:
-   * this app has its own right rail, so the harness's dock is redundant.
+   * Whether to show the harness's built-in file tree and document preview (the
+   * two tabs in its right sidebar). Off by default: this app has its own file
+   * tree, so those two are redundant. The dock itself always stays.
    */
   showBuiltinRightSidebar: boolean
 }

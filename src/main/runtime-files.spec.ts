@@ -282,26 +282,25 @@ describe('patchOverlay', () => {
     expect(overlay).not.toContain('ignored')
   })
 
-  it('does not disable the harness built-in right sidebar by default', () => {
+  it('does not disable any built-in sidebar entry by default', () => {
     const { overlay } = patchOverlay([], [])
-    expect(overlay).not.toContain('ui-sidebar-right')
     expect(overlay).not.toContain('ui-sidebar-files')
     expect(overlay).not.toContain('ui-sidebar-documentpreview')
   })
 
-  it('disables the harness built-in right sidebar and its tabs when asked', () => {
-    // The desktop shell supplies its own right rail, so hiding the harness's
-    // own dock removes a redundant surface. All three ids go together: the
-    // file-tree and preview tabs register into the dock the `-right` plugin
-    // owns, so leaving them enabled would inject into a seat that is gone.
+  it('disables the built-in file-tree and preview tabs when asked, but never the dock itself', () => {
+    // The desktop shell supplies its own right rail, so the harness's own file
+    // tree and document preview are redundant. But the dock (`ui-sidebar-right`)
+    // provides the `sidebarRight` service the chat UI requires, so it is left
+    // enabled: disabling it strands the chat plugin and the client shows
+    // "Failed to load plugins".
     const { overlay } = patchOverlay([], [], true)
-    for (const id of ['ui-sidebar-right', 'ui-sidebar-documentpreview', 'ui-sidebar-files']) {
+    for (const id of ['ui-sidebar-documentpreview', 'ui-sidebar-files']) {
       expect(overlay).toContain(`- id: ${id}`)
     }
-    // Disabled, not inserted: a disable row targets an existing bundle entry
-    // and carries no `name`/`config`.
     expect(overlay).toContain('disabled: true')
-    expect(overlay).not.toContain("name: '@deepseek-ai/dsh-client-ui-sidebar-right'")
+    // The dock is never disabled — that is the whole point of this fix.
+    expect(overlay).not.toContain('ui-sidebar-right')
   })
 })
 

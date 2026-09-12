@@ -277,16 +277,19 @@ export function patchOverlay(
     port: 0
 `
   // The desktop shell has its own right rail (file tree, git, tasks), so the
-  // harness's own right sidebar is a redundant surface. These rows disable the
-  // bundle's `ui-sidebar-*` entries in place rather than inserting anything;
-  // all three go together because the file-tree and preview tabs register into
-  // the dock the `-right` plugin owns. A disable that names an id the running
+  // harness's own built-in file-tree and document-preview tabs are redundant.
+  // These rows disable those two bundle entries in place rather than inserting
+  // anything. The dock itself (`ui-sidebar-right`) is deliberately NOT disabled:
+  // it provides the `sidebarRight` service the chat UI requires, so disabling it
+  // strands `@deepseek-ai/dsh-client-ui-chat` as "waiting for service:
+  // sidebarRight" and the client shows "Failed to load plugins". The two tab
+  // plugins provide no service anyone else needs (nothing injects them; only
+  // `ui-sidebar-documentpreview` provides `documentPreviews`, which has no other
+  // consumer), so removing them is safe. A disable naming an id the running
   // harness version does not ship is a non-fatal warning, not a boot failure
   // (verified against 0.1.2), so this is safe to emit for any managed version.
   const sidebarDisable = hideBuiltinRightSidebar
-    ? `- id: ui-sidebar-right
-  disabled: true
-- id: ui-sidebar-documentpreview
+    ? `- id: ui-sidebar-documentpreview
   disabled: true
 - id: ui-sidebar-files
   disabled: true

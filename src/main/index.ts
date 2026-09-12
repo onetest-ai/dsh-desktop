@@ -1605,9 +1605,9 @@ function needsRestart(previous: DesktopConfig | undefined, next: DesktopConfig):
     // — only reaches the harness through a respawn. Compared by value
     // because the section is rebuilt fresh on every save.
     mcpChanged(previous, next) ||
-    // The built-in-sidebar switch adds or removes the overlay's `ui-sidebar-*`
-    // disable rows, fixed at spawn, so a change only reaches the harness
-    // through a respawn.
+    // The built-in-sidebar switch adds or removes the overlay's
+    // `ui-sidebar-files`/`-documentpreview` disable rows, fixed at spawn, so a
+    // change only reaches the harness through a respawn.
     previous.showBuiltinRightSidebar !== next.showBuiltinRightSidebar
   )
 }
