@@ -20,7 +20,10 @@ import { repairPlugins } from './repair'
 import { closeStartup, pushFindings, pushPhase, pushProgress, showStartup } from './startup-window'
 import { loadPresets, shippedPresetsPath, userPresetsPath } from './mcp-presets'
 import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-servers'
-import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
+import { portIsFree, startNotifyListener, type HookKind, type NotifyServer } from './notify'
+import { createPetState, type PetStateMachine } from './pet-state'
+import { listInstalledPets, loadPetSprite } from './pet-catalog'
+import { createPetWindow } from './pet-window'
 import { openConfigFile } from './open-config-file'
 import {
   bundlePatchDeclaration,
@@ -1415,6 +1418,9 @@ function pushTheme(): void {
     views.tasks.webContents,
     views.terminal.webContents,
     ...(settings === undefined ? [] : [settings]),
+    // The floating pet is a page of this app's own too; without this its body
+    // never gets `data-ds-dark-theme` and every token resolves to the light value.
+    ...(petWindow !== undefined && !petWindow.isDestroyed() ? [petWindow.webContents] : []),
   ]) {
     target.send('theme', dark)
   }
@@ -1541,6 +1547,9 @@ let revealPending = false
 let quitting = false
 let tray: TrayController | undefined
 let notifier: NotifyServer | undefined
+/** The floating pet window, and the machine that drives its animation. */
+let petWindow: BrowserWindow | undefined
+let petState: PetStateMachine | undefined
 let appUpdater: AppUpdater | undefined
 let appUpdateTimer: ReturnType<typeof setInterval> | undefined
 let appUpdateNotified = false
@@ -1854,7 +1863,7 @@ export async function applySettings(previous: DesktopConfig | undefined, next: D
     notifier = undefined
     if (!quitting) {
       try {
-        const started = await startNotifyListener(next.notifyPort, onTurnEnd)
+        const started = await startNotifyListener(next.notifyPort, onHook)
         if (quitting) {
           // `will-quit` already closed whatever it knew about; this listener
           // was bound after that, so nothing else would ever close it.
@@ -2621,12 +2630,93 @@ function toggleWindow(): void {
   revealWindow()
 }
 
-/** Raise a turn-complete notification, but only when the user is looking elsewhere. */
-function onTurnEnd(): void {
+/**
+ * The single entry point for every harness hook ping.
+ *
+ * One dispatcher rather than two listeners: the pet needs every kind (a running
+ * pet animates on prompt/tool, waves on turn-end), while the desktop
+ * notification is turn-end only. Feeding the pet first keeps the wave in step
+ * with the ping even when there is no window to notify.
+ */
+function onHook(kind: HookKind): void {
+  petState?.onHook(kind)
+  if (kind !== 'turn-end') return
+  // Preserved verbatim from the former onTurnEnd: raise a turn-complete
+  // notification, but only when the user is looking elsewhere.
   console.log(`[notify] turn-end ping received at ${new Date().toISOString()}`)
   if (window === undefined || window.isDestroyed()) return
   if (window.isFocused()) return
   new Notification({ title: 'DeepSeek Harness', body: 'The agent finished its turn.' }).show()
+}
+
+/** The live desktop config, or undefined when the app is not yet configured. */
+function currentConfig(): DesktopConfig | undefined {
+  try {
+    const stored = loadConfig(CONFIG_PATH)
+    return stored.configured ? stored.config : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Persist a new pet block into the on-disk config, tolerating a write failure. */
+function savePet(pet: DesktopConfig['pet']): void {
+  try {
+    const stored = loadConfig(CONFIG_PATH)
+    if (!stored.configured) return
+    writeConfig(CONFIG_PATH, { ...stored.config, pet })
+  } catch (error) {
+    console.warn(`dsh-desktop: the pet settings could not be stored: ${(error as Error).message}`)
+  }
+}
+
+/**
+ * Reconcile the pet window with `config.pet`: create/update it when a pet is
+ * enabled and installed, tear it down otherwise. Idempotent, so Tasks 9 & 10
+ * can call it after any change to the pet block.
+ */
+function syncPet(): void {
+  const pet = currentConfig()?.pet
+  const on = pet?.enabled === true && pet.slug.length > 0
+  if (!on) {
+    petState?.setEnabled(false)
+    petWindow?.destroy()
+    petWindow = undefined
+    return
+  }
+  const meta = listInstalledPets().find((p) => p.slug === pet.slug)
+  if (meta === undefined) {
+    console.warn(`[pet] configured pet "${pet.slug}" is not installed`)
+    petState?.setEnabled(false)
+    petWindow?.destroy()
+    petWindow = undefined
+    return
+  }
+  if (petWindow === undefined || petWindow.isDestroyed()) {
+    const created = createPetWindow({
+      scale: pet.scale,
+      position: pet.x !== undefined && pet.y !== undefined ? { x: pet.x, y: pet.y } : undefined,
+      deps: { preloadPath: join(__dirname, '..', 'preload', 'pet.js'), paneOrigin: PANE_ORIGIN },
+    })
+    petWindow = created
+    created.webContents.once('did-finish-load', () => {
+      created.webContents.send('pet:sprite', loadPetSprite(meta), pet.scale)
+      petState?.setEnabled(true)
+    })
+    // Persist moves as window state, like pane widths. The current config is
+    // re-read rather than closed over, so a slug/scale change between creation
+    // and the drag is not clobbered by the saved position.
+    created.on('moved', () => {
+      if (created.isDestroyed()) return
+      const live = currentConfig()?.pet
+      if (live === undefined) return
+      const [x, y] = created.getPosition()
+      savePet({ ...live, x, y })
+    })
+  } else {
+    petWindow.webContents.send('pet:sprite', loadPetSprite(meta), pet.scale)
+    petState?.setEnabled(true)
+  }
 }
 
 /**
@@ -2799,6 +2889,42 @@ if (!app.requestSingleInstanceLock()) {
       toggleSideView('tasks')
     })
     ipcMain.on('shell:toggle-web', toggleWeb)
+    // Clicking the pet acknowledges any unread turn and brings the harness up.
+    ipcMain.on('pet:activate', () => {
+      petState?.clearBadge()
+      revealWindow()
+    })
+    // Right-clicking the pet raises its own context menu: switch pets, hide it,
+    // or jump to Settings. Every branch persists through `savePet` and then
+    // re-syncs, so the on-disk config stays the single source of truth.
+    ipcMain.on('pet:menu', () => {
+      const config = currentConfig()
+      const pets = listInstalledPets()
+      const menu = Menu.buildFromTemplate([
+        {
+          label: 'Pick pet',
+          submenu: pets.map((p) => ({
+            label: p.name,
+            type: 'radio',
+            checked: p.slug === config?.pet?.slug,
+            click: () => {
+              savePet({ enabled: true, slug: p.slug, scale: config?.pet?.scale ?? 1, x: config?.pet?.x, y: config?.pet?.y })
+              syncPet()
+            },
+          })),
+        },
+        { type: 'separator' },
+        {
+          label: 'Hide pet',
+          click: () => {
+            savePet({ ...(config?.pet ?? { slug: '', scale: 1 }), enabled: false })
+            syncPet()
+          },
+        },
+        { label: 'Settings…', click: () => showSettings() },
+      ])
+      menu.popup({ window: petWindow })
+    })
     // The board's own read, for both of its views. A full walk of
     // `.dsh/tasks/` every time and never a cache: the read is milliseconds,
     // and a cached board is a second thing that can disagree with disk.
@@ -3349,6 +3475,10 @@ if (!app.requestSingleInstanceLock()) {
     // the moment the panel is about to be read, so it is the moment to check.
     window.on('focus', () => {
       notifyGitChanged()
+      // Looking at the harness is acknowledging the finished turn, so the pet's
+      // unread badge clears the same moment the desktop notification would stop
+      // mattering.
+      petState?.clearBadge()
     })
     window.on('close', (event) => {
       // Closing the window leaves the app running in the tray; only a quit,
@@ -3375,11 +3505,19 @@ if (!app.requestSingleInstanceLock()) {
     try {
       const result = loadConfig(CONFIG_PATH)
       if (result.configured) {
-        notifier = await startNotifyListener(result.config.notifyPort, onTurnEnd)
+        notifier = await startNotifyListener(result.config.notifyPort, onHook)
       }
     } catch (error) {
       console.warn((error as Error).message)
     }
+    // The pet is a pure puppet of this machine: every animation the renderer
+    // shows is a snapshot pushed from here, and the machine asks back only
+    // whether the harness is focused (to decide the turn-end badge).
+    petState = createPetState({
+      emit: (snap) => petWindow?.webContents.send('pet:state', snap),
+      isHarnessFocused: () => window?.isFocused() ?? false,
+    })
+    syncPet()
     if (deepLinkPending) {
       deepLinkPending = false
       revealWindow()
@@ -3427,5 +3565,8 @@ if (!app.requestSingleInstanceLock()) {
     globalShortcut.unregisterAll()
     tray?.destroy()
     void notifier?.close()
+    petState?.dispose()
+    petWindow?.destroy()
+    petWindow = undefined
   })
 }
