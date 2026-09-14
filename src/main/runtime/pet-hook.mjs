@@ -10,6 +10,7 @@
 // keep the two in sync by hand when the bubble vocabulary changes.
 
 import http from 'node:http'
+import { pathToFileURL } from 'node:url'
 
 const MAX_TEXT_LENGTH = 40
 const MAX_STDIN_BYTES = 64 * 1024
@@ -216,7 +217,11 @@ async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run only when invoked directly (not when a test imports the helpers above).
+// Compare against pathToFileURL, which percent-encodes exactly as import.meta.url
+// does — a plain `file://${argv[1]}` template misses on any path with a space
+// (the runtime lives under "Application Support"), which silently skips main().
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
     .catch(() => {})
     .finally(() => process.exit(0))
