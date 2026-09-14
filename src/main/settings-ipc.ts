@@ -7,7 +7,15 @@ import { parseMcpBlock, type McpServerEntry } from './mcp-config'
 import type { ProbeResult, ProbeTarget } from './mcp-probe'
 import type { McpPreset } from './mcp-presets'
 import { MCP_CLIENT_PACKAGE, mcpErrors } from './mcp-servers'
-import { entryKey, parsePluginSource, parseSpec, type InstalledPlugin, type PluginEntry } from './plugin-entries'
+import {
+  entryKey,
+  HOOKS_PACKAGE,
+  parsePluginSource,
+  parseSpec,
+  withHookBridge,
+  type InstalledPlugin,
+  type PluginEntry,
+} from './plugin-entries'
 import {
   formFor,
   parsePluginConfig,
@@ -603,12 +611,22 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
   ): Promise<{ warnings: string[] }> {
     if (deps.isQuitting()) return { warnings: [] }
 
-    const { resolved, warnings: pluginWarnings } = await installPlugins(
-      config.plugins ?? [],
+    // The bridge is installed unconditionally — a Settings save must not
+    // leave it uninstalled just because the user's own list omits it (see
+    // `withHookBridge`) — but that must not leak into what gets persisted:
+    // `resolved` below is written straight back to `config.plugins`, so a
+    // bridge entry absent from the user's own list is stripped back out
+    // before it reaches `resolvedConfig`, below.
+    const { resolved: installedResolved, warnings: pluginWarnings } = await installPlugins(
+      withHookBridge(config.plugins ?? []),
       priorPlugins,
       config.npmPath,
       onProgress ?? (() => {}),
     )
+    const userHadBridge = (config.plugins ?? []).some((entry) => parseSpec(entry.spec).package === HOOKS_PACKAGE)
+    const resolved = userHadBridge
+      ? installedResolved
+      : installedResolved.filter((entry) => parseSpec(entry.spec).package !== HOOKS_PACKAGE)
     // The MCP client rides the same install path as a plugin entry — one
     // package, however many servers it backs — by being handed to
     // `installPlugins` as a one-entry list. It is installed only when a

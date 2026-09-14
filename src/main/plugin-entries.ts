@@ -54,7 +54,32 @@ export interface InstalledPlugin {
 
 /** The plugin list a fresh, never-configured install starts from. */
 export function defaultPlugins(): PluginEntry[] {
-  return [{ spec: HOOKS_PACKAGE }, ...DEFAULT_PLUGIN_SPECS.map((spec) => ({ spec }))]
+  return withHookBridge(DEFAULT_PLUGIN_SPECS.map((spec) => ({ spec })))
+}
+
+/**
+ * Guarantee the Claude Code hook bridge is present in a set of plugin
+ * entries, prepending it when missing.
+ *
+ * The bridge is infrastructure this app's own features depend on — the
+ * desktop pet and turn-completion notifications both fire off the hooks it
+ * relays — not an ordinary plugin the user opted into. `defaultPlugins()`
+ * seeds it for a never-configured install, but a user who later hand-edits
+ * `desktop.json` (or types a custom list in Settings) can supply a
+ * `config.plugins` that omits it entirely; used as-is, that silently kills
+ * every hook-driven feature with no error anywhere. Every place that turns
+ * `config.plugins` into a *working* set (the boot overlay, the install call)
+ * must run it through here first — but the value saved back to the user's
+ * own config must stay exactly what they wrote, so this is never called on
+ * the save path itself.
+ * @param entries - the entries as configured (or about to be installed).
+ * @returns `entries` unchanged if the bridge is already present by any spec
+ *   form (bare, pinned, or otherwise); otherwise `entries` with the bridge
+ *   prepended, matching `defaultPlugins`' own ordering.
+ */
+export function withHookBridge(entries: PluginEntry[]): PluginEntry[] {
+  const hasBridge = entries.some((entry) => parseSpec(entry.spec).package === HOOKS_PACKAGE)
+  return hasBridge ? entries : [{ spec: HOOKS_PACKAGE }, ...entries]
 }
 
 /** A spec's package name and, when present, the pinned version it named. */

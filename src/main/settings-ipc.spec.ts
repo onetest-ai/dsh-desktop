@@ -509,7 +509,10 @@ describe('save', () => {
       const result = await createSettingsHandlers(d).save(form({ plugins: rows(DECK) }))
 
       expect(result.ok).toBe(true)
-      if (result.ok) expect(result.warnings[0]).toMatch(/dsh-deck.*registry unreachable/)
+      // The hook bridge is installed too (see `withHookBridge`), and this
+      // mock fails every install, so its own warning lands alongside the
+      // deck's rather than at a fixed index.
+      if (result.ok) expect(result.warnings.some((warning) => /dsh-deck.*registry unreachable/.test(warning))).toBe(true)
       expect(d.writeConfig).toHaveBeenCalledWith(
         expect.objectContaining({ plugins: [{ spec: DECK, version: '0.2.1' }] }),
       )
@@ -645,11 +648,15 @@ describe('acceptPluginUpdate', () => {
 
   it('shares the install/apply queue with save: a save arriving mid-update still writes immediately', async () => {
     let release: (version: string) => void = () => {}
-    const installPlugin = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
-          release = resolve
-        }),
+    // `withHookBridge` means the concurrent `save` below installs the hook
+    // bridge too, alongside `DECK`'s own update — resolved immediately here
+    // since only `DECK`'s own install is what this test holds pending.
+    const installPlugin = vi.fn((spec: string) =>
+      spec === DECK
+        ? new Promise<string>((resolve) => {
+            release = resolve
+          })
+        : Promise.resolve('0.1.0'),
     )
     const apply = vi.fn(async () => [])
     const d = deps({ installPlugin, apply, readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }) })

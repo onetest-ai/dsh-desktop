@@ -566,6 +566,14 @@ vi.mock('./plugin-entries', () => ({
   HOOKS_PACKAGE: '@deepseek-ai/dsh-hooks-claude-code',
   declaresClientHalf: (...args: unknown[]) => declaresClientHalfMock(...(args as [string])),
   presetsDeclaration: (...args: unknown[]) => presetsDeclarationMock(...(args as [string])),
+  withHookBridge: (entries: { spec: string }[]) => {
+    const at = (spec: string) => spec.indexOf('@', spec.startsWith('@') ? 1 : 0)
+    const pkg = (spec: string) => (at(spec) === -1 ? spec : spec.slice(0, at(spec)))
+    const HOOKS_PACKAGE = '@deepseek-ai/dsh-hooks-claude-code'
+    return entries.some((entry) => pkg(entry.spec) === HOOKS_PACKAGE)
+      ? entries
+      : [{ spec: HOOKS_PACKAGE }, ...entries]
+  },
 }))
 
 /** Controlled by tests exercising `resolveName`'s link-failure path. */
@@ -770,14 +778,16 @@ afterEach(() => {
 })
 
 describe('boot', () => {
-  it('loads the harness URL once the child reports ready, marking no plugin disabled', async () => {
+  it('loads the harness URL once the child reports ready, marking only the (unavailable) hook bridge disabled', async () => {
     const child = await bootReady()
     expect(child.options.timeoutMs).toBeGreaterThan(0)
     expect(fake.harness.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:5000')
-    expect(setTrayStatus).toHaveBeenLastCalledWith('running')
-    // A healthy boot marks nothing disabled — the map a later-opened Settings
-    // window would read is empty, not merely unset.
-    expect(capturedSettingsDeps?.disabledPlugins()).toEqual({})
+    // `withHookBridge` means the bridge is always attempted now, even for a
+    // config with no plugins at all; this suite's default `pluginStatusMock`
+    // reports it not installed, so both the tray note and the disabled map
+    // carry it — see the identical setup a few tests down.
+    expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('hook bridge not loaded'))
+    expect(capturedSettingsDeps?.disabledPlugins()).toEqual({ '@deepseek-ai/dsh-hooks-claude-code': 'not installed yet' })
   })
 
   it('derives a plugin status per configured entry, and passes them straight to writeRuntimeFiles', async () => {
@@ -978,6 +988,14 @@ describe('plugin-caused boot failures', () => {
       config: { ...STORED, plugins: [{ spec: DECK, version: '0.2.1' }, { spec: OTHER, version: '1.0.0' }] },
     }
     pluginStatusMock.mockImplementation((_deps: unknown, _home: string, entry: { spec: string }) => {
+      // `withHookBridge` prepends the bridge unconditionally, so it now
+      // reaches `pluginStatus` alongside these two configured entries; kept
+      // unavailable here (its default, module-level behavior everywhere
+      // else in this file) so it does not fall into the "anything that
+      // isn't deck is other" bucket below and masquerade as a real entry.
+      if (entry.spec === '@deepseek-ai/dsh-hooks-claude-code') {
+        return { kind: 'unavailable', package: entry.spec, reason: 'not installed yet' }
+      }
       const isDeck = entry.spec.startsWith(DECK)
       return {
         kind: 'ready',
@@ -1022,7 +1040,13 @@ describe('plugin-caused boot failures', () => {
     // undefined makes this fail — `writeRuntimeFilesMock`'s last call carries
     // no `OTHER` entry, because the unattributable fallback drops every
     // configured plugin instead of isolating just the one named in the error.
-    expect(capturedSettingsDeps?.disabledPlugins()).toEqual({ [DECK]: expect.stringContaining('base must be a non-empty string') })
+    // The hook bridge is always attempted too (`withHookBridge`), and
+    // `configureTwoReadyPlugins` reports it unavailable like everywhere else
+    // in this suite, so it shows up disabled right alongside the culprit.
+    expect(capturedSettingsDeps?.disabledPlugins()).toEqual({
+      [DECK]: expect.stringContaining('base must be a non-empty string'),
+      '@deepseek-ai/dsh-hooks-claude-code': 'not installed yet',
+    })
 
     // A Settings window opened well after this boot finished still sees the
     // reason: `disabledPlugins()` reads the same module-level state a window
@@ -1045,10 +1069,14 @@ describe('plugin-caused boot failures', () => {
     await settle()
 
     expect(startServer).toHaveBeenCalledTimes(2)
+    // Both configured entries are dropped, but the hook bridge is always
+    // attempted too (`withHookBridge`) and `configureTwoReadyPlugins`
+    // reports it unavailable, so it is the one status that still reaches
+    // `writeRuntimeFiles` on the retry.
     expect(writeRuntimeFilesMock).toHaveBeenLastCalledWith(
       expect.any(String),
       STORED.notifyPort,
-      [],
+      [{ kind: 'unavailable', package: '@deepseek-ai/dsh-hooks-claude-code', reason: 'not installed yet' }],
       undefined,
       expect.any(Function),
       expect.any(Function),
@@ -1059,6 +1087,7 @@ describe('plugin-caused boot failures', () => {
     expect(capturedSettingsDeps?.disabledPlugins()).toEqual({
       [DECK]: expect.stringContaining('unrelated assertion'),
       [OTHER]: expect.stringContaining('unrelated assertion'),
+      '@deepseek-ai/dsh-hooks-claude-code': 'not installed yet',
     })
     expect(showError).not.toHaveBeenCalled()
   })
@@ -1146,7 +1175,10 @@ describe('restart', () => {
     await settle()
 
     expect(showError).not.toHaveBeenCalled()
-    expect(setTrayStatus).toHaveBeenLastCalledWith('running')
+    // `withHookBridge` means the bridge is always attempted now, and this
+    // suite's default `pluginStatusMock` reports it not installed — so the
+    // running status now always carries that note too.
+    expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('hook bridge not loaded'))
 
     // The decisive part: the live child must still be reachable from the quit path.
     await fake.emit('before-quit', fake.quitEvent())
@@ -1617,7 +1649,10 @@ describe('applySettings', () => {
     children[children.length - 1].ready()
     await pending
     await settle()
-    expect(setTrayStatus).toHaveBeenLastCalledWith('running')
+    // See the note in "ignores a superseded child's exit…" above: the
+    // bridge is always attempted now, and the default `pluginStatusMock`
+    // reports it not installed.
+    expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('hook bridge not loaded'))
   })
 
   it('names both accelerators when the previous hotkey cannot be restored either', async () => {

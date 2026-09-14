@@ -17,6 +17,7 @@ import {
   presetsDeclaration,
   resolvePluginEntry,
   validSpecShape,
+  withHookBridge,
 } from './plugin-entries'
 import type { InstallDeps } from './runtime-install'
 
@@ -54,6 +55,27 @@ describe('defaultPlugins', () => {
     // Empty while defaults cannot be installed at startup: a declared but
     // absent plugin reads as a failure the user did not cause.
     expect(defaultPlugins().map((entry) => entry.spec)).toEqual([HOOKS_PACKAGE, ...DEFAULT_PLUGIN_SPECS])
+  })
+})
+
+describe('withHookBridge', () => {
+  it('prepends the bridge to an empty list', () => {
+    expect(withHookBridge([])).toEqual([{ spec: HOOKS_PACKAGE }])
+  })
+
+  it('prepends the bridge to a custom list that omits it', () => {
+    const custom = [{ spec: PKG }]
+    expect(withHookBridge(custom)).toEqual([{ spec: HOOKS_PACKAGE }, { spec: PKG }])
+  })
+
+  it('leaves a list that already carries the bridge unchanged, by any spec form', () => {
+    const pinned = [{ spec: PKG }, { spec: `${HOOKS_PACKAGE}@1.2.3` }]
+    expect(withHookBridge(pinned)).toEqual(pinned)
+  })
+
+  it('never duplicates the bridge', () => {
+    const withBridge = [{ spec: HOOKS_PACKAGE }, { spec: PKG }]
+    expect(withHookBridge(withBridge)).toEqual(withBridge)
   })
 })
 

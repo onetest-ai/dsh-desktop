@@ -35,6 +35,7 @@ import {
   pluginInstallMarker,
   pluginStatus,
   presetsDeclaration,
+  withHookBridge,
   type InstalledPlugin,
   type PluginEntry,
   type PluginStatus,
@@ -2469,9 +2470,16 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
     // MCP tab. A save drops such an entry permanently (see
     // `settings-validate.ts`); this keeps one that is still on disk from
     // failing the boot in the meantime.
-    const configured = (config.plugins ?? []).filter(
-      (entry) =>
-        !excludePackages.has(parseSpec(entry.spec).package) && parseSpec(entry.spec).package !== MCP_CLIENT_PACKAGE,
+    // `withHookBridge` runs after the exclude/MCP-client filter so it cannot
+    // be filtered back out: a custom `config.plugins` that simply omits the
+    // bridge must still boot with hooks working (see `withHookBridge`'s own
+    // doc comment), and `excludePackages`/the MCP-client carve-out are about
+    // *other* packages entirely.
+    const configured = withHookBridge(
+      (config.plugins ?? []).filter(
+        (entry) =>
+          !excludePackages.has(parseSpec(entry.spec).package) && parseSpec(entry.spec).package !== MCP_CLIENT_PACKAGE,
+      ),
     )
     // The MCP client is not a plugin entry the user manages: it is one
     // package backing however many servers the MCP tab configures, so it is
