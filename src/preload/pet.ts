@@ -26,4 +26,9 @@ contextBridge.exposeInMainWorld('pet', {
   onTheme: (cb: (dark: boolean) => void) => ipcRenderer.on('theme', (_e, dark: boolean) => cb(dark)),
   activate: () => ipcRenderer.send('pet:activate'),
   menu: () => ipcRenderer.send('pet:menu'),
+  // Click-to-compose: the quick message typed into the pet is forwarded to
+  // main, which types it into the harness chat composer and sends it. The text
+  // is data only — main routes it through `webContents.insertText`, never into
+  // an injected-JS string.
+  compose: (text: string) => ipcRenderer.send('pet:compose', text),
 })

@@ -3065,6 +3065,53 @@ if (!app.requestSingleInstanceLock()) {
       ])
       menu.popup({ window: petWindow })
     })
+    // Click-to-compose: a quick message typed into the pet is dropped into the
+    // harness chat composer and sent, then the window is revealed so the user
+    // sees the turn start. The composer is a rich `contenteditable`, so its
+    // model only updates through `webContents.insertText` on the focused node —
+    // setting textContent/value would not register. The user's text therefore
+    // travels ONLY as an `insertText` argument and is never interpolated into
+    // the injected JS (which just locates and focuses the field): that keeps the
+    // door shut on script injection through the message body.
+    ipcMain.on('pet:compose', (_event, text: unknown) => {
+      if (typeof text !== 'string') return
+      const message = text.trim().slice(0, 4000)
+      if (message === '') return
+      if (views === undefined || views.window.isDestroyed()) return
+      const contents = views.harness.webContents
+      if (contents.isDestroyed()) return
+      void (async () => {
+        try {
+          contents.focus()
+          // No user text in this snippet — it only finds the composer (a rich
+          // contenteditable whose aria-label starts "Describe what you want to
+          // build…"; its class is a hashed css-module name, so never selected by
+          // class), focuses it, and reports whether it was found.
+          const found = (await contents.executeJavaScript(
+            'const el = document.querySelector(\'[role="textbox"][contenteditable="true"]\') || ' +
+              '[...document.querySelectorAll(\'[contenteditable="true"],textarea\')].find(e => ' +
+              "/describe what you want/i.test(e.getAttribute('aria-label') || e.getAttribute('placeholder') || '')); " +
+              'if (el) { el.focus(); } !!el;',
+          )) as boolean
+          if (found) {
+            // The text goes in through the editor's own input path, then a
+            // Return submits it (Shift+Enter would be a newline; plain Enter
+            // sends — no reliable send button was found in the spike).
+            contents.insertText(message)
+            contents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' })
+            contents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' })
+          } else {
+            console.warn('[pet] compose: harness composer not found; revealing so the message can be pasted manually')
+          }
+        } catch (err) {
+          console.warn('[pet] compose: injection failed', err)
+        } finally {
+          // Reveal regardless: on success to watch the turn, on failure so the
+          // user can paste it themselves.
+          revealWindow()
+        }
+      })()
+    })
     // The board's own read, for both of its views. A full walk of
     // `.dsh/tasks/` every time and never a cache: the read is milliseconds,
     // and a cached board is a second thing that can disagree with disk.

@@ -42,6 +42,50 @@
     image-rendering: pixelated;
     cursor: grab;
   }
+  /* The compose affordance and its input are the only interactive chrome. They
+     are `no-drag` islands inside the otherwise-draggable window: clicking the
+     pencil can't be mistaken for the start of a drag, which sidesteps the
+     click-vs-drag ambiguity entirely (the sprite still drags, double-click
+     still reveals). Everything positioned absolutely over the canvas. */
+  #compose-toggle {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    -webkit-app-region: no-drag;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    line-height: 1;
+    border-radius: 6px;
+    border: 1px solid var(--dsw-alias-border-l2);
+    background: var(--dsw-alias-tooltip-bg);
+    color: var(--dsw-alias-label-primary-foreground);
+    cursor: pointer;
+  }
+  /* The compose input lives in the bubble band above the sprite so it never
+     covers the pet. Hidden until the pencil toggles it; when open it is a
+     no-drag island so text can be typed into a frameless window. */
+  #compose-input {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    right: 6px;
+    -webkit-app-region: no-drag;
+    box-sizing: border-box;
+    padding: 5px 8px;
+    font: 12px system-ui, sans-serif;
+    border-radius: 6px;
+    border: 1px solid var(--dsw-alias-border-l2);
+    background: var(--dsw-alias-tooltip-bg);
+    color: var(--dsw-alias-label-primary-foreground);
+  }
+  #compose-input::placeholder {
+    color: var(--dsw-alias-label-tertiary);
+  }
   /* The missed-turn badge is painted on the canvas, not this element — but a
      focus ring for the (rare) keyboard case uses a token colour. */
   :focus-visible {
@@ -49,4 +93,7 @@
   }
 </style>
 <canvas id="pet"></canvas>
+<button id="compose-toggle" type="button" title="Send a quick message" aria-label="Compose a message">✎</button>
+<input id="compose-input" type="text" hidden autocomplete="off" spellcheck="false"
+       placeholder="Type a message, Enter to send" aria-label="Message to the session">
 <script src="pet-bundle.js"></script>

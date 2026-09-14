@@ -15,6 +15,7 @@ interface PetBridge {
   onTheme(cb: (dark: boolean) => void): void
   activate(): void
   menu(): void
+  compose(text: string): void
 }
 
 declare global {
@@ -175,6 +176,53 @@ canvas.addEventListener('contextmenu', (e) => {
   e.preventDefault()
   window.pet.menu()
 })
+
+// Click-to-compose. The pencil is a `no-drag` island in the otherwise-draggable
+// window (see pet.html), so toggling the input can never be confused with the
+// start of a window drag — the source of the classic click-vs-drag ambiguity.
+// The input opens in the bubble band above the sprite; ESC or blur closes it,
+// Enter sends. Text goes over the bridge and, in main, only ever through
+// `webContents.insertText` — never interpolated into injected JS.
+const composeToggle = document.getElementById('compose-toggle') as HTMLButtonElement
+const composeInput = document.getElementById('compose-input') as HTMLInputElement
+
+function openCompose(): void {
+  composeInput.hidden = false
+  composeInput.focus()
+}
+
+function closeCompose(): void {
+  composeInput.value = ''
+  composeInput.hidden = true
+}
+
+function submitCompose(): void {
+  const text = composeInput.value.trim()
+  if (text !== '') window.pet.compose(text)
+  closeCompose()
+}
+
+// Keep focus on the input while the pencil is pressed: without this the input's
+// own blur (below) fires on the toggle's mousedown and closes it just before the
+// click handler runs, so the pencil could only ever open, never close it.
+composeToggle.addEventListener('mousedown', (e) => e.preventDefault())
+composeToggle.addEventListener('click', () => {
+  if (composeInput.hidden) openCompose()
+  else closeCompose()
+})
+
+composeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    submitCompose()
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    closeCompose()
+  }
+})
+
+// Blur closes it (clicking away or the window losing focus). Empty is discarded.
+composeInput.addEventListener('blur', () => closeCompose())
 
 resize()
 requestAnimationFrame(draw)
