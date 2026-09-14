@@ -56,3 +56,47 @@ export function frameAt(state: PetStateId, elapsedMs: number): { sx: number; sy:
   const col = Math.floor((elapsedMs % def.loopMs) / per) % def.frames
   return { sx: col * FRAME_W, sy: def.row * FRAME_H, sw: FRAME_W, sh: FRAME_H }
 }
+
+/**
+ * Vertical room reserved above the sprite for the speech bubble. The window
+ * is `FRAME_H + BUBBLE_BAND` tall (see `petWindowSize` in
+ * `src/main/pet-window.ts`, kept equal to this by hand — the pane never
+ * imports from main); the sprite still paints in the lower `FRAME_H` band so
+ * it visually sits exactly where it did before the bubble existed.
+ */
+export const BUBBLE_BAND = 96
+
+/** Mirrors `MAX_TEXT_LENGTH` in `src/main/pet-bubble.ts` — main already
+ * truncates bubble text to this before sending; this is a defensive backstop
+ * so a future caller of `bubbleLayout` can't blow past it either. */
+export const BUBBLE_MAX_CHARS = 40
+
+const BUBBLE_PAD_X = 10
+const BUBBLE_PAD_Y = 6
+/** A monospace-ish per-character width estimate. There is no canvas to
+ * measure against here — `bubbleLayout` stays a pure, unit-testable helper —
+ * so this trades exact text metrics for a width bound that's cheap to check. */
+const BUBBLE_CHAR_W = 6.2
+const BUBBLE_LINE_H = 16
+
+export interface BubbleLayoutResult {
+  /** The text to actually paint — truncated to `BUBBLE_MAX_CHARS`, then further if it still overflows `maxWidthPx`. */
+  text: string
+  rectW: number
+  rectH: number
+}
+
+/**
+ * Sizes the speech-bubble rectangle for `text` within `maxWidthPx`. Truncates
+ * with an ellipsis first to `BUBBLE_MAX_CHARS` characters, then again if the
+ * estimated pixel width still doesn't fit `maxWidthPx`.
+ */
+export function bubbleLayout(text: string, maxWidthPx: number): BubbleLayoutResult {
+  const capped = text.length > BUBBLE_MAX_CHARS ? `${text.slice(0, BUBBLE_MAX_CHARS - 1)}…` : text
+  const innerMax = Math.max(BUBBLE_CHAR_W, maxWidthPx - BUBBLE_PAD_X * 2)
+  const maxChars = Math.max(1, Math.floor(innerMax / BUBBLE_CHAR_W))
+  const fitted = capped.length > maxChars ? `${capped.slice(0, Math.max(1, maxChars - 1))}…` : capped
+  const rectW = Math.min(maxWidthPx, fitted.length * BUBBLE_CHAR_W + BUBBLE_PAD_X * 2)
+  const rectH = BUBBLE_LINE_H + BUBBLE_PAD_Y * 2
+  return { text: fitted, rectW, rectH }
+}

@@ -7,13 +7,21 @@ export interface PetWindowDeps {
 }
 
 /**
- * The pet's window is exactly one sprite frame, scaled. The renderer draws the
- * atlas at this size with no chrome of its own, so the window's pixels and the
- * frame's pixels are the same thing — kept as a pure function so the size can be
- * asserted without an Electron runtime.
+ * Vertical room reserved above the sprite for the speech bubble. Mirrors
+ * `BUBBLE_BAND` in `src/renderer/pane/pet-layout.ts` by hand — the renderer
+ * pane never imports from main, so this constant is kept equal on both sides
+ * rather than shared.
+ */
+const BUBBLE_BAND = 96
+
+/**
+ * The pet's window is one sprite frame, scaled, plus a band above it for the
+ * speech bubble. The renderer draws the sprite in the lower `PET_FRAME.h`
+ * region and the bubble in the band above — kept as a pure function so the
+ * size can be asserted without an Electron runtime.
  */
 export function petWindowSize(scale: number): { width: number; height: number } {
-  return { width: Math.round(PET_FRAME.w * scale), height: Math.round(PET_FRAME.h * scale) }
+  return { width: Math.round(PET_FRAME.w * scale), height: Math.round((PET_FRAME.h + BUBBLE_BAND) * scale) }
 }
 
 /**

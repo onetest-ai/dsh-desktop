@@ -1,15 +1,17 @@
-import { DRIVE_TO_STATE, FRAME_H, FRAME_W, frameAt, type PetDriveState } from './pet-layout.ts'
+import { BUBBLE_BAND, DRIVE_TO_STATE, FRAME_H, FRAME_W, bubbleLayout, frameAt, type PetDriveState } from './pet-layout.ts'
 
 /**
  * What main pushes into the pet window, and the two gestures it sends back.
  *
  * Declared here, not imported from the preload: the pane never imports from
  * `src/main` or `src/preload`, and this is the shape that crosses the bridge
- * — mirror `src/preload/pet.ts` by hand if it changes.
+ * — mirror `src/preload/pet.ts` by hand if it changes. `text` is optional:
+ * main starts sending it once the state machine carries bubble copy, but
+ * this side treats an absent field the same as an empty bubble.
  */
 interface PetBridge {
   onSprite(cb: (spriteDataUrl: string, scale: number) => void): void
-  onState(cb: (snap: { state: PetDriveState; badge: boolean }) => void): void
+  onState(cb: (snap: { state: PetDriveState; badge: boolean; text?: string }) => void): void
   onTheme(cb: (dark: boolean) => void): void
   activate(): void
   menu(): void
@@ -21,40 +23,93 @@ declare global {
   }
 }
 
+/** The full canvas height: the bubble band above the sprite, plus the sprite itself. */
+const CANVAS_H = FRAME_H + BUBBLE_BAND
+/** Side margin the bubble rectangle keeps from the canvas edges. */
+const BUBBLE_MARGIN_X = 8
+/** Gap between the bubble's tail tip and the top of the sprite region. */
+const BUBBLE_GAP = 4
+const BUBBLE_TAIL_H = 8
+const BUBBLE_RADIUS = 8
+
 const canvas = document.getElementById('pet') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')
+
+// Computed once: this never changes for the life of the window, and reduced
+// motion means "don't cycle frames", not "don't ever redraw" — state changes
+// (a new drive state, new badge, new bubble text) still repaint.
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 let sheet: HTMLImageElement | undefined
 let scale = 1
 let drive: PetDriveState = 'idle'
 let badge = false
+let bubbleText = ''
 let startedAt = performance.now()
 
-/** Badge colour comes from a design token, never a literal. */
-function badgeColour(): string {
-  return getComputedStyle(document.body).getPropertyValue('--dsw-alias-state-business-primary').trim()
+/** Reads one design token off `body`, trimmed — never a colour literal. */
+function token(name: string): string {
+  return getComputedStyle(document.body).getPropertyValue(name).trim()
 }
 
 function resize(): void {
   canvas.width = FRAME_W
-  canvas.height = FRAME_H
+  canvas.height = CANVAS_H
   canvas.style.width = `${String(FRAME_W * scale)}px`
-  canvas.style.height = `${String(FRAME_H * scale)}px`
+  canvas.style.height = `${String(CANVAS_H * scale)}px`
+}
+
+/** Paints the speech bubble in the band above the sprite, tail pointing down at it. Does nothing when there's no text. */
+function drawBubble(): void {
+  if (ctx === null || bubbleText === '') return
+  const maxWidth = FRAME_W - BUBBLE_MARGIN_X * 2
+  const { text, rectW, rectH } = bubbleLayout(bubbleText, maxWidth)
+  const x = (FRAME_W - rectW) / 2
+  const y = Math.max(0, BUBBLE_BAND - BUBBLE_TAIL_H - rectH - BUBBLE_GAP)
+  const tailX = FRAME_W / 2
+
+  const bg = token('--dsw-alias-tooltip-bg')
+  const fg = token('--dsw-alias-label-primary-foreground')
+  const border = token('--dsw-alias-border-l2')
+
+  ctx.beginPath()
+  ctx.roundRect(x, y, rectW, rectH, BUBBLE_RADIUS)
+  ctx.fillStyle = bg
+  ctx.fill()
+  ctx.lineWidth = 1
+  ctx.strokeStyle = border
+  ctx.stroke()
+
+  ctx.beginPath()
+  ctx.moveTo(tailX - 6, y + rectH - 1)
+  ctx.lineTo(tailX + 6, y + rectH - 1)
+  ctx.lineTo(tailX, y + rectH + BUBBLE_TAIL_H)
+  ctx.closePath()
+  ctx.fillStyle = bg
+  ctx.fill()
+
+  ctx.fillStyle = fg
+  ctx.font = '12px system-ui, sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(text, tailX, y + rectH / 2)
 }
 
 function draw(now: number): void {
   requestAnimationFrame(draw)
   if (ctx === null || sheet === undefined) return
-  const { sx, sy, sw, sh } = frameAt(DRIVE_TO_STATE[drive], now - startedAt)
-  ctx.clearRect(0, 0, FRAME_W, FRAME_H)
-  ctx.drawImage(sheet, sx, sy, sw, sh, 0, 0, FRAME_W, FRAME_H)
+  const elapsed = reducedMotion ? 0 : now - startedAt
+  const { sx, sy, sw, sh } = frameAt(DRIVE_TO_STATE[drive], elapsed)
+  ctx.clearRect(0, 0, FRAME_W, CANVAS_H)
+  ctx.drawImage(sheet, sx, sy, sw, sh, 0, BUBBLE_BAND, FRAME_W, FRAME_H)
   if (badge) {
     const r = 22
     ctx.beginPath()
-    ctx.arc(FRAME_W - r - 8, r + 8, r, 0, Math.PI * 2)
-    ctx.fillStyle = badgeColour()
+    ctx.arc(FRAME_W - r - 8, BUBBLE_BAND + r + 8, r, 0, Math.PI * 2)
+    ctx.fillStyle = token('--dsw-alias-state-business-primary')
     ctx.fill()
   }
+  drawBubble()
 }
 
 window.pet.onSprite((dataUrl, nextScale) => {
@@ -73,6 +128,7 @@ window.pet.onState((snap) => {
     startedAt = performance.now()
   }
   badge = snap.badge
+  bubbleText = snap.text ?? ''
 })
 
 window.pet.onTheme((dark) => {
