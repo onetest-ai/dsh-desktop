@@ -3094,12 +3094,23 @@ if (!app.requestSingleInstanceLock()) {
               'if (el) { el.focus(); } !!el;',
           )) as boolean
           if (found) {
-            // The text goes in through the editor's own input path, then a
-            // Return submits it (Shift+Enter would be a newline; plain Enter
-            // sends — no reliable send button was found in the spike).
+            // The text goes in through the editor's own input path.
             contents.insertText(message)
-            contents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' })
-            contents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' })
+            // Then submit by clicking the composer's Send button. A synthetic
+            // Return does not drive this rich editor's submit; the button does.
+            // Its `aria-label="Send message"` is stable where its css-module
+            // class is hashed, and it only enables once the editor is non-empty
+            // — so wait a tick for the inserted text to register, then click.
+            // Fall back to Return if the button can't be found.
+            await new Promise((resolve) => setTimeout(resolve, 200))
+            const sent = (await contents.executeJavaScript(
+              'const b = document.querySelector(\'button[aria-label="Send message"]\'); ' +
+                'if (b && !b.disabled) { b.click(); true } else { false }',
+            )) as boolean
+            if (!sent) {
+              contents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' })
+              contents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' })
+            }
           } else {
             console.warn('[pet] compose: harness composer not found; revealing so the message can be pasted manually')
           }
