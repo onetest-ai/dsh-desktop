@@ -12,6 +12,24 @@ import { contextBridge, ipcRenderer } from 'electron'
 type PetDriveState = 'idle' | 'running' | 'waiting' | 'wave' | 'jumping' | 'failed' | 'review'
 
 /**
+ * The rich compose round trip, re-declared for the same reason as
+ * `PetDriveState` above: `src/preload/harness.ts` and `src/main/index.ts`
+ * each keep their own identical copy. `ComposeRequest` travels pet → main →
+ * harness page unchanged; `ComposerOptions` travels the harness page → main
+ * → pet.
+ */
+interface ComposeRequest {
+  text: string
+  workspaceId?: string
+  model?: string
+  send: boolean
+}
+interface ComposerOptions {
+  workspaces: { id: string; title: string; current: boolean }[]
+  models?: { id: string; label: string; current: boolean }[]
+}
+
+/**
  * What the pet window may ask of main, and what main pushes into it.
  *
  * Unlike the pane bridge, this window never touches the filesystem or the
@@ -31,4 +49,12 @@ contextBridge.exposeInMainWorld('pet', {
   // is data only — main routes it through `webContents.insertText`, never into
   // an injected-JS string.
   compose: (text: string) => ipcRenderer.send('pet:compose', text),
+  // The rich path: the harness page's reported workspace/model choices come
+  // in through `onComposerOptions`, and a full `ComposeRequest` (project,
+  // model, queue-vs-send) goes out through `composeRich` instead of the
+  // plain-text `compose` above. Both are unused until the composer UI and
+  // the plugin's browser half exist — this only opens the channel.
+  onComposerOptions: (cb: (opts: ComposerOptions) => void) =>
+    ipcRenderer.on('pet:composer-options', (_e, opts: ComposerOptions) => cb(opts)),
+  composeRich: (req: ComposeRequest) => ipcRenderer.send('pet:compose-rich', req),
 })

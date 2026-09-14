@@ -1556,6 +1556,26 @@ let tray: TrayController | undefined
  */
 let trayActions: TrayActions | undefined
 let notifier: NotifyServer | undefined
+/**
+ * Wire types for the pet's rich compose round trip: `pet:compose-rich` carries
+ * a `ComposeRequest` up from the pet, `harness:compose` carries the same
+ * shape down into the harness page, and `harness:composer-options` /
+ * `pet:composer-options` carry a `ComposerOptions` back the other way.
+ * Re-declared here rather than imported — this file compiles under
+ * `tsconfig.json`, which also reaches `src/preload/**`, but the preload and
+ * plugin sides declare their own copies too, since the plugin lives outside
+ * this compile entirely. Keep all copies identical by hand.
+ */
+interface ComposeRequest {
+  text: string
+  workspaceId?: string
+  model?: string
+  send: boolean
+}
+interface ComposerOptions {
+  workspaces: { id: string; title: string; current: boolean }[]
+  models?: { id: string; label: string; current: boolean }[]
+}
 /** The floating pet window, and the machine that drives its animation. */
 let petWindow: BrowserWindow | undefined
 let petState: PetStateMachine | undefined
@@ -3122,6 +3142,40 @@ if (!app.requestSingleInstanceLock()) {
           revealWindow()
         }
       })()
+    })
+    // A compose request the plugin's browser half can fulfil precisely
+    // (workspace switch, model command, queue vs. send) rather than by
+    // guessing at the composer's DOM. `harness:compose` is a fire-and-forget
+    // push to the page; nothing here waits on it, since the plugin half may
+    // simply be absent and the DOM path above is the fallback either way.
+    ipcMain.on('pet:compose-rich', (_event, req: unknown) => {
+      if (typeof req !== 'object' || req === null) return
+      const candidate = req as Partial<ComposeRequest>
+      if (typeof candidate.text !== 'string') return
+      const text = candidate.text.trim().slice(0, 4000)
+      if (text === '') return
+      if (candidate.workspaceId !== undefined && typeof candidate.workspaceId !== 'string') return
+      if (candidate.model !== undefined && typeof candidate.model !== 'string') return
+      if (typeof candidate.send !== 'boolean') return
+      if (views === undefined || views.window.isDestroyed()) return
+      const contents = views.harness.webContents
+      if (contents.isDestroyed()) return
+      const message: ComposeRequest = {
+        text,
+        workspaceId: candidate.workspaceId,
+        model: candidate.model,
+        send: candidate.send,
+      }
+      contents.send('harness:compose', message)
+      revealWindow()
+    })
+    // The reverse leg: the plugin's browser half reports which workspaces
+    // (and, where it can reach them, models) exist so the pet's composer can
+    // offer them instead of a bare text box. Dropped on the floor when the
+    // pet window is not up — nothing is showing it yet.
+    ipcMain.on('harness:composer-options', (_event, opts: unknown) => {
+      if (petWindow === undefined || petWindow.isDestroyed()) return
+      petWindow.webContents.send('pet:composer-options', opts as ComposerOptions)
     })
     // The board's own read, for both of its views. A full walk of
     // `.dsh/tasks/` every time and never a cache: the read is milliseconds,

@@ -9,6 +9,25 @@ import { BUBBLE_BAND, DRIVE_TO_STATE, FRAME_H, FRAME_W, bubbleLayout, frameAt, t
  * main starts sending it once the state machine carries bubble copy, but
  * this side treats an absent field the same as an empty bubble.
  */
+/**
+ * The rich compose round trip. Re-declared here for the same reason as the
+ * rest of `PetBridge` — mirror `ComposeRequest`/`ComposerOptions` in
+ * `src/preload/pet.ts` by hand. Not wired into the UI yet: the mini-composer
+ * that uses `onComposerOptions`/`composeRich` is a later task, but the
+ * channel needs to exist on this interface for that work to type-check
+ * against a real bridge shape rather than an `any`.
+ */
+interface ComposeRequest {
+  text: string
+  workspaceId?: string
+  model?: string
+  send: boolean
+}
+interface ComposerOptions {
+  workspaces: { id: string; title: string; current: boolean }[]
+  models?: { id: string; label: string; current: boolean }[]
+}
+
 interface PetBridge {
   onSprite(cb: (spriteDataUrl: string, scale: number) => void): void
   onState(cb: (snap: { state: PetDriveState; badge: boolean; text?: string }) => void): void
@@ -16,6 +35,8 @@ interface PetBridge {
   activate(): void
   menu(): void
   compose(text: string): void
+  onComposerOptions(cb: (opts: ComposerOptions) => void): void
+  composeRich(req: ComposeRequest): void
 }
 
 declare global {
