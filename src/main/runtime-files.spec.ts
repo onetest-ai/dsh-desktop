@@ -87,6 +87,24 @@ describe('hooksConfig', () => {
     expect(command.trimEnd().endsWith('|| true')).toBe(true)
     expect(command).toContain('-m 2')
   })
+
+  it('wires all four activity hooks to their routes on the given port', () => {
+    const doc = JSON.parse(hooksConfig(7331))
+    const cmd = (event: string) => doc.hooks[event][0].hooks[0].command as string
+    expect(cmd('Stop')).toContain('http://127.0.0.1:7331/turn-end')
+    expect(cmd('UserPromptSubmit')).toContain('http://127.0.0.1:7331/hook/prompt')
+    expect(cmd('PreToolUse')).toContain('http://127.0.0.1:7331/hook/tool')
+    expect(cmd('Notification')).toContain('http://127.0.0.1:7331/hook/notify')
+  })
+
+  it('keeps every hook non-blocking (silenced, bounded, || true)', () => {
+    const doc = JSON.parse(hooksConfig(7331))
+    for (const event of ['Stop', 'UserPromptSubmit', 'PreToolUse', 'Notification']) {
+      const cmd = doc.hooks[event][0].hooks[0].command as string
+      expect(cmd).toMatch(/curl -s -m 2/)
+      expect(cmd).toMatch(/> \/dev\/null 2>&1 \|\| true$/)
+    }
+  })
 })
 
 describe('patchOverlay', () => {

@@ -356,22 +356,29 @@ ${comments}`,
 }
 
 /**
- * The Claude Code hook config that turns a finished agent turn into a
- * notification ping.
+ * The Claude Code hook config that drives both the turn-end notification and
+ * the desktop pet's activity states.
  *
  * The Stop hook must never block the agent: its output feeds `steer()`, so a
  * hook that fails or writes to stdout would drive the agent in a loop. `curl`
  * is bounded, silenced, and `|| true`-guarded so the hook always exits 0 with
- * an empty stdout, whether or not the desktop listener is up.
+ * an empty stdout, whether or not the desktop listener is up — the same
+ * applies to the pet hooks below, which fire far more often (up to once per
+ * tool call), so the same guard matters even more there.
  * @param notifyPort - the port `startNotifyListener` is bound to.
  * @returns the hook config document.
  */
 export function hooksConfig(notifyPort: number): string {
-  const command = `curl -s -m 2 -X POST http://127.0.0.1:${String(notifyPort)}/turn-end > /dev/null 2>&1 || true`
+  const ping = (route: string): string =>
+    `curl -s -m 2 -X POST http://127.0.0.1:${String(notifyPort)}${route} > /dev/null 2>&1 || true`
+  const entry = (route: string): unknown => [{ hooks: [{ type: 'command', command: ping(route), timeout: 5 }] }]
   return `${JSON.stringify(
     {
       hooks: {
-        Stop: [{ hooks: [{ type: 'command', command, timeout: 5 }] }],
+        Stop: entry('/turn-end'),
+        UserPromptSubmit: entry('/hook/prompt'),
+        PreToolUse: entry('/hook/tool'),
+        Notification: entry('/hook/notify'),
       },
     },
     undefined,
