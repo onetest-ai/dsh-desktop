@@ -2716,7 +2716,20 @@ function syncPet(): void {
     })
     petWindow = created
     created.webContents.once('did-finish-load', () => {
-      created.webContents.send('pet:sprite', loadPetSprite(meta), pet.scale)
+      try {
+        created.webContents.send('pet:sprite', loadPetSprite(meta), pet.scale)
+      } catch (err) {
+        console.warn(`[pet] failed to read sprite for "${meta.slug}":`, err)
+        petState?.setEnabled(false)
+        created.destroy()
+        if (petWindow === created) petWindow = undefined
+        return
+      }
+      // Sent here rather than left to the next `pushTheme()` (nativeTheme
+      // change or harness-settings watch): those may not fire again for a
+      // long time, and without this the badge/focus tokens stay on the light
+      // value from first paint until one does.
+      created.webContents.send('theme', currentDark())
       petState?.setEnabled(true)
     })
     // Persist moves as window state, like pane widths. The current config is
@@ -2739,7 +2752,15 @@ function syncPet(): void {
       const size = petWindowSize(pet.scale)
       petWindow.setContentSize(size.width, size.height)
     }
-    petWindow.webContents.send('pet:sprite', loadPetSprite(meta), pet.scale)
+    try {
+      petWindow.webContents.send('pet:sprite', loadPetSprite(meta), pet.scale)
+    } catch (err) {
+      console.warn(`[pet] failed to read sprite for "${meta.slug}":`, err)
+      petState?.setEnabled(false)
+      petWindow.destroy()
+      petWindow = undefined
+      return
+    }
     petState?.setEnabled(true)
   }
 }

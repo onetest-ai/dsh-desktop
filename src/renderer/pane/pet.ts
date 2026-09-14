@@ -75,8 +75,10 @@ window.pet.onState((snap) => {
   badge = snap.badge
 })
 
-window.pet.onTheme(() => {
-  /* Tokens re-resolve automatically via getComputedStyle on next draw. */
+window.pet.onTheme((dark) => {
+  // Matches theme.ts / settings.js / shell.js: `--dsw-alias-*` tokens are
+  // keyed off `body[data-ds-dark-theme]`, not `prefers-color-scheme`.
+  document.body.toggleAttribute('data-ds-dark-theme', dark)
 })
 
 canvas.addEventListener('dblclick', () => window.pet.activate())

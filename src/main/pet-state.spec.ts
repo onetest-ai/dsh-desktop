@@ -63,4 +63,16 @@ describe('pet-state', () => {
     m.onHook('prompt')
     expect(emitted).toEqual([])
   })
+
+  it('settles a mid-wave disable to idle, so re-enabling does not replay the wave', () => {
+    const { m, emitted } = make(true)
+    m.onHook('turn-end')
+    expect(emitted.at(-1)?.state).toBe('wave')
+    m.setEnabled(false)
+    m.setEnabled(true)
+    expect(emitted.at(-1)).toEqual({ state: 'idle', badge: false })
+    // No wave timer survived the disable to fire late and re-wave.
+    vi.advanceTimersByTime(WAVE_MS)
+    expect(emitted.at(-1)).toEqual({ state: 'idle', badge: false })
+  })
 })

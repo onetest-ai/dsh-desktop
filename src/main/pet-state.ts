@@ -90,6 +90,10 @@ export function createPetState(deps: PetStateDeps): PetStateMachine {
         push()
       } else {
         clearWave()
+        // Settle a mid-wave disable back to idle so a later re-enable emits
+        // idle rather than replaying a stale 'wave' with no timer left to
+        // bring it back down.
+        state = 'idle'
       }
     },
     clearBadge(): void {
