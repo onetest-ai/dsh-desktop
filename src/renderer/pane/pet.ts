@@ -51,12 +51,6 @@ const BUBBLE_MARGIN_X = 8
 const BUBBLE_GAP = 4
 const BUBBLE_TAIL_H = 8
 const BUBBLE_RADIUS = 8
-/** Size and placement of the missed-turn badge, top-right of the sprite region (not the bubble band). */
-const BADGE_W = 26
-const BADGE_H = 19
-const BADGE_MARGIN = 6
-const BADGE_RADIUS = 5
-
 const canvas = document.getElementById('pet') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')
 
@@ -120,40 +114,6 @@ function drawBubble(): void {
   ctx.fillText(text, tailX, y + rectH / 2)
 }
 
-/**
- * Paints the "unseen finished turn" indicator: an envelope glyph rather than
- * a plain dot, so it reads as a notification at a glance. Anchored to the
- * top-right of the sprite region (below the bubble band, never inside it).
- */
-function drawBadge(): void {
-  if (ctx === null) return
-  const x = FRAME_W - BADGE_W - BADGE_MARGIN
-  const y = BUBBLE_BAND + BADGE_MARGIN
-
-  const fill = token('--dsw-alias-state-business-primary')
-  const ring = token('--dsw-alias-border-l2')
-  const flap = token('--dsw-alias-label-primary-foreground')
-
-  ctx.beginPath()
-  ctx.roundRect(x, y, BADGE_W, BADGE_H, BADGE_RADIUS)
-  ctx.fillStyle = fill
-  ctx.fill()
-  ctx.lineWidth = 1
-  ctx.strokeStyle = ring
-  ctx.stroke()
-
-  // The envelope's folded flap, drawn as two strokes from the top corners
-  // down to the badge's bottom-centre — the detail that reads as "mail",
-  // not just a coloured shape.
-  ctx.beginPath()
-  ctx.moveTo(x + 2, y + 2)
-  ctx.lineTo(x + BADGE_W / 2, y + BADGE_H / 2 + 1)
-  ctx.lineTo(x + BADGE_W - 2, y + 2)
-  ctx.lineWidth = 1.5
-  ctx.strokeStyle = flap
-  ctx.stroke()
-}
-
 function draw(now: number): void {
   requestAnimationFrame(draw)
   if (ctx === null || sheet === undefined) return
@@ -161,7 +121,6 @@ function draw(now: number): void {
   const { sx, sy, sw, sh } = frameAt(DRIVE_TO_STATE[drive], elapsed)
   ctx.clearRect(0, 0, FRAME_W, CANVAS_H)
   ctx.drawImage(sheet, sx, sy, sw, sh, 0, BUBBLE_BAND, FRAME_W, FRAME_H)
-  if (badge) drawBadge()
   drawBubble()
 }
 
@@ -187,6 +146,7 @@ window.pet.onState((snap) => {
   }
   badge = snap.badge
   bubbleText = snap.text ?? ''
+  notifyBadge.hidden = !badge
 })
 
 window.pet.onTheme((dark) => {
@@ -202,138 +162,119 @@ canvas.addEventListener('contextmenu', (e) => {
 })
 
 // Click-to-compose. The pencil is a `no-drag` island in the otherwise-draggable
-// window (see pet.html), so toggling the input can never be confused with the
+// window (see pet.html), so toggling the pill can never be confused with the
 // start of a window drag — the source of the classic click-vs-drag ambiguity.
-// Which UI opens depends on whether the harness plugin has ever reported
-// `ComposerOptions`: until it has, this is the plain one-line input +
-// `window.pet.compose` (today's DOM insert+send, always available); once
-// options arrive, the pencil opens the rich panel + `composeRich` instead —
-// the plugin may simply not be loaded, and the plain path never goes away.
+// One pill serves both paths now; only the workspace chip differs by data.
+// Which round trip fires on submit depends on whether the harness plugin has
+// ever reported `ComposerOptions`: until it has, this is `window.pet.compose`
+// (today's DOM insert+send, always available); once options arrive with at
+// least one workspace, submit uses `composeRich` instead — the plugin may
+// simply not be loaded, and the plain path never goes away.
 const composeToggle = document.getElementById('compose-toggle') as HTMLButtonElement
-const composeInput = document.getElementById('compose-input') as HTMLInputElement
-const composePanel = document.getElementById('compose-panel') as HTMLDivElement
+const notifyToggle = document.getElementById('notify-toggle') as HTMLButtonElement
+const notifyBadge = document.getElementById('notify-badge') as HTMLSpanElement
+const composePill = document.getElementById('compose-pill') as HTMLDivElement
+const composeChipWrap = document.getElementById('compose-chip-wrap') as HTMLDivElement
+const composeChipLabel = document.getElementById('compose-chip-label') as HTMLSpanElement
 const composeText = document.getElementById('compose-text') as HTMLTextAreaElement
 const composeProject = document.getElementById('compose-project') as HTMLSelectElement
-const composeModel = document.getElementById('compose-model') as HTMLSelectElement
 const composeSend = document.getElementById('compose-send') as HTMLButtonElement
 
 /** Latest options the harness plugin has reported, or `undefined` before the first one arrives. */
 let composerOptions: ComposerOptions | undefined
 
-/** True once real workspace data has arrived — the signal to use the rich panel over the plain input. */
+/** True once real workspace data has arrived — the signal to use `composeRich` and show the chip. */
 function hasRichOptions(): boolean {
   return composerOptions !== undefined && composerOptions.workspaces.length > 0
 }
 
-/** Rebuilds `<select>` from `{id, label}` rows, selecting `selectedId` (or the row marked current). */
-function fillSelect(select: HTMLSelectElement, rows: { id: string; label: string; current: boolean }[]): void {
-  select.replaceChildren(
-    ...rows.map((row) => {
+/** Rebuilds the workspace `<select>` and its visible chip label from the latest options. */
+function populateChip(): void {
+  const opts = composerOptions
+  if (opts === undefined || opts.workspaces.length === 0) return
+  composeProject.replaceChildren(
+    ...opts.workspaces.map((w) => {
       const opt = document.createElement('option')
-      opt.value = row.id
-      opt.textContent = row.label
-      if (row.current) opt.selected = true
+      opt.value = w.id
+      opt.textContent = w.title
+      if (w.current) opt.selected = true
       return opt
     }),
   )
+  const current = opts.workspaces.find((w) => w.id === composeProject.value) ?? opts.workspaces[0]
+  composeChipLabel.textContent = current.title
 }
 
-/** Populates the project/model selects from the latest options and shows only the ones with rows to offer. */
-function populatePanel(): void {
-  const opts = composerOptions
-  if (opts === undefined) return
-  fillSelect(
-    composeProject,
-    opts.workspaces.map((w) => ({ id: w.id, label: w.title, current: w.current })),
-  )
-  composeProject.hidden = opts.workspaces.length === 0
-  const models = opts.models ?? []
-  fillSelect(composeModel, models)
-  composeModel.hidden = models.length === 0
-}
+// The transparent `<select>` sits over the chip so a click opens the native
+// picker; keep the visible label in sync with whatever the user picks.
+composeProject.addEventListener('change', () => {
+  const chosen = composerOptions?.workspaces.find((w) => w.id === composeProject.value)
+  if (chosen !== undefined) composeChipLabel.textContent = chosen.title
+})
 
 function openCompose(): void {
   window.pet.setComposeOpen(true)
-  if (hasRichOptions()) {
-    populatePanel()
-    composePanel.hidden = false
-    composeText.focus()
-  } else {
-    composeInput.hidden = false
-    composeInput.focus()
-  }
+  const rich = hasRichOptions()
+  if (rich) populateChip()
+  composeChipWrap.hidden = !rich
+  composePill.hidden = false
+  composeText.focus()
 }
 
 function closeCompose(): void {
-  composeInput.value = ''
-  composeInput.hidden = true
   composeText.value = ''
-  composePanel.hidden = true
+  composePill.hidden = true
   window.pet.setComposeOpen(false)
 }
 
 function submitCompose(): void {
-  const text = composeInput.value.trim()
-  if (text !== '') window.pet.compose(text)
-  closeCompose()
-}
-
-function submitComposeRich(): void {
   const text = composeText.value.trim()
   if (text !== '') {
-    const req: ComposeRequest = {
-      text,
-      workspaceId: composeProject.hidden || composeProject.value === '' ? undefined : composeProject.value,
-      model: composeModel.hidden || composeModel.value === '' ? undefined : composeModel.value,
-      send: true,
+    if (hasRichOptions()) {
+      const req: ComposeRequest = {
+        text,
+        workspaceId: composeProject.value === '' ? undefined : composeProject.value,
+        send: true,
+      }
+      window.pet.composeRich(req)
+    } else {
+      window.pet.compose(text)
     }
-    window.pet.composeRich(req)
   }
   closeCompose()
 }
 
-// Keep focus on the panel while the pencil is pressed: without this the panel's
+// Keep focus on the pill while the pencil is pressed: without this the pill's
 // own blur-out (below) fires on the toggle's mousedown and closes it just before
 // the click handler runs, so the pencil could only ever open, never close it.
 composeToggle.addEventListener('mousedown', (e) => e.preventDefault())
 composeToggle.addEventListener('click', () => {
-  if (composeInput.hidden && composePanel.hidden) openCompose()
+  if (composePill.hidden) openCompose()
   else closeCompose()
 })
 
-composeInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault()
-    submitCompose()
-  } else if (e.key === 'Escape') {
-    e.preventDefault()
-    closeCompose()
-  }
-})
+// The bell is "see the finished turn": bring the harness forward, which
+// already clears the badge on the main side (see onState's next `badge:false`).
+notifyToggle.addEventListener('click', () => window.pet.activate())
 
-// Blur closes it (clicking away or the window losing focus). Empty is discarded.
-composeInput.addEventListener('blur', () => closeCompose())
-
-// The panel closes on Escape from any of its controls, and Enter-to-send only
-// from the text field (Shift+Enter is a newline; the selects/button get their
-// own native Enter behaviour, which would otherwise double-fire a submit).
-// Blur closes it too, but only once focus has actually left the panel — a tab
-// or click between the textarea and a select is not "clicking away".
-composePanel.addEventListener('keydown', (e) => {
+// Enter sends, Shift+Enter is a newline, Escape closes. Blur closes it too,
+// but only once focus has actually left the pill — moving focus between the
+// textarea and the workspace select is not "clicking away".
+composePill.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     e.preventDefault()
     closeCompose()
   } else if (e.key === 'Enter' && e.target === composeText && !e.shiftKey) {
     e.preventDefault()
-    submitComposeRich()
+    submitCompose()
   }
 })
-composePanel.addEventListener('focusout', (e) => {
+composePill.addEventListener('focusout', (e) => {
   const next = e.relatedTarget
-  if (next instanceof Node && composePanel.contains(next)) return
+  if (next instanceof Node && composePill.contains(next)) return
   closeCompose()
 })
-composeSend.addEventListener('click', () => submitComposeRich())
+composeSend.addEventListener('click', () => submitCompose())
 
 window.pet.onComposerOptions((opts) => {
   composerOptions = opts

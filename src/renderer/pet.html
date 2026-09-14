@@ -4,9 +4,10 @@
   What this page may load, and from where.
 
   The pet window is otherwise-empty chrome: one canvas, driven entirely by
-  main pushing sprite sheets and state over IPC. `default-src 'none'` starts
-  from nothing, and each directive below is here because something this page
-  actually does needs it:
+  main pushing sprite sheets and state over IPC, plus a small cluster of
+  compose/notification controls. `default-src 'none'` starts from nothing,
+  and each directive below is here because something this page actually
+  does needs it:
   - `script-src 'self'` — `pet-bundle.js`, the only script this page has.
   - `style-src 'self' 'unsafe-inline'` — the harness's own token sheets
     (`theme/base.css`, `theme/design-platform.css`), loaded the same way
@@ -20,9 +21,10 @@
 -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
 <title>Pet</title>
-<!-- The harness's own tokens, vendored; see vendor/dsh-theme/README.md. Loaded
-     for one value only — the missed-turn badge colour, read via
-     getComputedStyle in pet.ts rather than as a literal. -->
+<!-- The harness's own tokens, vendored; see vendor/dsh-theme/README.md. Every
+     colour in this page — icon glyphs included — comes from these
+     `--dsw-alias-*` variables, read either in CSS `var()` here or via
+     `getComputedStyle` in pet.ts for the bubble drawn on the canvas. -->
 <link rel="stylesheet" href="theme/base.css">
 <link rel="stylesheet" href="theme/design-platform.css">
 <style>
@@ -42,15 +44,25 @@
     image-rendering: pixelated;
     cursor: grab;
   }
-  /* The compose affordance and its input are the only interactive chrome. They
-     are `no-drag` islands inside the otherwise-draggable window: clicking the
-     pencil can't be mistaken for the start of a drag, which sidesteps the
-     click-vs-drag ambiguity entirely (the sprite still drags, double-click
-     still reveals). Everything positioned absolutely over the canvas. */
-  #compose-toggle {
+  /* The compose/notify controls and the compose pill are the only interactive
+     chrome. They are `no-drag` islands inside the otherwise-draggable window:
+     clicking one can't be mistaken for the start of a drag, which sidesteps
+     the click-vs-drag ambiguity entirely (the sprite still drags, double-click
+     still reveals). Everything positioned absolutely over the canvas, inside
+     the bubble band reserved above the sprite. */
+  #pet-controls {
     position: absolute;
-    top: 2px;
-    right: 2px;
+    top: 4px;
+    right: 4px;
+    display: flex;
+    gap: 4px;
+  }
+  /* One shared shape for the compose pencil and the notification bell: a
+     small circular token-surfaced button. `currentColor` inside the glyph
+     paths is the one place this repo's no-literal-colour rule allows it —
+     the class here is what sets that colour to a real token. */
+  .pet-icon-btn {
+    position: relative;
     -webkit-app-region: no-drag;
     width: 22px;
     height: 22px;
@@ -58,68 +70,110 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 13px;
-    line-height: 1;
-    border-radius: 6px;
+    border-radius: 999px;
     border: 1px solid var(--dsw-alias-border-l2);
     background: var(--dsw-alias-tooltip-bg);
     color: var(--dsw-alias-label-primary-foreground);
     cursor: pointer;
   }
-  /* The compose input lives in the bubble band above the sprite so it never
-     covers the pet. Hidden until the pencil toggles it; when open it is a
-     no-drag island so text can be typed into a frameless window. */
-  #compose-input {
+  .pet-icon-btn svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  /* The missed-turn indicator moved off the canvas and onto the bell: a small
+     dot at its corner, coloured with the app's one accent so it reads as "new"
+     at a glance. Hidden whenever `onState` reports no badge. */
+  #notify-badge {
     position: absolute;
-    top: 6px;
+    top: -2px;
+    right: -2px;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--dsw-alias-state-business-primary);
+    border: 1px solid var(--dsw-alias-tooltip-bg);
+  }
+  #notify-badge[hidden] {
+    display: none;
+  }
+  /* The compose pill: a single rounded surface holding an optional workspace
+     chip, the message field, and an inline circular send button. Replaces
+     the old dark rectangle for both the plain and the rich path alike — the
+     chip is the only thing that differs between them (see pet.ts). Sized by
+     content, not stretched to fill the band, so it stays visually small the
+     way Codex's pet controls are. */
+  #compose-pill {
+    position: absolute;
+    top: 30px;
     left: 6px;
     right: 6px;
-    -webkit-app-region: no-drag;
-    box-sizing: border-box;
-    padding: 5px 8px;
-    font: 12px system-ui, sans-serif;
-    border-radius: 6px;
-    border: 1px solid var(--dsw-alias-border-l2);
-    background: var(--dsw-alias-tooltip-bg);
-    color: var(--dsw-alias-label-primary-foreground);
-  }
-  #compose-input::placeholder {
-    color: var(--dsw-alias-label-tertiary);
-  }
-  /* The rich panel: multiline text + project (+ model, when reported) + Send.
-     Only shown once the harness plugin has reported `ComposerOptions` — until
-     then `#compose-input` above is the whole story. Filled with a surface
-     token so it stays legible over the otherwise-transparent window; sized
-     by main growing the window's content box (`pet:compose-open`), not by
-     this stylesheet. */
-  #compose-panel {
-    position: absolute;
-    top: 6px;
-    left: 6px;
-    right: 6px;
-    bottom: 6px;
     -webkit-app-region: no-drag;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
     gap: 4px;
     padding: 6px;
-    border-radius: 8px;
+    border-radius: 16px;
     border: 1px solid var(--dsw-alias-border-l2);
     background: var(--dsw-alias-tooltip-bg);
     color: var(--dsw-alias-label-primary-foreground);
   }
-  #compose-panel[hidden] {
+  #compose-pill[hidden] {
     display: none;
+  }
+  /* The workspace chip: a small secondary pill showing the current
+     workspace's title. A real `<select>` sits over it, transparent, so
+     clicking the chip opens the native picker — the picker Codex-style
+     designs hide behind a chip rather than showing as a full-width control. */
+  #compose-chip-wrap {
+    position: relative;
+    align-self: flex-start;
+    max-width: 100%;
+  }
+  #compose-chip-wrap[hidden] {
+    display: none;
+  }
+  #compose-chip-label {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: 10px system-ui, sans-serif;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--dsw-alias-border-l2);
+    background: var(--dsw-alias-bg-layer-2);
+    color: var(--dsw-alias-label-secondary);
+  }
+  #compose-project {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+  }
+  #compose-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
   #compose-text {
     flex: 1;
-    min-height: 44px;
-    box-sizing: border-box;
+    min-width: 0;
     resize: none;
+    box-sizing: border-box;
     font: 12px system-ui, sans-serif;
-    padding: 5px 6px;
-    border-radius: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
     border: 1px solid var(--dsw-alias-border-l2);
     background: var(--dsw-alias-bg-layer-2);
     color: var(--dsw-alias-label-primary-foreground);
@@ -127,55 +181,57 @@
   #compose-text::placeholder {
     color: var(--dsw-alias-label-tertiary);
   }
-  #compose-panel .compose-row {
-    display: flex;
-    gap: 4px;
-  }
-  #compose-project,
-  #compose-model {
-    flex: 1;
-    min-width: 0;
-    font: 12px system-ui, sans-serif;
-    padding: 3px 4px;
-    border-radius: 6px;
-    border: 1px solid var(--dsw-alias-border-l2);
-    background: var(--dsw-alias-bg-layer-2);
-    color: var(--dsw-alias-label-primary-foreground);
-  }
-  #compose-project[hidden],
-  #compose-model[hidden] {
-    display: none;
-  }
+  /* The one accent colour in this page: the send button, which carries the
+     app's business-primary token rather than a neutral surface. */
   #compose-send {
-    font: 12px system-ui, sans-serif;
-    font-weight: 600;
-    padding: 4px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--dsw-alias-border-l2);
+    flex: none;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    border: none;
     background: var(--dsw-alias-state-business-primary);
     color: var(--dsw-alias-label-primary-foreground);
     cursor: pointer;
   }
-  /* The missed-turn badge is painted on the canvas, not this element — but a
-     focus ring for the (rare) keyboard case uses a token colour. */
+  #compose-send svg {
+    width: 13px;
+    height: 13px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
   :focus-visible {
     outline: 2px solid var(--dsw-alias-state-business-primary);
   }
 </style>
 <canvas id="pet"></canvas>
-<button id="compose-toggle" type="button" title="Send a quick message" aria-label="Compose a message">✎</button>
-<input id="compose-input" type="text" hidden autocomplete="off" spellcheck="false"
-       placeholder="Type a message, Enter to send" aria-label="Message to the session">
-<div id="compose-panel" hidden>
-  <textarea id="compose-text" rows="3" spellcheck="false"
-            placeholder="Type a message… Enter to send, Shift+Enter for a new line"
-            aria-label="Message to the session"></textarea>
-  <div class="compose-row">
+<div id="pet-controls">
+  <button id="compose-toggle" class="pet-icon-btn" type="button" title="Send a quick message" aria-label="Compose a message">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2.5l3 3L5 14H2v-3z"/></svg>
+  </button>
+  <button id="notify-toggle" class="pet-icon-btn" type="button" title="Show the finished turn" aria-label="Show the finished turn">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6.5a4 4 0 0 1 8 0c0 3 1 4 1 4H3s1-1 1-4z"/><path d="M6.5 12.5a1.5 1.5 0 0 0 3 0"/></svg>
+    <span id="notify-badge" hidden></span>
+  </button>
+</div>
+<div id="compose-pill" hidden>
+  <div id="compose-chip-wrap" hidden>
+    <span id="compose-chip-label"></span>
     <select id="compose-project" aria-label="Project"></select>
-    <select id="compose-model" hidden aria-label="Model"></select>
   </div>
-  <div class="compose-row">
-    <button id="compose-send" type="button">Send</button>
+  <div id="compose-row">
+    <textarea id="compose-text" rows="1" spellcheck="false"
+              placeholder="Type a message… Enter to send"
+              aria-label="Message to the session"></textarea>
+    <button id="compose-send" type="button" aria-label="Send">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4"/></svg>
+    </button>
   </div>
 </div>
 <script src="pet-bundle.js"></script>

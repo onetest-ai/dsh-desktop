@@ -25,16 +25,18 @@ export function petWindowSize(scale: number): { width: number; height: number } 
 }
 
 /**
- * Extra room the rich mini-composer needs beyond the bubble band: a multiline
- * text field, a project `<select>`, and a Send button stacked above the
- * sprite. Fixed in window pixels rather than scaled with the sprite — the
- * controls are ordinary-sized form chrome, not pet art, so they don't get
- * harder to read at `scale: 0.5` the way the bubble text already does.
+ * Extra room the compose pill needs beyond the bubble band: it sits below the
+ * icon-button row, and — when the rich path has a workspace to show — a small
+ * chip above the input row too. Fixed in window pixels rather than scaled
+ * with the sprite — the controls are ordinary-sized form chrome, not pet art,
+ * so they don't get harder to read at `scale: 0.5` the way the bubble text
+ * already does. Much smaller than the old dark rectangle needed: one pill
+ * row plus an optional chip, not a stacked textarea/selects/button panel.
  */
-const COMPOSE_PANEL_EXTRA_H = 132
-/** Floor on content width so the panel's controls have room to sit side by
- * side even when the sprite itself is scaled down small. */
-const COMPOSE_PANEL_MIN_W = 220
+const COMPOSE_PANEL_EXTRA_H = 40
+/** Floor on content width so the pill's text field and circular send button
+ * have room to sit side by side even when the sprite itself is scaled down small. */
+const COMPOSE_PANEL_MIN_W = 200
 
 /**
  * The pet window's content size while the rich compose panel is open: the
