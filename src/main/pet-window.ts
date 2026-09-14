@@ -80,19 +80,27 @@ export function petComposePanelSize(scale: number): { width: number; height: num
 }
 
 /**
- * Resizes the pet window to `size`, keeping the corner it was dragged to
- * fixed — only the bottom-right edge moves. `setContentSize`/`setSize`
- * alone are not safe for that here: this window is frameless and can sit
- * anywhere on screen (including a bottom or right edge, where the default
- * corner already leaves no room to grow outward without this), and nothing
- * in Electron's contract promises they anchor the top-left rather than
- * recentering or growing from the window's center on some platform. Reading
- * the window's own current `x`/`y` and passing them back through
- * `setBounds` pins the corner explicitly instead of trusting that anchor.
+ * Resizes the pet window to `size`, keeping the *sprite's horizontal centre*
+ * fixed and its top fixed — only the width grows/shrinks symmetrically
+ * around the centre, and height only ever grows downward.
+ * `setContentSize`/`setSize` alone are not safe here: this window is
+ * frameless and can sit anywhere on screen, and nothing in Electron's
+ * contract promises they anchor the top-left rather than recentering or
+ * growing from the window's center on some platform.
+ *
+ * The sprite is horizontally centered in the window (`body { align-items:
+ * center }` in pet.html), so pinning the top-left x — the previous
+ * behaviour — visibly shoves the otter sideways whenever the compose panel
+ * (wider than the idle window) opens or closes. Splitting the width delta
+ * evenly onto `x` keeps the sprite's centre — and so the sprite itself —
+ * exactly where it was, in both directions. `y` stays put; only the bottom
+ * edge moves as height changes, since the controls/compose slot is always
+ * *below* the sprite.
  */
 export function resizePetWindow(win: BrowserWindow, size: { width: number; height: number }): void {
-  const { x, y } = win.getBounds()
-  win.setBounds({ x, y, width: size.width, height: size.height })
+  const { x, y, width } = win.getBounds()
+  const newX = x + Math.round((width - size.width) / 2)
+  win.setBounds({ x: newX, y, width: size.width, height: size.height })
 }
 
 /**
