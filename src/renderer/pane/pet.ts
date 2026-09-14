@@ -162,9 +162,9 @@ canvas.addEventListener('contextmenu', (e) => {
 })
 
 // Click-to-compose. The pencil is a `no-drag` island in the otherwise-draggable
-// window (see pet.html), so toggling the pill can never be confused with the
+// window (see pet.html), so toggling the panel can never be confused with the
 // start of a window drag — the source of the classic click-vs-drag ambiguity.
-// One pill serves both paths now; only the workspace chip differs by data.
+// One panel serves both paths now; only the workspace chip differs by data.
 // Which round trip fires on submit depends on whether the harness plugin has
 // ever reported `ComposerOptions`: until it has, this is `window.pet.compose`
 // (today's DOM insert+send, always available); once options arrive with at
@@ -173,7 +173,7 @@ canvas.addEventListener('contextmenu', (e) => {
 const composeToggle = document.getElementById('compose-toggle') as HTMLButtonElement
 const notifyToggle = document.getElementById('notify-toggle') as HTMLButtonElement
 const notifyBadge = document.getElementById('notify-badge') as HTMLSpanElement
-const composePill = document.getElementById('compose-pill') as HTMLDivElement
+const composePanel = document.getElementById('compose-panel') as HTMLDivElement
 const composeChipWrap = document.getElementById('compose-chip-wrap') as HTMLDivElement
 const composeChipLabel = document.getElementById('compose-chip-label') as HTMLSpanElement
 const composeText = document.getElementById('compose-text') as HTMLTextAreaElement
@@ -217,13 +217,13 @@ function openCompose(): void {
   const rich = hasRichOptions()
   if (rich) populateChip()
   composeChipWrap.hidden = !rich
-  composePill.hidden = false
+  composePanel.hidden = false
   composeText.focus()
 }
 
 function closeCompose(): void {
   composeText.value = ''
-  composePill.hidden = true
+  composePanel.hidden = true
   window.pet.setComposeOpen(false)
 }
 
@@ -244,12 +244,12 @@ function submitCompose(): void {
   closeCompose()
 }
 
-// Keep focus on the pill while the pencil is pressed: without this the pill's
+// Keep focus on the panel while the pencil is pressed: without this the panel's
 // own blur-out (below) fires on the toggle's mousedown and closes it just before
 // the click handler runs, so the pencil could only ever open, never close it.
 composeToggle.addEventListener('mousedown', (e) => e.preventDefault())
 composeToggle.addEventListener('click', () => {
-  if (composePill.hidden) openCompose()
+  if (composePanel.hidden) openCompose()
   else closeCompose()
 })
 
@@ -258,9 +258,9 @@ composeToggle.addEventListener('click', () => {
 notifyToggle.addEventListener('click', () => window.pet.activate())
 
 // Enter sends, Shift+Enter is a newline, Escape closes. Blur closes it too,
-// but only once focus has actually left the pill — moving focus between the
+// but only once focus has actually left the panel — moving focus between the
 // textarea and the workspace select is not "clicking away".
-composePill.addEventListener('keydown', (e) => {
+composePanel.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     e.preventDefault()
     closeCompose()
@@ -269,9 +269,9 @@ composePill.addEventListener('keydown', (e) => {
     submitCompose()
   }
 })
-composePill.addEventListener('focusout', (e) => {
+composePanel.addEventListener('focusout', (e) => {
   const next = e.relatedTarget
-  if (next instanceof Node && composePill.contains(next)) return
+  if (next instanceof Node && composePanel.contains(next)) return
   closeCompose()
 })
 composeSend.addEventListener('click', () => submitCompose())

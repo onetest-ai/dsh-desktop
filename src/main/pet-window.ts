@@ -15,39 +15,52 @@ export interface PetWindowDeps {
 const BUBBLE_BAND = 96
 
 /**
- * The pet's window is one sprite frame, scaled, plus a band above it for the
- * speech bubble. The renderer draws the sprite in the lower `PET_FRAME.h`
- * region and the bubble in the band above — kept as a pure function so the
- * size can be asserted without an Electron runtime.
+ * Fixed-CSS-px room below the sprite for the always-visible icon-button row
+ * (compose pencil + notification bell). Not scaled with the sprite — the
+ * pet-window.spec.ts and pet.html `#pet-chrome` padding are kept equal to
+ * this by hand, the same way `BUBBLE_BAND` already mirrors `pet-layout.ts`.
+ */
+const CONTROLS_ROW_H = 44
+/** Floor on content width so the two circular icon buttons have breathing
+ * room even when the sprite itself is scaled down small. */
+const CONTROLS_ROW_MIN_W = 96
+
+/**
+ * The pet's window, idle (compose closed): the bubble band, the sprite, and
+ * the controls row below it — top to bottom, nothing overlapping the
+ * sprite. The renderer draws the bubble+sprite into the canvas at the top
+ * and lays the controls row out as ordinary DOM beneath it, so this is kept
+ * as a pure function so the size can be asserted without an Electron
+ * runtime.
  */
 export function petWindowSize(scale: number): { width: number; height: number } {
-  return { width: Math.round(PET_FRAME.w * scale), height: Math.round((PET_FRAME.h + BUBBLE_BAND) * scale) }
+  const spriteW = Math.round(PET_FRAME.w * scale)
+  const spriteH = Math.round((PET_FRAME.h + BUBBLE_BAND) * scale)
+  return { width: Math.max(spriteW, CONTROLS_ROW_MIN_W), height: spriteH + CONTROLS_ROW_H }
 }
 
 /**
- * Extra room the compose pill needs beyond the bubble band: it sits below the
- * icon-button row, and — when the rich path has a workspace to show — a small
- * chip above the input row too. Fixed in window pixels rather than scaled
- * with the sprite — the controls are ordinary-sized form chrome, not pet art,
- * so they don't get harder to read at `scale: 0.5` the way the bubble text
- * already does. Much smaller than the old dark rectangle needed: one pill
- * row plus an optional chip, not a stacked textarea/selects/button panel.
+ * Extra room the compose panel needs below the controls row: a project
+ * chip, a big roomy input, and its send control — the Codex-style generous
+ * box the design calls for, not the old cramped pill. Fixed in window
+ * pixels rather than scaled with the sprite, for the same reason
+ * `CONTROLS_ROW_H` is.
  */
-const COMPOSE_PANEL_EXTRA_H = 40
-/** Floor on content width so the pill's text field and circular send button
- * have room to sit side by side even when the sprite itself is scaled down small. */
-const COMPOSE_PANEL_MIN_W = 200
+const COMPOSE_PANEL_H = 150
+/** Floor on content width so the roomy input has real width to grow into,
+ * even when the sprite itself is scaled down small. */
+const COMPOSE_PANEL_MIN_W = 300
 
 /**
- * The pet window's content size while the rich compose panel is open: the
- * normal bubble-band-plus-sprite box, stretched to fit the panel above the
- * sprite. `syncPet`/the `pet:compose-open` handler swap between this and
+ * The pet window's content size while the compose panel is open: the idle
+ * box, stretched downward to fit the panel below the controls row.
+ * `syncPet`/the `pet:compose-open` handler swap between this and
  * `petWindowSize` as the panel opens and closes — the sprite's own region
- * never moves, only the band above it grows.
+ * at the top never moves, only the window grows taller beneath it.
  */
 export function petComposePanelSize(scale: number): { width: number; height: number } {
   const base = petWindowSize(scale)
-  return { width: Math.max(base.width, COMPOSE_PANEL_MIN_W), height: base.height + COMPOSE_PANEL_EXTRA_H }
+  return { width: Math.max(base.width, COMPOSE_PANEL_MIN_W), height: base.height + COMPOSE_PANEL_H }
 }
 
 /**
