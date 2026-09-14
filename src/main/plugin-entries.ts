@@ -94,14 +94,17 @@ export function defaultPlugins(): PluginEntry[] {
 export function withHookBridge(entries: PluginEntry[], hookVersion?: string): PluginEntry[] {
   const hasBridge = entries.some((entry) => parseSpec(entry.spec).package === HOOKS_PACKAGE)
   if (hasBridge) return entries
-  // The pin goes in the SPEC STRING, not a separate `version` field: the
-  // install path (see `installPlugins`) installs from `entry.spec` and never
-  // reads `entry.version`, so a bare spec would resolve npm's `latest`
-  // dist-tag — which is stale (0.0.1-rc.x) against a 0.1.x harness and ships a
-  // bridge that iterates a session shape the harness no longer has. `parseSpec`
-  // reads the pinned version straight back off the `pkg@version` spec.
-  const spec = hookVersion !== undefined && hookVersion !== '' ? `${HOOKS_PACKAGE}@${hookVersion}` : HOOKS_PACKAGE
-  return [{ spec }, ...entries]
+  // The pin has to live in BOTH the spec string and the `version` field,
+  // because the two consumers read different places: `installPlugins` (a
+  // Settings save) installs from `entry.spec` — a bare spec would resolve
+  // npm's `latest` dist-tag, which is stale (0.0.1-rc.x) against a 0.1.x
+  // harness and ships a bridge that iterates a session shape the harness no
+  // longer has — while `pluginStatus` (the boot overlay) resolves the
+  // installed directory from `entry.version`. Set neither and the bridge
+  // silently mismatches the harness; set only one and either the install or
+  // the boot resolution falls back to the stale build.
+  if (hookVersion === undefined || hookVersion === '') return [{ spec: HOOKS_PACKAGE }, ...entries]
+  return [{ spec: `${HOOKS_PACKAGE}@${hookVersion}`, version: hookVersion }, ...entries]
 }
 
 /** A spec's package name and, when present, the pinned version it named. */

@@ -64,13 +64,16 @@ describe('withHookBridge', () => {
     expect(withHookBridge([], undefined)).toEqual([{ spec: HOOKS_PACKAGE }])
   })
 
-  it('pins a newly added bridge to the given harness version, in the spec string', () => {
-    expect(withHookBridge([], '0.1.5-rc.1')).toEqual([{ spec: `${HOOKS_PACKAGE}@0.1.5-rc.1` }])
+  it('pins a newly added bridge to the harness version in both the spec and the version field', () => {
+    expect(withHookBridge([], '0.1.5-rc.1')).toEqual([{ spec: `${HOOKS_PACKAGE}@0.1.5-rc.1`, version: '0.1.5-rc.1' }])
   })
 
   it('prepends the bridge to a custom list that omits it', () => {
     const custom = [{ spec: PKG }]
-    expect(withHookBridge(custom, '0.1.5-rc.1')).toEqual([{ spec: `${HOOKS_PACKAGE}@0.1.5-rc.1` }, { spec: PKG }])
+    expect(withHookBridge(custom, '0.1.5-rc.1')).toEqual([
+      { spec: `${HOOKS_PACKAGE}@0.1.5-rc.1`, version: '0.1.5-rc.1' },
+      { spec: PKG },
+    ])
   })
 
   it('leaves a list that already carries the bridge unchanged, by any spec form, version ignored', () => {
