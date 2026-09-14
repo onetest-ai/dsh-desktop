@@ -20,8 +20,8 @@ import { repairPlugins } from './repair'
 import { closeStartup, pushFindings, pushPhase, pushProgress, showStartup } from './startup-window'
 import { loadPresets, shippedPresetsPath, userPresetsPath } from './mcp-presets'
 import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-servers'
-import { portIsFree, startNotifyListener, type HookEvent, type NotifyServer } from './notify'
-import { createPetState, type PetStateMachine } from './pet-state'
+import { portIsFree, startNotifyListener, type HookEvent, type HookKind, type NotifyServer } from './notify'
+import { createPetState, type PetStateMachine, type PetDriveState } from './pet-state'
 import { listInstalledPets, loadPetSprite } from './pet-catalog'
 import { createPetWindow, petWindowSize } from './pet-window'
 import { openConfigFile } from './open-config-file'
@@ -2680,26 +2680,56 @@ function toggleWindow(): void {
 }
 
 /**
+ * Map a legacy bare-ping `HookKind` to the same `{state, text}` the templater
+ * would emit for it. Since A3 every harness hook (Stop included) POSTs a
+ * templated body to `/pet/event`, so these routes are no longer the live path —
+ * but notify still answers them, so keep them driving the pet identically
+ * rather than let an old caller regress the animation.
+ */
+function legacyDrive(kind: HookKind): { state: PetDriveState; text?: string } {
+  switch (kind) {
+    case 'turn-end':
+      return { state: 'wave', text: 'Done.' }
+    case 'prompt':
+    case 'tool':
+      return { state: 'running' }
+    case 'notify':
+      return { state: 'waiting' }
+  }
+}
+
+/**
  * The single entry point for every harness hook ping.
  *
- * One dispatcher rather than two listeners: the pet needs every kind (a running
- * pet animates on prompt/tool, waves on turn-end), while the desktop
- * notification is turn-end only. Feeding the pet first keeps the wave in step
- * with the ping even when there is no window to notify.
+ * The primary path is `/pet/event`: the harness hook script templates the tool
+ * metadata into `{state, text}` (see `pet-bubble.ts`) and POSTs it, which
+ * `notify.ts` dispatches as `kind:'event'`. Everything — including the Stop
+ * hook, which templates to `{state:'wave', text:'Done.'}` — flows through here,
+ * so main mostly forwards the already-decided state to the pet. Legacy bare
+ * kinds still map through `onEvent` so nothing regresses.
  *
- * `/pet/event`'s `state`/`text` are not wired to the pet yet — `notify.ts`
- * now parses and forwards them, but consuming them here (driving the bubble
- * and animation off the harness's own templated text) is a later task
- * (A7); until then an `'event'` ping is simply not one of the kinds the pet
- * or the turn-end notification react to.
+ * The turn-complete notification (and the missed-turn badge, handled inside
+ * `onEvent`) now key off the *wave* event, not a `/turn-end` route — that route
+ * no longer fires now that Stop POSTs `/pet/event`. It must fire independently
+ * of whether the pet is enabled or shown, because the hook fires for every
+ * turn whether or not the pet window exists.
  */
 function onHook(event: HookEvent): void {
-  const kind = event.kind
-  if (kind !== 'event') petState?.onHook(kind)
-  if (kind !== 'turn-end') return
+  const drive =
+    event.kind === 'event'
+      ? // A garbage/oversized body yields `{kind:'event'}` with no state; don't
+        // drive the pet (or notify) off a state we never actually received.
+        event.state !== undefined
+        ? { state: event.state as PetDriveState, text: event.text }
+        : undefined
+      : legacyDrive(event.kind)
+  if (drive !== undefined) petState?.onEvent(drive)
+
+  // The wave event is the Stop-hook proxy for "the agent finished its turn".
+  if (drive?.state !== 'wave') return
   // Preserved verbatim from the former onTurnEnd: raise a turn-complete
   // notification, but only when the user is looking elsewhere.
-  console.log(`[notify] turn-end ping received at ${new Date().toISOString()}`)
+  console.log(`[notify] turn-end (wave) ping received at ${new Date().toISOString()}`)
   if (window === undefined || window.isDestroyed()) return
   if (window.isFocused()) return
   new Notification({ title: 'DeepSeek Harness', body: 'The agent finished its turn.' }).show()

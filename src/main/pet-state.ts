@@ -105,12 +105,21 @@ export function createPetState(deps: PetStateDeps): PetStateMachine {
     },
     onEvent(e): void {
       clearWave()
+      // A wave carries the v1 turn-end semantics even when it arrives templated
+      // over onEvent (the Stop hook now POSTs {state:'wave'} rather than hitting
+      // /turn-end): raise the missed-turn badge when the harness is unfocused,
+      // and auto-revert to idle after WAVE_MS. Set the badge before `set` so the
+      // emitted snapshot already carries it.
+      if (e.state === 'wave' && !deps.isHarnessFocused()) badge = true
       set(e.state, e.text)
-      if (e.duration !== undefined && e.duration > 0) {
+      // A wave reverts on the fixed WAVE_MS; any other state reverts only if the
+      // caller asked for a duration (the generalized auto-revert from A5).
+      const revertMs = e.state === 'wave' ? WAVE_MS : e.duration !== undefined && e.duration > 0 ? e.duration : undefined
+      if (revertMs !== undefined) {
         waveTimer = schedule(() => {
           waveTimer = undefined
           set('idle')
-        }, e.duration)
+        }, revertMs)
       }
     },
     setEnabled(on: boolean): void {

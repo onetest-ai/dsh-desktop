@@ -117,4 +117,21 @@ describe('pet-state', () => {
     vi.advanceTimersByTime(500)
     expect(emitted.at(-1)).toEqual({ state: 'waiting', badge: false, text: 'Blocked' })
   })
+
+  it('a wave via onEvent auto-reverts to idle after WAVE_MS', () => {
+    const { m, emitted } = make(true)
+    m.onEvent({ state: 'wave', text: 'Done.' })
+    expect(emitted.at(-1)).toEqual({ state: 'wave', badge: false, text: 'Done.' })
+    vi.advanceTimersByTime(WAVE_MS)
+    expect(emitted.at(-1)).toEqual({ state: 'idle', badge: false, text: undefined })
+  })
+
+  it('a wave via onEvent badges a missed turn when the harness is unfocused', () => {
+    const { m, emitted } = make(false)
+    m.onEvent({ state: 'wave', text: 'Done.' })
+    expect(emitted.at(-1)).toEqual({ state: 'wave', badge: true, text: 'Done.' })
+    vi.advanceTimersByTime(WAVE_MS)
+    // The wave settles to idle but the badge persists until the pet is opened.
+    expect(emitted.at(-1)).toEqual({ state: 'idle', badge: true, text: undefined })
+  })
 })

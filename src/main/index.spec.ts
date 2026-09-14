@@ -36,6 +36,7 @@ const fake = vi.hoisted(() => {
 
   const handlers = new Map<string, Handler[]>()
   const windowHandlers = new Map<string, Handler[]>()
+  const notified: string[] = []
   let readyResolve: () => void = () => {}
   let whenReady: Promise<void> = new Promise<void>((resolve) => {
     readyResolve = resolve
@@ -222,6 +223,9 @@ const fake = vi.hoisted(() => {
     quitEvent,
     resetReady,
     ready: () => readyResolve(),
+    // Bodies of every desktop Notification shown, so the turn-complete path
+    // (onHook's wave branch) can be asserted.
+    notified,
   }
 })
 
@@ -234,7 +238,10 @@ vi.mock('electron', () => ({
   ipcMain: fake.ipcMain,
   nativeTheme: fake.nativeTheme,
   Notification: class {
-    show(): void {}
+    constructor(private readonly opts: { title: string; body: string }) {}
+    show(): void {
+      fake.notified.push(this.opts.body)
+    }
   },
 }))
 
@@ -1283,6 +1290,49 @@ describe('deep links', () => {
     await bootReady()
     await fake.emit('open-url', fake.quitEvent(), 'dsh://open')
     expect(fake.window.focus).toHaveBeenCalled()
+  })
+})
+
+describe('hook events', () => {
+  /** The onHook callback main handed the notify listener at boot. */
+  function captureOnHook(): (event: { kind: string; state?: string; text?: string }) => void {
+    const call = startNotifyListenerMock.mock.calls.at(-1)
+    if (call === undefined) throw new Error('startNotifyListener was never called')
+    return call[1] as (event: { kind: string; state?: string; text?: string }) => void
+  }
+
+  it('raises the turn-complete notification on a wave while the harness is unfocused', async () => {
+    await bootReady()
+    fake.window.isFocused.mockReturnValue(false)
+    fake.notified.length = 0
+    // Independent of the pet: STORED enables no pet, yet the notification fires,
+    // because the Stop hook (templated to a wave) POSTs for every turn.
+    captureOnHook()({ kind: 'event', state: 'wave', text: 'Done.' })
+    expect(fake.notified).toEqual(['The agent finished its turn.'])
+  })
+
+  it('stays quiet on a wave while the harness is focused', async () => {
+    await bootReady()
+    fake.window.isFocused.mockReturnValue(true)
+    fake.notified.length = 0
+    captureOnHook()({ kind: 'event', state: 'wave', text: 'Done.' })
+    expect(fake.notified).toEqual([])
+  })
+
+  it('does not notify for a non-wave event such as a running tool', async () => {
+    await bootReady()
+    fake.window.isFocused.mockReturnValue(false)
+    fake.notified.length = 0
+    captureOnHook()({ kind: 'event', state: 'running', text: 'Reading x' })
+    expect(fake.notified).toEqual([])
+  })
+
+  it('maps the legacy turn-end route to the same wave notification', async () => {
+    await bootReady()
+    fake.window.isFocused.mockReturnValue(false)
+    fake.notified.length = 0
+    captureOnHook()({ kind: 'turn-end' })
+    expect(fake.notified).toEqual(['The agent finished its turn.'])
   })
 })
 
