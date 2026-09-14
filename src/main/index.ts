@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, shell, utilityProcess } from 'electron'
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { autoUpdater } from 'electron-updater'
 import { createAppUpdater, type AppUpdater } from './app-update'
@@ -2390,6 +2390,31 @@ type BootAttempt =
     }
 
 /**
+ * Best-effort absolute path to `node`, to invoke the pet hook script with —
+ * see `runtime-files.ts`'s `hooksConfig`.
+ *
+ * A configured `npmPath`/`pnpmPath` almost always sits in the same directory
+ * as `node` (both are installed by the same nvm/Volta/Homebrew/system
+ * layout), so the sibling `node` next to whichever one is configured is
+ * tried first. With neither configured, or the sibling not on disk, this
+ * falls back to the bare string `'node'`: the harness child's own PATH
+ * already includes the node directory (via `composePath`'s `extraPath`), so
+ * an unqualified `node` resolves there exactly the way the harness's other
+ * hook commands rely on their own PATH today.
+ * @param npmPath - the configured `npm` override, if any.
+ * @param pnpmPath - the configured `pnpm` override, if any.
+ * @returns an absolute path to `node`, or the bare string `'node'`.
+ */
+function resolveNodePath(npmPath: string | undefined, pnpmPath: string | undefined): string {
+  for (const configured of [npmPath, pnpmPath]) {
+    if (configured === undefined) continue
+    const candidate = join(dirname(configured), 'node')
+    if (existsSync(candidate)) return candidate
+  }
+  return 'node'
+}
+
+/**
  * Write the runtime files and spawn the harness once, with every configured
  * plugin entry resolved except those in `excludePackages` — the shape
  * `bootNow` uses for the primary boot (empty set) and for every isolation or
@@ -2487,7 +2512,15 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
       const declaredPath = bundlePatchDeclaration(status.packageDir)
       return declaredPath !== undefined ? loadDeclaredPatchRows(status.packageDir, declaredPath) : undefined
     }
-    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses, undefined, resolveName, resolveDeclaredPatch)
+    const files = writeRuntimeFiles(
+      runtimeDirectory(),
+      config.notifyPort,
+      statuses,
+      undefined,
+      resolveName,
+      resolveDeclaredPatch,
+      resolveNodePath(config.npmPath, config.pnpmPath),
+    )
     reconcilePluginLinks(DSH_HOME, PROFILE, linked)
     reconcilePluginPresets(DSH_HOME, presetIds)
     patchPath = files.patchPath

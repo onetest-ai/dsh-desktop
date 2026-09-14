@@ -800,6 +800,8 @@ describe('boot', () => {
       undefined,
       expect.any(Function),
       expect.any(Function),
+    
+      'node',
     )
   })
 
@@ -1003,6 +1005,7 @@ describe('plugin-caused boot failures', () => {
       undefined,
       expect.any(Function),
       expect.any(Function),
+      'node',
     )
     expect(fake.harness.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining(`${DECK} disabled`))
@@ -1042,6 +1045,7 @@ describe('plugin-caused boot failures', () => {
       undefined,
       expect.any(Function),
       expect.any(Function),
+      'node',
     )
     expect(fake.harness.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:6000')
     expect(setTrayStatus).toHaveBeenLastCalledWith('running', expect.stringContaining('disabled'))

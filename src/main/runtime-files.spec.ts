@@ -73,37 +73,49 @@ const alwaysLoadable: LoadabilityProbe = () => undefined
 const alwaysUnloadable: LoadabilityProbe = () => 'package not found'
 
 describe('hooksConfig', () => {
-  it('points the Stop hook at the configured notification port', () => {
-    const parsed = JSON.parse(hooksConfig(51999))
+  it('points the Stop hook command at the node binary, the hook script, the port and the event', () => {
+    const parsed = JSON.parse(hooksConfig(51999, '/usr/local/bin/node', '/runtime/pet-hook.mjs'))
     const command = parsed.hooks.Stop[0].hooks[0].command
-    expect(command).toContain('http://127.0.0.1:51999/turn-end')
+    expect(command).toContain('"/usr/local/bin/node"')
+    expect(command).toContain('"/runtime/pet-hook.mjs"')
+    expect(command).toContain('51999')
+    expect(command).toContain('stop')
   })
 
   it('keeps the Stop hook non-blocking: silenced, bounded, and always exit 0', () => {
-    const command = JSON.parse(hooksConfig(1234)).hooks.Stop[0].hooks[0].command
+    const command = JSON.parse(hooksConfig(1234, 'node', '/runtime/pet-hook.mjs')).hooks.Stop[0].hooks[0].command
     // A Stop hook's stdout is fed back to the agent as steering, and a failure
     // would surface as a hook error, so both are suppressed unconditionally.
     expect(command).toContain('> /dev/null 2>&1')
     expect(command.trimEnd().endsWith('|| true')).toBe(true)
-    expect(command).toContain('-m 2')
+    expect(JSON.parse(hooksConfig(1234, 'node', '/runtime/pet-hook.mjs')).hooks.Stop[0].hooks[0].timeout).toBeDefined()
   })
 
-  it('wires all four activity hooks to their routes on the given port', () => {
-    const doc = JSON.parse(hooksConfig(7331))
+  it('wires all five activity hooks to their event names, on the given port and script', () => {
+    const doc = JSON.parse(hooksConfig(7331, 'node', '/runtime/pet-hook.mjs'))
     const cmd = (event: string) => doc.hooks[event][0].hooks[0].command as string
-    expect(cmd('Stop')).toContain('http://127.0.0.1:7331/turn-end')
-    expect(cmd('UserPromptSubmit')).toContain('http://127.0.0.1:7331/hook/prompt')
-    expect(cmd('PreToolUse')).toContain('http://127.0.0.1:7331/hook/tool')
-    expect(cmd('Notification')).toContain('http://127.0.0.1:7331/hook/notify')
+    expect(cmd('UserPromptSubmit')).toContain(' 7331 prompt ')
+    expect(cmd('PreToolUse')).toContain(' 7331 tool ')
+    expect(cmd('PostToolUse')).toContain(' 7331 tool-done ')
+    expect(cmd('Notification')).toContain(' 7331 notify ')
+    expect(cmd('Stop')).toContain(' 7331 stop ')
   })
 
   it('keeps every hook non-blocking (silenced, bounded, || true)', () => {
-    const doc = JSON.parse(hooksConfig(7331))
-    for (const event of ['Stop', 'UserPromptSubmit', 'PreToolUse', 'Notification']) {
+    const doc = JSON.parse(hooksConfig(7331, 'node', '/runtime/pet-hook.mjs'))
+    for (const event of ['Stop', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Notification']) {
       const cmd = doc.hooks[event][0].hooks[0].command as string
-      expect(cmd).toMatch(/curl -s -m 2/)
+      expect(cmd).toMatch(/^"node" "\/runtime\/pet-hook\.mjs"/)
       expect(cmd).toMatch(/> \/dev\/null 2>&1 \|\| true$/)
     }
+  })
+
+  it('double-quotes nodePath and hookScriptPath so a space in either (e.g. Application Support) is safe', () => {
+    const command = JSON.parse(
+      hooksConfig(7331, '/Users/me/Library/Application Support/node', '/Users/me/Library/Application Support/pet-hook.mjs'),
+    ).hooks.Stop[0].hooks[0].command as string
+    expect(command).toContain('"/Users/me/Library/Application Support/node"')
+    expect(command).toContain('"/Users/me/Library/Application Support/pet-hook.mjs"')
   })
 })
 
@@ -403,7 +415,33 @@ describe('writeRuntimeFiles', () => {
     const overlay = readFileSync(files.patchPath, 'utf8')
     expect(overlay).toContain("name: '/irrelevant/lib/index.js'")
     expect(overlay).toContain('port: 0')
-    expect(readFileSync(files.hooksPath, 'utf8')).toContain('127.0.0.1:44001')
+    expect(readFileSync(files.hooksPath, 'utf8')).toContain('44001')
+  })
+
+  it('writes the bundled pet hook script into the runtime directory, verbatim', () => {
+    const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
+    const files = writeRuntimeFiles(directory, 44001, [ready()], alwaysLoadable)
+
+    expect(files.hookScriptPath).toBe(join(directory, 'pet-hook.mjs'))
+    const written = readFileSync(files.hookScriptPath, 'utf8')
+    const bundled = readFileSync(join(__dirname, 'runtime', 'pet-hook.mjs'), 'utf8')
+    expect(written).toBe(bundled)
+  })
+
+  it('threads nodePath and hookScriptPath into the written hooks.json', () => {
+    const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
+    const files = writeRuntimeFiles(
+      directory,
+      44001,
+      [ready()],
+      alwaysLoadable,
+      (status) => status.entryPath,
+      () => undefined,
+      '/opt/homebrew/bin/node',
+    )
+    const hooks = readFileSync(files.hooksPath, 'utf8')
+    expect(hooks).toContain('/opt/homebrew/bin/node')
+    expect(hooks).toContain(files.hookScriptPath)
   })
 
   it("carries a ready entry's own stored config through to the overlay", () => {
@@ -467,7 +505,7 @@ describe('writeRuntimeFiles', () => {
     const directory = join(mkdtempSync(join(tmpdir(), 'dsh-desktop-')), 'runtime')
     writeRuntimeFiles(directory, 44001, [ready()], alwaysLoadable)
     const files = writeRuntimeFiles(directory, 44002, [ready()], alwaysLoadable)
-    expect(readFileSync(files.hooksPath, 'utf8')).toContain('127.0.0.1:44002')
+    expect(readFileSync(files.hooksPath, 'utf8')).toContain('44002')
   })
 
   it('reports every mounted row, package paired with its overlay id and name, for `attributeBootFailure` to consult', () => {

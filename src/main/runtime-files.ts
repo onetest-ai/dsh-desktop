@@ -30,6 +30,8 @@ export interface RuntimeFiles {
   patchPath: string
   /** Referenced from the overlay as the Claude Code hook bridge's `configPath`. */
   hooksPath: string
+  /** The pet hook script every hooks.json command invokes; written alongside it. */
+  hookScriptPath: string
   /** Every configured plugin left out of the overlay, and why. Empty when all mounted. */
   omitted: { package: string; reason: string }[]
   /** Every row actually inserted into the overlay, for `attributeBootFailure` to consult. */
@@ -39,16 +41,21 @@ export interface RuntimeFiles {
 /** File names inside the runtime directory. */
 const PATCH_FILE = 'desktop.patch.yml'
 const HOOKS_FILE = 'hooks.json'
+const HOOK_SCRIPT_FILE = 'pet-hook.mjs'
 
 /**
  * The absolute paths the generated runtime files will occupy in `directory`,
  * without writing anything — needed before the files exist, e.g. to build
  * the hook bridge's `configPath` ahead of resolving its plugin status.
  * @param directory - the runtime directory a boot writes into.
- * @returns the patch and hooks file paths.
+ * @returns the patch, hooks, and pet hook script file paths.
  */
-export function runtimeFilePaths(directory: string): { patchPath: string; hooksPath: string } {
-  return { patchPath: join(directory, PATCH_FILE), hooksPath: join(directory, HOOKS_FILE) }
+export function runtimeFilePaths(directory: string): { patchPath: string; hooksPath: string; hookScriptPath: string } {
+  return {
+    patchPath: join(directory, PATCH_FILE),
+    hooksPath: join(directory, HOOKS_FILE),
+    hookScriptPath: join(directory, HOOK_SCRIPT_FILE),
+  }
 }
 
 /**
@@ -356,29 +363,44 @@ ${comments}`,
 }
 
 /**
- * The Claude Code hook config that drives both the turn-end notification and
- * the desktop pet's activity states.
+ * The Claude Code hook config that drives the desktop pet's activity states.
+ *
+ * Every event invokes the standalone hook script (`runtime/pet-hook.mjs`,
+ * written alongside this file by `writeRuntimeFiles`) under the harness's own
+ * `node`, handing it the notify port and the event name as argv; the script
+ * itself reads stdin, builds the `{state, text}` body, and POSTs it to our
+ * notify listener — see that file's own header for why it is dependency-free
+ * and fails silently end to end.
  *
  * The Stop hook must never block the agent: its output feeds `steer()`, so a
- * hook that fails or writes to stdout would drive the agent in a loop. `curl`
- * is bounded, silenced, and `|| true`-guarded so the hook always exits 0 with
- * an empty stdout, whether or not the desktop listener is up — the same
- * applies to the pet hooks below, which fire far more often (up to once per
- * tool call), so the same guard matters even more there.
+ * hook that fails or writes to stdout would drive the agent in a loop. The
+ * invocation is bounded (`timeout`), silenced, and `|| true`-guarded so the
+ * hook always exits 0 with an empty stdout, whether or not the desktop
+ * listener is up, the script itself throws, or `node` cannot be found at
+ * `nodePath` — the same applies to the other pet hooks, which fire far more
+ * often (up to once per tool call), so the same guard matters even more
+ * there. `nodePath` and `hookScriptPath` are double-quoted: both are
+ * absolute, machine-specific paths and the Application Support directory
+ * they live under routinely contains a space.
  * @param notifyPort - the port `startNotifyListener` is bound to.
+ * @param nodePath - absolute path to the `node` binary to run the script
+ *   with (or the bare string `'node'`, relying on the harness's own PATH).
+ * @param hookScriptPath - absolute path `writeRuntimeFiles` wrote the pet
+ *   hook script to.
  * @returns the hook config document.
  */
-export function hooksConfig(notifyPort: number): string {
-  const ping = (route: string): string =>
-    `curl -s -m 2 -X POST http://127.0.0.1:${String(notifyPort)}${route} > /dev/null 2>&1 || true`
-  const entry = (route: string): unknown => [{ hooks: [{ type: 'command', command: ping(route), timeout: 5 }] }]
+export function hooksConfig(notifyPort: number, nodePath: string, hookScriptPath: string): string {
+  const run = (event: string): string =>
+    `"${nodePath}" "${hookScriptPath}" ${String(notifyPort)} ${event} > /dev/null 2>&1 || true`
+  const entry = (event: string): unknown => [{ hooks: [{ type: 'command', command: run(event), timeout: 5 }] }]
   return `${JSON.stringify(
     {
       hooks: {
-        Stop: entry('/turn-end'),
-        UserPromptSubmit: entry('/hook/prompt'),
-        PreToolUse: entry('/hook/tool'),
-        Notification: entry('/hook/notify'),
+        UserPromptSubmit: entry('prompt'),
+        PreToolUse: entry('tool'),
+        PostToolUse: entry('tool-done'),
+        Notification: entry('notify'),
+        Stop: entry('stop'),
       },
     },
     undefined,
@@ -419,6 +441,10 @@ export function hooksConfig(notifyPort: number): string {
  *   with `bundle-patch.ts`'s `loadDeclaredPatchRows`; defaults to `undefined`
  *   for every entry so every other caller (including tests) that does not
  *   pass one keeps synthesizing a row unchanged.
+ * @param nodePath - absolute path to `node` to invoke the pet hook script
+ *   with, threaded into `hooksConfig`; defaults to the bare string `'node'`
+ *   (relying on PATH) so every other caller that does not pass one keeps
+ *   working unchanged.
  * @returns the absolute paths of the generated files, and which plugins were
  *   omitted, if any.
  */
@@ -429,6 +455,7 @@ export function writeRuntimeFiles(
   probe: LoadabilityProbe = checkPackageLoadable,
   resolveName: (status: Extract<PluginStatus, { kind: 'ready' }>) => string = (status) => status.entryPath,
   resolveDeclaredPatch: (status: Extract<PluginStatus, { kind: 'ready' }>) => DeclaredPatchRow[] | undefined = () => undefined,
+  nodePath = 'node',
 ): RuntimeFiles {
   const omitted: { package: string; reason: string }[] = []
   const ready: {
@@ -467,8 +494,15 @@ export function writeRuntimeFiles(
     ready: built.rows,
   }
   mkdirSync(directory, { recursive: true })
-  writeFileSync(files.hooksPath, hooksConfig(notifyPort))
+  writeFileSync(files.hooksPath, hooksConfig(notifyPort, nodePath, files.hookScriptPath))
   writeFileSync(files.patchPath, built.overlay)
+  // The script itself ships next to this file's compiled output (copied
+  // there by the `build` script, since `tsc` does not touch `.mjs` files —
+  // see package.json) and is rewritten into the runtime dir on every boot,
+  // the same as the other two generated files, so an in-place app update
+  // always hands the harness the current script rather than a stale one a
+  // previous boot left behind.
+  writeFileSync(files.hookScriptPath, readFileSync(join(__dirname, 'runtime', HOOK_SCRIPT_FILE)))
   return files
 }
 
