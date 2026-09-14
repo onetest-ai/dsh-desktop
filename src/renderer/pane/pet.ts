@@ -31,6 +31,11 @@ const BUBBLE_MARGIN_X = 8
 const BUBBLE_GAP = 4
 const BUBBLE_TAIL_H = 8
 const BUBBLE_RADIUS = 8
+/** Size and placement of the missed-turn badge, top-right of the sprite region (not the bubble band). */
+const BADGE_W = 26
+const BADGE_H = 19
+const BADGE_MARGIN = 6
+const BADGE_RADIUS = 5
 
 const canvas = document.getElementById('pet') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')
@@ -95,6 +100,40 @@ function drawBubble(): void {
   ctx.fillText(text, tailX, y + rectH / 2)
 }
 
+/**
+ * Paints the "unseen finished turn" indicator: an envelope glyph rather than
+ * a plain dot, so it reads as a notification at a glance. Anchored to the
+ * top-right of the sprite region (below the bubble band, never inside it).
+ */
+function drawBadge(): void {
+  if (ctx === null) return
+  const x = FRAME_W - BADGE_W - BADGE_MARGIN
+  const y = BUBBLE_BAND + BADGE_MARGIN
+
+  const fill = token('--dsw-alias-state-business-primary')
+  const ring = token('--dsw-alias-border-l2')
+  const flap = token('--dsw-alias-label-primary-foreground')
+
+  ctx.beginPath()
+  ctx.roundRect(x, y, BADGE_W, BADGE_H, BADGE_RADIUS)
+  ctx.fillStyle = fill
+  ctx.fill()
+  ctx.lineWidth = 1
+  ctx.strokeStyle = ring
+  ctx.stroke()
+
+  // The envelope's folded flap, drawn as two strokes from the top corners
+  // down to the badge's bottom-centre — the detail that reads as "mail",
+  // not just a coloured shape.
+  ctx.beginPath()
+  ctx.moveTo(x + 2, y + 2)
+  ctx.lineTo(x + BADGE_W / 2, y + BADGE_H / 2 + 1)
+  ctx.lineTo(x + BADGE_W - 2, y + 2)
+  ctx.lineWidth = 1.5
+  ctx.strokeStyle = flap
+  ctx.stroke()
+}
+
 function draw(now: number): void {
   requestAnimationFrame(draw)
   if (ctx === null || sheet === undefined) return
@@ -102,13 +141,7 @@ function draw(now: number): void {
   const { sx, sy, sw, sh } = frameAt(DRIVE_TO_STATE[drive], elapsed)
   ctx.clearRect(0, 0, FRAME_W, CANVAS_H)
   ctx.drawImage(sheet, sx, sy, sw, sh, 0, BUBBLE_BAND, FRAME_W, FRAME_H)
-  if (badge) {
-    const r = 22
-    ctx.beginPath()
-    ctx.arc(FRAME_W - r - 8, BUBBLE_BAND + r + 8, r, 0, Math.PI * 2)
-    ctx.fillStyle = token('--dsw-alias-state-business-primary')
-    ctx.fill()
-  }
+  if (badge) drawBadge()
   drawBubble()
 }
 

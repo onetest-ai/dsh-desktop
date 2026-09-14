@@ -106,7 +106,7 @@ const VERSION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.+-]*$/
 const PET_SCALE_MIN = 0.5
 const PET_SCALE_MAX = 2.5
 /** Fallback scale for a value the slider could never have produced (absent field, non-numeric text). */
-const DEFAULT_PET_SCALE = 1
+const DEFAULT_PET_SCALE = 1.5
 
 /** Result of validating one plugin's config textarea. */
 export type PluginConfigValidation = { ok: true; config?: Record<string, unknown> } | { ok: false; message: string }

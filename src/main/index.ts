@@ -3047,7 +3047,8 @@ if (!app.requestSingleInstanceLock()) {
             type: 'radio',
             checked: p.slug === config?.pet?.slug,
             click: () => {
-              savePet({ enabled: true, slug: p.slug, scale: config?.pet?.scale ?? 1, x: config?.pet?.x, y: config?.pet?.y })
+              // 1.5, not 1: a freshly-picked pet with no stored scale should read as legible by default.
+              savePet({ enabled: true, slug: p.slug, scale: config?.pet?.scale ?? 1.5, x: config?.pet?.x, y: config?.pet?.y })
               syncPet()
             },
           })),
@@ -3056,7 +3057,7 @@ if (!app.requestSingleInstanceLock()) {
         {
           label: 'Hide pet',
           click: () => {
-            savePet({ ...(config?.pet ?? { slug: '', scale: 1 }), enabled: false })
+            savePet({ ...(config?.pet ?? { slug: '', scale: 1.5 }), enabled: false })
             syncPet()
           },
         },
@@ -3648,7 +3649,8 @@ if (!app.requestSingleInstanceLock()) {
         const live = currentConfig()
         const next = !(live?.pet?.enabled === true)
         const slug = live?.pet?.slug ?? listInstalledPets()[0]?.slug ?? ''
-        savePet({ enabled: next, slug, scale: live?.pet?.scale ?? 1, x: live?.pet?.x, y: live?.pet?.y })
+        // 1.5, not 1: a freshly-picked pet with no stored scale should read as legible by default.
+        savePet({ enabled: next, slug, scale: live?.pet?.scale ?? 1.5, x: live?.pet?.x, y: live?.pet?.y })
         // Reconciles the window and brings `trayActions`/`tray.refresh()`
         // up to date in one call — the same helper a Settings-window save
         // uses, so both paths agree.
@@ -3656,7 +3658,7 @@ if (!app.requestSingleInstanceLock()) {
       },
       onPickPet: (slug: string) => {
         const live = currentConfig()
-        savePet({ enabled: true, slug, scale: live?.pet?.scale ?? 1, x: live?.pet?.x, y: live?.pet?.y })
+        savePet({ enabled: true, slug, scale: live?.pet?.scale ?? 1.5, x: live?.pet?.x, y: live?.pet?.y })
         syncPetAndRefreshTray()
       },
     }
