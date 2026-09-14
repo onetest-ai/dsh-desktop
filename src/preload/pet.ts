@@ -57,4 +57,10 @@ contextBridge.exposeInMainWorld('pet', {
   onComposerOptions: (cb: (opts: ComposerOptions) => void) =>
     ipcRenderer.on('pet:composer-options', (_e, opts: ComposerOptions) => cb(opts)),
   composeRich: (req: ComposeRequest) => ipcRenderer.send('pet:compose-rich', req),
+  // The rich panel (text + project + send) needs more room above the sprite
+  // than the one-line fallback input does. Rather than have the renderer
+  // guess at window bounds it cannot see, it just tells main when the panel
+  // opens and closes; main resizes the frameless window and restores it —
+  // see `petComposePanelSize` in `src/main/pet-window.ts`.
+  setComposeOpen: (open: boolean) => ipcRenderer.send('pet:compose-open', open),
 })

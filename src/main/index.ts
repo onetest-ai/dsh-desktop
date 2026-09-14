@@ -23,7 +23,7 @@ import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-
 import { portIsFree, startNotifyListener, type HookEvent, type HookKind, type NotifyServer } from './notify'
 import { createPetState, type PetStateMachine, type PetDriveState } from './pet-state'
 import { listInstalledPets, loadPetSprite } from './pet-catalog'
-import { createPetWindow, petWindowSize } from './pet-window'
+import { createPetWindow, petComposePanelSize, petWindowSize } from './pet-window'
 import { openConfigFile } from './open-config-file'
 import {
   bundlePatchDeclaration,
@@ -3176,6 +3176,20 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.on('harness:composer-options', (_event, opts: unknown) => {
       if (petWindow === undefined || petWindow.isDestroyed()) return
       petWindow.webContents.send('pet:composer-options', opts as ComposerOptions)
+    })
+    // The rich panel needs more room above the sprite than the resting
+    // bubble band; the plain fallback input does not. Rather than have the
+    // renderer poke at window bounds it cannot see, it just says when the
+    // panel opens/closes, and this resizes the (fixed-size, `resizable:
+    // false`) frameless window to `petComposePanelSize` and back to
+    // `petWindowSize` — the same content-size dance `syncPet` already does
+    // for a scale change, just transient instead of persisted.
+    ipcMain.on('pet:compose-open', (_event, open: unknown) => {
+      if (petWindow === undefined || petWindow.isDestroyed()) return
+      const pet = currentConfig()?.pet
+      if (pet === undefined) return
+      const size = open === true ? petComposePanelSize(pet.scale) : petWindowSize(pet.scale)
+      petWindow.setContentSize(size.width, size.height)
     })
     // The board's own read, for both of its views. A full walk of
     // `.dsh/tasks/` every time and never a cache: the read is milliseconds,

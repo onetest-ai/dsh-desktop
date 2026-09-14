@@ -86,6 +86,76 @@
   #compose-input::placeholder {
     color: var(--dsw-alias-label-tertiary);
   }
+  /* The rich panel: multiline text + project (+ model, when reported) + Send.
+     Only shown once the harness plugin has reported `ComposerOptions` — until
+     then `#compose-input` above is the whole story. Filled with a surface
+     token so it stays legible over the otherwise-transparent window; sized
+     by main growing the window's content box (`pet:compose-open`), not by
+     this stylesheet. */
+  #compose-panel {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    right: 6px;
+    bottom: 6px;
+    -webkit-app-region: no-drag;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border-radius: 8px;
+    border: 1px solid var(--dsw-alias-border-l2);
+    background: var(--dsw-alias-tooltip-bg);
+    color: var(--dsw-alias-label-primary-foreground);
+  }
+  #compose-panel[hidden] {
+    display: none;
+  }
+  #compose-text {
+    flex: 1;
+    min-height: 44px;
+    box-sizing: border-box;
+    resize: none;
+    font: 12px system-ui, sans-serif;
+    padding: 5px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--dsw-alias-border-l2);
+    background: var(--dsw-alias-bg-layer-2);
+    color: var(--dsw-alias-label-primary-foreground);
+  }
+  #compose-text::placeholder {
+    color: var(--dsw-alias-label-tertiary);
+  }
+  #compose-panel .compose-row {
+    display: flex;
+    gap: 4px;
+  }
+  #compose-project,
+  #compose-model {
+    flex: 1;
+    min-width: 0;
+    font: 12px system-ui, sans-serif;
+    padding: 3px 4px;
+    border-radius: 6px;
+    border: 1px solid var(--dsw-alias-border-l2);
+    background: var(--dsw-alias-bg-layer-2);
+    color: var(--dsw-alias-label-primary-foreground);
+  }
+  #compose-project[hidden],
+  #compose-model[hidden] {
+    display: none;
+  }
+  #compose-send {
+    font: 12px system-ui, sans-serif;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--dsw-alias-border-l2);
+    background: var(--dsw-alias-state-business-primary);
+    color: var(--dsw-alias-label-primary-foreground);
+    cursor: pointer;
+  }
   /* The missed-turn badge is painted on the canvas, not this element — but a
      focus ring for the (rare) keyboard case uses a token colour. */
   :focus-visible {
@@ -96,4 +166,16 @@
 <button id="compose-toggle" type="button" title="Send a quick message" aria-label="Compose a message">✎</button>
 <input id="compose-input" type="text" hidden autocomplete="off" spellcheck="false"
        placeholder="Type a message, Enter to send" aria-label="Message to the session">
+<div id="compose-panel" hidden>
+  <textarea id="compose-text" rows="3" spellcheck="false"
+            placeholder="Type a message… Enter to send, Shift+Enter for a new line"
+            aria-label="Message to the session"></textarea>
+  <div class="compose-row">
+    <select id="compose-project" aria-label="Project"></select>
+    <select id="compose-model" hidden aria-label="Model"></select>
+  </div>
+  <div class="compose-row">
+    <button id="compose-send" type="button">Send</button>
+  </div>
+</div>
 <script src="pet-bundle.js"></script>

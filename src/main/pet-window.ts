@@ -25,6 +25,30 @@ export function petWindowSize(scale: number): { width: number; height: number } 
 }
 
 /**
+ * Extra room the rich mini-composer needs beyond the bubble band: a multiline
+ * text field, a project `<select>`, and a Send button stacked above the
+ * sprite. Fixed in window pixels rather than scaled with the sprite — the
+ * controls are ordinary-sized form chrome, not pet art, so they don't get
+ * harder to read at `scale: 0.5` the way the bubble text already does.
+ */
+const COMPOSE_PANEL_EXTRA_H = 132
+/** Floor on content width so the panel's controls have room to sit side by
+ * side even when the sprite itself is scaled down small. */
+const COMPOSE_PANEL_MIN_W = 220
+
+/**
+ * The pet window's content size while the rich compose panel is open: the
+ * normal bubble-band-plus-sprite box, stretched to fit the panel above the
+ * sprite. `syncPet`/the `pet:compose-open` handler swap between this and
+ * `petWindowSize` as the panel opens and closes — the sprite's own region
+ * never moves, only the band above it grows.
+ */
+export function petComposePanelSize(scale: number): { width: number; height: number } {
+  const base = petWindowSize(scale)
+  return { width: Math.max(base.width, COMPOSE_PANEL_MIN_W), height: base.height + COMPOSE_PANEL_EXTRA_H }
+}
+
+/**
  * A frameless, transparent, always-on-top window that floats the pet over every
  * other app. Modeled on settings-window.ts but non-activating chrome: no frame,
  * no shadow, not in the taskbar, visible across spaces and full-screen apps so
