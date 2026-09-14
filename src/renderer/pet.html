@@ -131,10 +131,18 @@
   #notify-badge[hidden] {
     display: none;
   }
-  /* The compose panel: a roomy rounded surface below the controls row,
-     holding an optional workspace chip, then a big input, then its send
-     control. Only appears when compose is toggled, and only ever pushes the
-     window taller — the sprite above it never moves. */
+  /* The compose panel: one cohesive dark rounded bar, modelled on the
+     harness's own composer — a top framing row (workspace + read-only mode),
+     the input, and a bottom framing row (read-only model + the accent send
+     button). It replaces the controls row while open and only ever grows the
+     window downward; the sprite above it never moves.
+
+     The whole bar is a single `bg-layer-2` surface with `label-primary`
+     text: both flip together with the theme, so the bar is dark with light
+     text in the dark theme (where this app runs) and inverts cleanly in
+     light. The input is *transparent* over that same surface rather than a
+     lighter box inset into it — that's what makes it read as one bar, not a
+     field-inside-a-panel. */
   #compose-panel {
     box-sizing: border-box;
     width: 100%;
@@ -142,38 +150,71 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 10px;
+    padding: 12px;
     border-radius: 16px;
     border: 1px solid var(--dsw-alias-border-l2);
-    background: var(--dsw-alias-tooltip-bg);
-    color: var(--dsw-alias-label-primary-foreground);
+    background: var(--dsw-alias-bg-layer-2);
+    color: var(--dsw-alias-label-primary);
   }
   #compose-panel[hidden] {
     display: none;
   }
-  /* The workspace chip: a subtle secondary pill at the panel's top-left
-     showing the current workspace's title. A real `<select>` sits over it,
-     transparent, so clicking the chip opens the native picker. */
-  #compose-chip-wrap {
-    position: relative;
-    align-self: flex-start;
-    max-width: 100%;
+  /* Top framing row: the workspace control and, when the plugin reports one,
+     the read-only mode label — small and left-aligned, like the reference.
+     Present only in the rich (options-arrived) path; hidden for the plain
+     fallback, which is just the input and send. */
+  #compose-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
   }
-  #compose-chip-wrap[hidden] {
+  #compose-top[hidden] {
     display: none;
   }
+  /* The workspace control: a folder glyph, the current workspace title, and
+     a caret — a real `<select>` sits transparent over the whole thing, so
+     clicking it opens the native picker. The one interactive control in the
+     framing rows; the mode/model labels beside it are inert. */
+  #compose-chip-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    max-width: 60%;
+    padding: 3px 6px;
+    border-radius: 8px;
+    color: var(--dsw-alias-label-secondary);
+  }
   #compose-chip-label {
-    display: block;
-    max-width: 100%;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font: 11px system-ui, sans-serif;
-    padding: 3px 10px;
-    border-radius: 999px;
-    border: 1px solid var(--dsw-alias-border-l2);
-    background: var(--dsw-alias-bg-layer-2);
+  }
+  /* Two minimal line glyphs (folder, caret); `currentColor` inside the paths
+     is the allowed use of it, the class sets the real colour from a token. */
+  .compose-glyph {
+    flex: none;
+    display: flex;
     color: var(--dsw-alias-label-secondary);
+  }
+  .compose-glyph svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .compose-glyph.folder svg {
+    width: 13px;
+    height: 13px;
+  }
+  .compose-glyph.caret svg {
+    width: 11px;
+    height: 11px;
   }
   #compose-project {
     position: absolute;
@@ -183,38 +224,64 @@
     opacity: 0;
     border: 0;
     padding: 0;
+    margin: 0;
     cursor: pointer;
   }
-  /* The input sits beside its send button rather than the button floating
-     over it, so the field's own text never has to make room for it. */
-  #compose-row {
-    display: flex;
-    align-items: flex-end;
-    gap: 8px;
+  /* Read-only mode label — a plain label with no dropdown affordance; it is
+     not changeable from here. Dimmed one step below the workspace control. */
+  #compose-mode {
+    font: 11px system-ui, sans-serif;
+    color: var(--dsw-alias-label-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
+  #compose-mode[hidden] {
+    display: none;
+  }
+  /* The input: transparent so it belongs to the one bar. One line tall to
+     start (min-height), auto-grown by pet.ts toward `max-height` (a few
+     lines) as the message lengthens, then it scrolls. The window is sized
+     for the tallest state (`petComposePanelSize`), so growth never clips;
+     when the message is short the bar is shorter and the transparent slack
+     below it simply isn't painted. */
   #compose-text {
-    flex: 1;
-    min-width: 0;
-    min-height: 72px;
-    resize: none;
+    width: 100%;
     box-sizing: border-box;
+    min-height: 44px;
+    max-height: 88px;
+    resize: none;
+    overflow-y: auto;
+    border: 0;
+    padding: 6px 2px;
+    background: transparent;
     font: 15px/1.4 system-ui, sans-serif;
-    padding: 12px 14px;
-    border-radius: 16px;
-    border: 1px solid var(--dsw-alias-border-l2);
-    background: var(--dsw-alias-bg-layer-2);
-    /* `bg-layer-2` flips with the theme (white in light, near-black in
-       dark), so the text wants a label token that flips the same way it
-       does — `label-primary`, not `-foreground`. `-foreground` is meant for
-       text on a surface that stays fixed opposite the theme (like the
-       panel's own `tooltip-bg`, always a dark chip); paired with a surface
-       that flips instead, it put white-on-white text in the light theme and
-       near-black-on-near-black in the dark theme — invisible either way,
-       which is the contrast bug this fixes. */
     color: var(--dsw-alias-label-primary);
   }
+  #compose-text:focus-visible {
+    outline: none;
+  }
   #compose-text::placeholder {
-    color: var(--dsw-alias-label-secondary);
+    color: var(--dsw-alias-label-tertiary);
+  }
+  /* Bottom framing row: the read-only model label, then the accent send
+     button — right-aligned, framing the input from below like the reference. */
+  #compose-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  #compose-model {
+    min-width: 0;
+    font: 11px system-ui, sans-serif;
+    color: var(--dsw-alias-label-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #compose-model[hidden] {
+    display: none;
   }
   /* The one accent colour in this page: the send button, which carries the
      app's business-primary token rather than a neutral surface. */
@@ -257,14 +324,24 @@
     </button>
   </div>
   <div id="compose-panel" hidden>
-    <div id="compose-chip-wrap" hidden>
-      <span id="compose-chip-label"></span>
-      <select id="compose-project" aria-label="Project"></select>
+    <div id="compose-top" hidden>
+      <div id="compose-chip-wrap">
+        <span class="compose-glyph folder" aria-hidden="true">
+          <svg viewBox="0 0 16 16"><path d="M2 5V4a1 1 0 0 1 1-1h2.6l1.2 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+        </span>
+        <span id="compose-chip-label"></span>
+        <span class="compose-glyph caret" aria-hidden="true">
+          <svg viewBox="0 0 16 16"><path d="M4 6.5 8 10l4-3.5"/></svg>
+        </span>
+        <select id="compose-project" aria-label="Project"></select>
+      </div>
+      <span id="compose-mode" hidden></span>
     </div>
-    <div id="compose-row">
-      <textarea id="compose-text" rows="2" spellcheck="false"
-                placeholder="Type a message… Enter to send"
-                aria-label="Message to the session"></textarea>
+    <textarea id="compose-text" rows="1" spellcheck="false"
+              placeholder="Type a message…"
+              aria-label="Message to the session"></textarea>
+    <div id="compose-bottom">
+      <span id="compose-model" hidden></span>
       <button id="compose-send" type="button" aria-label="Send">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4"/></svg>
       </button>

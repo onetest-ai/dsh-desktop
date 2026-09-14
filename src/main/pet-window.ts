@@ -40,17 +40,21 @@ export function petWindowSize(scale: number): { width: number; height: number } 
 }
 
 /**
- * Room the compose panel needs in the controls row's own slot: a project
- * chip, a big roomy input (min-height ~72px so there's room to type a
- * multi-line message), and its send control — the Codex-style generous box
- * the design calls for, not the old cramped pill. The panel *replaces* the
- * controls row rather than adding beneath it (see `pet.html`'s `#pet-chrome`,
- * where `#pet-controls` is hidden while composing), so this is the slot's
- * whole height while composing, not an addition to `CONTROLS_ROW_H`. Fixed
- * in window pixels rather than scaled with the sprite, for the same reason
- * `CONTROLS_ROW_H` is.
+ * Room the harness-style compose bar needs in the controls row's own slot:
+ * the top framing row (workspace + mode), the input at its tallest auto-grown
+ * state (`max-height` a few lines), and the bottom framing row (model + send)
+ * — plus the panel's padding and the chrome's. Sized for the *tallest* state
+ * on purpose: the window is a fixed size while composing (the renderer can't
+ * resize it as the input grows), so it must fit the input fully grown, and
+ * when the message is short the bar is shorter and the extra room below it is
+ * just transparent, unpainted window. Mirrors the panel's own CSS heights in
+ * `pet.html` by hand. The panel *replaces* the controls row rather than
+ * adding beneath it (see `#pet-chrome`, where `#pet-controls` is hidden while
+ * composing), so this is the slot's whole height while composing, not an
+ * addition to `CONTROLS_ROW_H`. Fixed in window pixels rather than scaled
+ * with the sprite, for the same reason `CONTROLS_ROW_H` is.
  */
-const COMPOSE_PANEL_H = 140
+const COMPOSE_PANEL_H = 196
 /**
  * Floor on content width so the roomy input has real width to grow into —
  * wide enough that the placeholder ("Type a message… Enter to send") fits

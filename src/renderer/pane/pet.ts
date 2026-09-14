@@ -176,10 +176,12 @@ const composeToggle = document.getElementById('compose-toggle') as HTMLButtonEle
 const notifyToggle = document.getElementById('notify-toggle') as HTMLButtonElement
 const notifyBadge = document.getElementById('notify-badge') as HTMLSpanElement
 const composePanel = document.getElementById('compose-panel') as HTMLDivElement
-const composeChipWrap = document.getElementById('compose-chip-wrap') as HTMLDivElement
+const composeTop = document.getElementById('compose-top') as HTMLDivElement
 const composeChipLabel = document.getElementById('compose-chip-label') as HTMLSpanElement
+const composeMode = document.getElementById('compose-mode') as HTMLSpanElement
 const composeText = document.getElementById('compose-text') as HTMLTextAreaElement
 const composeProject = document.getElementById('compose-project') as HTMLSelectElement
+const composeModel = document.getElementById('compose-model') as HTMLSpanElement
 const composeSend = document.getElementById('compose-send') as HTMLButtonElement
 
 /** Latest options the harness plugin has reported, or `undefined` before the first one arrives. */
@@ -190,8 +192,14 @@ function hasRichOptions(): boolean {
   return composerOptions !== undefined && composerOptions.workspaces.length > 0
 }
 
-/** Rebuilds the workspace `<select>` and its visible chip label from the latest options. */
-function populateChip(): void {
+/**
+ * Fills the framing rows from the latest options: rebuilds the workspace
+ * `<select>` and its visible chip label, and sets the two read-only labels
+ * (mode above, model below). Mode and model are plain text with no picker —
+ * the plugin decides them; the pet only shows them. Either is hidden when the
+ * plugin didn't report it.
+ */
+function populateOptions(): void {
   const opts = composerOptions
   if (opts === undefined || opts.workspaces.length === 0) return
   composeProject.replaceChildren(
@@ -205,6 +213,26 @@ function populateChip(): void {
   )
   const current = opts.workspaces.find((w) => w.id === composeProject.value) ?? opts.workspaces[0]
   composeChipLabel.textContent = current.title
+
+  const mode = opts.currentMode?.trim() ?? ''
+  composeMode.textContent = mode
+  composeMode.hidden = mode === ''
+  const model = opts.currentModel?.trim() ?? ''
+  composeModel.textContent = model
+  composeModel.hidden = model === ''
+}
+
+/**
+ * Grows the input from one line toward its CSS `max-height` as the message
+ * lengthens — the harness composer's own single-line-that-grows feel. The
+ * panel lives in a window sized for the tallest state (`petComposePanelSize`
+ * in `src/main/pet-window.ts`), so growth never clips; past the cap the
+ * textarea scrolls. Setting height to `auto` first lets it shrink back as
+ * text is deleted, not only grow.
+ */
+function autoGrowInput(): void {
+  composeText.style.height = 'auto'
+  composeText.style.height = `${String(composeText.scrollHeight)}px`
 }
 
 // The transparent `<select>` sits over the chip so a click opens the native
@@ -217,18 +245,22 @@ composeProject.addEventListener('change', () => {
 function openCompose(): void {
   window.pet.setComposeOpen(true)
   const rich = hasRichOptions()
-  if (rich) populateChip()
-  composeChipWrap.hidden = !rich
+  if (rich) populateOptions()
+  // The framing rows (workspace + mode) belong to the rich path only; the
+  // plain fallback is just the input and its send button.
+  composeTop.hidden = !rich
   composePanel.hidden = false
   // The panel takes the controls row's own slot rather than growing past
   // it — see the `body.composing #pet-controls` rule in pet.html — so the
   // sprite above never shifts when the panel opens or closes.
   document.body.classList.add('composing')
   composeText.focus()
+  autoGrowInput()
 }
 
 function closeCompose(): void {
   composeText.value = ''
+  composeText.style.height = ''
   composePanel.hidden = true
   document.body.classList.remove('composing')
   window.pet.setComposeOpen(false)
@@ -282,6 +314,7 @@ composePanel.addEventListener('focusout', (e) => {
   closeCompose()
 })
 composeSend.addEventListener('click', () => submitCompose())
+composeText.addEventListener('input', autoGrowInput)
 
 window.pet.onComposerOptions((opts) => {
   composerOptions = opts
