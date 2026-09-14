@@ -14,6 +14,9 @@ import http from 'node:http'
 const MAX_TEXT_LENGTH = 40
 const MAX_STDIN_BYTES = 64 * 1024
 const REQUEST_TIMEOUT_MS = 300
+/** Upper bound on waiting for stdin to close; a hook host that never sends
+ * EOF must not hang this script forever — resolve with whatever arrived. */
+const STDIN_TIMEOUT_MS = 1000
 
 /** Truncates to MAX_TEXT_LENGTH, replacing the tail with an ellipsis so the result never exceeds it. */
 function truncate(text) {
@@ -124,11 +127,23 @@ export function buildBody(event, json) {
   return describe(event, input)
 }
 
-/** Reads stdin to a `MAX_STDIN_BYTES`-capped Buffer; excess bytes are read and discarded, never buffered. */
+/**
+ * Reads stdin to a `MAX_STDIN_BYTES`-capped Buffer; excess bytes are read and
+ * discarded, never buffered. Self-sufficient even if stdin never closes — a
+ * host that keeps the pipe open (or never writes anything) would otherwise
+ * hang this script forever, and it must always exit 0 quickly.
+ */
 function readStdinCapped() {
   return new Promise((resolve) => {
     const chunks = []
     let total = 0
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(Buffer.concat(chunks))
+    }
     process.stdin.on('data', (chunk) => {
       if (total < MAX_STDIN_BYTES) {
         const room = MAX_STDIN_BYTES - total
@@ -136,8 +151,10 @@ function readStdinCapped() {
       }
       total += chunk.length
     })
-    process.stdin.on('end', () => resolve(Buffer.concat(chunks)))
-    process.stdin.on('error', () => resolve(Buffer.concat(chunks)))
+    process.stdin.on('end', finish)
+    process.stdin.on('error', finish)
+    const timer = setTimeout(finish, STDIN_TIMEOUT_MS)
+    timer.unref?.()
   })
 }
 

@@ -121,14 +121,26 @@ export function startNotifyListener(port: number, onHook: (event: HookEvent) => 
       if (request.method === 'POST' && request.url === '/pet/event') {
         readEventBody(request)
           .then(({ state, text }) => {
+            // Write and end the reply before touching `onHook`: a caller-supplied
+            // hook that throws must never turn into a second `writeHead` on this
+            // same response (ERR_HTTP_HEADERS_SENT) — the 204 is this request's
+            // whole contract, and it is satisfied before anything else can fail.
             response.writeHead(204).end()
-            onHook({ kind: 'event', state, text })
+            try {
+              onHook({ kind: 'event', state, text })
+            } catch {
+              // onHook must never break the reply; the reply is already sent.
+            }
           })
           .catch(() => {
             // readEventBody never rejects, but keep this belt-and-braces so a
             // malformed request can never leave the connection hanging.
             response.writeHead(204).end()
-            onHook({ kind: 'event' })
+            try {
+              onHook({ kind: 'event' })
+            } catch {
+              // onHook must never break the reply; the reply is already sent.
+            }
           })
         return
       }

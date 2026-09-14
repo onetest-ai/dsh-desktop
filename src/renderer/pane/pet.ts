@@ -157,8 +157,13 @@ window.pet.onSprite((dataUrl, nextScale) => {
 })
 
 window.pet.onState((snap) => {
-  if (snap.state !== drive) {
-    drive = snap.state
+  // main and the pane re-declare this union by hand (see the PetBridge doc
+  // comment above); an unrecognized state here would make frameAt read
+  // PET_LAYOUT[undefined] and throw on every animation frame, freezing the
+  // pet — fall back to 'idle' rather than trust the wire value blindly.
+  const next = DRIVE_TO_STATE[snap.state] !== undefined ? snap.state : 'idle'
+  if (next !== drive) {
+    drive = next
     startedAt = performance.now()
   }
   badge = snap.badge
