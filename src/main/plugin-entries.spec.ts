@@ -52,9 +52,11 @@ describe('defaultPlugins', () => {
   })
 
   it('ships whatever the default set declares, and nothing more', () => {
-    // Empty while defaults cannot be installed at startup: a declared but
-    // absent plugin reads as a failure the user did not cause.
-    expect(defaultPlugins().map((entry) => entry.spec)).toEqual([HOOKS_PACKAGE, ...DEFAULT_PLUGIN_SPECS])
+    // The bridge is already the first entry in `DEFAULT_PLUGIN_SPECS`, and
+    // `withHookBridge` with no harness version leaves an already-present
+    // bridge untouched, so this is not `[HOOKS_PACKAGE, ...DEFAULT_PLUGIN_SPECS]`
+    // (that would double-count it) — just the set, as specs.
+    expect(defaultPlugins().map((entry) => entry.spec)).toEqual([...DEFAULT_PLUGIN_SPECS])
   })
 })
 

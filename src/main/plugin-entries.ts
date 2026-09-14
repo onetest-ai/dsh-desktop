@@ -1,11 +1,16 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { managedDir } from './harness-source'
-import { DEFAULT_PLUGIN_SPECS } from './plugin-defaults'
+import { DEFAULT_PLUGIN_SPECS, HOOKS_PACKAGE } from './plugin-defaults'
 import { isInstalled, type InstallDeps } from './runtime-install'
 
-/** The Claude Code hook bridge package, pre-seeded as the first plugin entry. */
-export const HOOKS_PACKAGE = '@deepseek-ai/dsh-hooks-claude-code'
+// Re-exported rather than declared here: `DEFAULT_PLUGIN_SPECS` (in
+// `plugin-defaults.ts`) now includes the bridge, and that file already
+// imports from this one — declaring the constant here and importing it back
+// would be a cycle where CJS's evaluation order could hand `plugin-defaults`
+// an `undefined` value for it. Every existing importer of `HOOKS_PACKAGE`
+// from this module keeps working unchanged.
+export { HOOKS_PACKAGE } from './plugin-defaults'
 
 /**
  * One package the desktop shell installs and inserts into the harness,

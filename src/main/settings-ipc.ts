@@ -9,7 +9,6 @@ import type { McpPreset } from './mcp-presets'
 import { MCP_CLIENT_PACKAGE, mcpErrors } from './mcp-servers'
 import {
   entryKey,
-  HOOKS_PACKAGE,
   parsePluginSource,
   parseSpec,
   withHookBridge,
@@ -613,26 +612,23 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
 
     // The bridge is installed unconditionally — a Settings save must not
     // leave it uninstalled just because the user's own list omits it (see
-    // `withHookBridge`) — but that must not leak into what gets persisted:
-    // `resolved` below is written straight back to `config.plugins`, so the
-    // bridge entry is always stripped back out before it reaches
-    // `resolvedConfig`, below, regardless of whether the user's own list
-    // already carried one. It must never survive into the saved config: a
-    // resolved bridge entry looks exactly like a legitimately pinned one,
-    // so a persisted copy would defeat `withHookBridge`'s re-pin on the next
-    // boot the same way a hand-added one used to — the boot guarantee
-    // (`withHookBridge`) re-adds it, correctly pinned, every time.
+    // `withHookBridge`) — and it is now a visible default, so the resolved
+    // entry is persisted like any other: stripping it back out here would
+    // undo `ensureDefaultPlugins` on the very next save. That is safe because
+    // `withHookBridge` re-pins any existing bridge entry to the managed
+    // harness's current version every time it runs (below, and again in the
+    // boot overlay), so a persisted entry can never go stale the way a
+    // hand-added one used to.
     // Pin a newly added bridge to the managed harness's own resolved
     // version — see `withHookBridge`'s doc comment for why a bare spec is
     // wrong here.
     const hookVersion = config.harness.kind === 'managed' ? config.harness.version : undefined
-    const { resolved: installedResolved, warnings: pluginWarnings } = await installPlugins(
+    const { resolved, warnings: pluginWarnings } = await installPlugins(
       withHookBridge(config.plugins ?? [], hookVersion),
       priorPlugins,
       config.npmPath,
       onProgress ?? (() => {}),
     )
-    const resolved = installedResolved.filter((entry) => parseSpec(entry.spec).package !== HOOKS_PACKAGE)
     // The MCP client rides the same install path as a plugin entry — one
     // package, however many servers it backs — by being handed to
     // `installPlugins` as a one-entry list. It is installed only when a

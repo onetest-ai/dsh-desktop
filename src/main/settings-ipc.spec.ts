@@ -428,8 +428,12 @@ describe('save', () => {
 
       expect(result).toEqual({ ok: true, warnings: [] })
       expect(installPlugin).toHaveBeenCalledWith(`${DECK}@0.2.1`, undefined, undefined, undefined, expect.any(Function))
+      // The bridge is prepended by `withHookBridge` (this is a non-managed
+      // harness, so it lands bare) and now persists alongside the deck.
       expect(d.writeConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ plugins: [{ spec: `${DECK}@0.2.1`, version: '0.2.1' }] }),
+        expect.objectContaining({
+          plugins: [{ spec: HOOKS_PACKAGE, version: '0.2.1' }, { spec: `${DECK}@0.2.1`, version: '0.2.1' }],
+        }),
       )
     })
 
@@ -440,7 +444,12 @@ describe('save', () => {
       await createSettingsHandlers(d).save(form({ plugins: [{ spec: `${DECK}@0.2.1`, config: '{"base": "/x"}' }] }))
 
       expect(d.writeConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ plugins: [{ spec: `${DECK}@0.2.1`, version: '0.2.1', config: { base: '/x' } }] }),
+        expect.objectContaining({
+          plugins: [
+            { spec: HOOKS_PACKAGE, version: '0.2.1' },
+            { spec: `${DECK}@0.2.1`, version: '0.2.1', config: { base: '/x' } },
+          ],
+        }),
       )
     })
 
@@ -477,7 +486,7 @@ describe('save', () => {
       expect(installPlugin).toHaveBeenCalledWith(DECK, '0.2.1', undefined, undefined, expect.any(Function))
     })
 
-    it('adds and removes entries, round-tripping through config, and never persists the bridge', async () => {
+    it('adds and removes entries, round-tripping through config, bridge included', async () => {
       const installPlugin = vi.fn(async (_spec: string, priorVersion: string | undefined) => ({ version: priorVersion ?? '1.0.0' }))
       const d = deps({
         installPlugin,
@@ -488,23 +497,25 @@ describe('save', () => {
       })
 
       // The saved form types the bridge explicitly, drops the deck, and adds
-      // a third entry — but the bridge is app-managed, so it never lands in
-      // the persisted config regardless of what the form submitted (see
-      // `installAndApply`): only the deck's replacement survives the round trip.
+      // a third entry. The bridge is a visible default now, so it persists
+      // like any other entry — this is a non-managed (local) harness, so
+      // `withHookBridge` has no harness version to re-pin to and leaves the
+      // form's bare bridge entry as typed.
       await createSettingsHandlers(d).save(form({ plugins: rows(`${HOOKS_PACKAGE}\n@onetest/other`) }))
 
       expect(d.writeConfig).toHaveBeenCalledWith(
         expect.objectContaining({
-          plugins: [{ spec: '@onetest/other', version: '1.0.0' }],
+          plugins: [{ spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' }, { spec: '@onetest/other', version: '1.0.0' }],
         }),
       )
     })
 
-    it('never persists the bridge into config.plugins, even when a prior save had left a stale one on disk', async () => {
-      // This is the exact regression: an earlier save had persisted the
-      // bridge pinned to a now-stale version. If that leaked back into
-      // `config.plugins` here, `withHookBridge` would see `hasBridge` true on
-      // the next boot and never correct it — see `withHookBridge`'s own doc.
+    it('persists the bridge re-pinned to the current harness version, even when a prior save had left a stale one on disk', async () => {
+      // The bridge is a visible default now, so it is persisted like any
+      // other plugin — but `withHookBridge` re-pins any existing bridge entry
+      // to the managed harness's current version before install, so a stale
+      // persisted pin (from an earlier harness version) can never survive a
+      // save; it always comes back out at the version this save resolved.
       const installPlugin = vi.fn(async (spec: string) => ({ version: spec.includes(HOOKS_PACKAGE) ? '0.1.1-rc.2' : '1.0.0' }))
       const d = deps({
         installPlugin,
@@ -517,7 +528,8 @@ describe('save', () => {
       await createSettingsHandlers(d).save(form({ kind: 'managed', version: '0.1.1-rc.2', plugins: rows(DECK) }))
 
       const written = d.writeConfig.mock.calls.at(-1)?.[0] as DesktopConfig
-      expect(written.plugins?.some((entry) => entry.spec.includes(HOOKS_PACKAGE))).toBe(false)
+      const bridge = written.plugins?.find((entry) => entry.spec.includes(HOOKS_PACKAGE))
+      expect(bridge).toEqual({ spec: `${HOOKS_PACKAGE}@0.1.1-rc.2`, version: '0.1.1-rc.2' })
     })
 
     it('keeps the previously resolved version and reports a warning when an install fails', async () => {

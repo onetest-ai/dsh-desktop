@@ -48,7 +48,22 @@ export const PROJECT_MCP_BRIDGE = '@onetest/dsh-project-mcp-bridge'
  */
 export const DESKTOP_PANE = '@onetest/dsh-desktop-pane@0.2.2'
 
-export const DEFAULT_PLUGIN_SPECS: readonly string[] = [PROJECT_MCP_BRIDGE, DESKTOP_PANE]
+/**
+ * The Claude Code hook bridge package.
+ *
+ * Deliberately bare, unlike the other two defaults: it is not this app's own
+ * package, but the harness's, and the version that matters is whichever the
+ * *managed harness* currently resolves to — a value that moves with every
+ * harness update and cannot be pinned here without going stale. `withHookBridge`
+ * re-pins it to that harness version at mount time, in both the boot overlay
+ * and the install set, so this entry's own spec never has to carry a version.
+ *
+ * It drives turn-completion notifications and the desktop pet by turning
+ * harness activity into events this app listens for.
+ */
+export const HOOKS_PACKAGE = '@deepseek-ai/dsh-hooks-claude-code'
+
+export const DEFAULT_PLUGIN_SPECS: readonly string[] = [HOOKS_PACKAGE, PROJECT_MCP_BRIDGE, DESKTOP_PANE]
 
 /**
  * Default plugins whose package was renamed, mapped old package name → new spec.
@@ -125,7 +140,7 @@ export function migrateRenamedPlugins(dshHome: string): boolean {
  * removed is never silently reinstated. Adding a plugin to the default set
  * means raising this number.
  */
-export const DEFAULTS_GENERATION = 2
+export const DEFAULTS_GENERATION = 3
 
 /**
  * Move a default plugin forward when this build ships a newer pin.
