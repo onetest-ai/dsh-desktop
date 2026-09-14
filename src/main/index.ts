@@ -20,7 +20,7 @@ import { repairPlugins } from './repair'
 import { closeStartup, pushFindings, pushPhase, pushProgress, showStartup } from './startup-window'
 import { loadPresets, shippedPresetsPath, userPresetsPath } from './mcp-presets'
 import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-servers'
-import { portIsFree, startNotifyListener, type HookKind, type NotifyServer } from './notify'
+import { portIsFree, startNotifyListener, type HookEvent, type NotifyServer } from './notify'
 import { createPetState, type PetStateMachine } from './pet-state'
 import { listInstalledPets, loadPetSprite } from './pet-catalog'
 import { createPetWindow, petWindowSize } from './pet-window'
@@ -2686,9 +2686,16 @@ function toggleWindow(): void {
  * pet animates on prompt/tool, waves on turn-end), while the desktop
  * notification is turn-end only. Feeding the pet first keeps the wave in step
  * with the ping even when there is no window to notify.
+ *
+ * `/pet/event`'s `state`/`text` are not wired to the pet yet — `notify.ts`
+ * now parses and forwards them, but consuming them here (driving the bubble
+ * and animation off the harness's own templated text) is a later task
+ * (A7); until then an `'event'` ping is simply not one of the kinds the pet
+ * or the turn-end notification react to.
  */
-function onHook(kind: HookKind): void {
-  petState?.onHook(kind)
+function onHook(event: HookEvent): void {
+  const kind = event.kind
+  if (kind !== 'event') petState?.onHook(kind)
   if (kind !== 'turn-end') return
   // Preserved verbatim from the former onTurnEnd: raise a turn-complete
   // notification, but only when the user is looking elsewhere.
