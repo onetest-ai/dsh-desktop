@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8">
+<!--
+  What this page may load, and from where.
+
+  The pet window is otherwise-empty chrome: one canvas, driven entirely by
+  main pushing sprite sheets and state over IPC. `default-src 'none'` starts
+  from nothing, and each directive below is here because something this page
+  actually does needs it:
+  - `script-src 'self'` — `pet-bundle.js`, the only script this page has.
+  - `style-src 'self' 'unsafe-inline'` — the harness's own token sheets
+    (`theme/base.css`, `theme/design-platform.css`), loaded the same way
+    `pane.html` loads them so `--dsw-alias-*` resolves; `'unsafe-inline'` is
+    the inline `<style>` block below, which has no remote content to smuggle.
+  - `img-src data:` — the spritesheet arrives from main as a data URL, drawn
+    to the canvas rather than set as an `<img src>`, but the CSP directive
+    that governs `drawImage`'s image source is still `img-src`.
+  There is nothing to fetch and no filesystem to reach from here, so every
+  other directive stays 'none'.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>Pet</title>
+<!-- The harness's own tokens, vendored; see vendor/dsh-theme/README.md. Loaded
+     for one value only — the missed-turn badge colour, read via
+     getComputedStyle in pet.ts rather than as a literal. -->
+<link rel="stylesheet" href="theme/base.css">
+<link rel="stylesheet" href="theme/design-platform.css">
+<style>
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* The whole window is the pet; dragging it moves the OS window. */
+  #pet {
+    display: block;
+    -webkit-app-region: drag;
+    image-rendering: pixelated;
+    cursor: grab;
+  }
+  /* The missed-turn badge is painted on the canvas, not this element — but a
+     focus ring for the (rare) keyboard case uses a token colour. */
+  :focus-visible {
+    outline: 2px solid var(--dsw-alias-state-business-primary);
+  }
+</style>
+<canvas id="pet"></canvas>
+<script src="pet-bundle.js"></script>
