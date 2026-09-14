@@ -1546,6 +1546,15 @@ let windowHasContent = false
 let revealPending = false
 let quitting = false
 let tray: TrayController | undefined
+/**
+ * The mutable object `tray.refresh()` re-renders from — see `TrayActions`'s
+ * own comment on why it is mutated in place rather than recreated. Held at
+ * module scope (not just inside the boot flow that builds it) so a settings
+ * save's `applySettings` can update the pet fields it reads and then ask for
+ * a redraw, exactly like `onTogglePet`/`onPickPet` already do from the tray
+ * menu itself.
+ */
+let trayActions: TrayActions | undefined
 let notifier: NotifyServer | undefined
 /** The floating pet window, and the machine that drives its animation. */
 let petWindow: BrowserWindow | undefined
@@ -1894,6 +1903,12 @@ export async function applySettings(previous: DesktopConfig | undefined, next: D
     }
   }
 
+  // Idempotent (see `syncPet`'s own doc), so this runs on every save rather
+  // than only when `pet` looks changed: the window position `moved` listener
+  // and the tray menu can each have written `pet` since `previous` was last
+  // read, and diffing against a stale `previous` here would miss that.
+  if (!quitting) syncPetAndRefreshTray()
+
   return warnings
 }
 
@@ -1997,6 +2012,7 @@ const settingsHandlers = createSettingsHandlers({
   openProjectMcpFile: (file) => openConfigFile(file, existsSync, (path) => shell.openPath(path)),
   writeProjectMcpServers: (file, servers) => writeMcpConfig(file, servers),
   readMcpPresets: () => loadPresets(shippedPresetsPath(), userPresetsPath(DSH_HOME)),
+  listPets: () => listInstalledPets().map((p) => ({ slug: p.slug, name: p.name })),
   probeMcpServer: (target, onLine) =>
     // The probe spawns the server's command directly from this process,
     // which under a Finder launch has only the system PATH — `npx` and
@@ -2717,6 +2733,29 @@ function syncPet(): void {
     petWindow.webContents.send('pet:sprite', loadPetSprite(meta), pet.scale)
     petState?.setEnabled(true)
   }
+}
+
+/**
+ * Reconcile the pet window and then bring the tray menu's own pet fields
+ * (the "Show desktop pet" checkbox and the active radio in its submenu) up
+ * to date with whatever is now on disk, and ask for a redraw.
+ *
+ * `syncPet()` alone is not enough after a Settings-window save: that window
+ * writes `config.pet` through a completely different path (the form's
+ * `pet` field, validated in `settings-ipc.ts`) than the tray's own
+ * `onTogglePet`/`onPickPet`, which mutate `trayActions` themselves before
+ * calling `tray?.refresh()`. This is that same follow-up, factored out so
+ * both paths end up consistent rather than the tray silently going stale
+ * after a save made from the Settings window instead of the tray menu.
+ */
+function syncPetAndRefreshTray(): void {
+  syncPet()
+  if (trayActions === undefined) return
+  const live = currentConfig()
+  trayActions.petEnabled = live?.pet?.enabled === true
+  trayActions.activeSlug = live?.pet?.slug ?? listInstalledPets()[0]?.slug ?? ''
+  trayActions.pets = listInstalledPets()
+  tray?.refresh()
 }
 
 /**
@@ -3493,7 +3532,10 @@ if (!app.requestSingleInstanceLock()) {
     })
     // Mutated in place (not re-created) so `tray.refresh()` can re-render
     // against fresh values without a new `createTray` closure per change.
-    const trayActions: TrayActions = {
+    // Assigned to the module-level `trayActions` (not `const`-scoped here)
+    // so `applySettings`'s Settings-window save path can reach the same
+    // object `onTogglePet`/`onPickPet` mutate below.
+    trayActions = {
       toggleWindow,
       restart: () => void restartOnce(),
       openSettings: showSettings,
@@ -3507,20 +3549,15 @@ if (!app.requestSingleInstanceLock()) {
         const next = !(live?.pet?.enabled === true)
         const slug = live?.pet?.slug ?? listInstalledPets()[0]?.slug ?? ''
         savePet({ enabled: next, slug, scale: live?.pet?.scale ?? 1, x: live?.pet?.x, y: live?.pet?.y })
-        syncPet()
-        trayActions.petEnabled = next
-        trayActions.activeSlug = slug
-        trayActions.pets = listInstalledPets()
-        tray?.refresh()
+        // Reconciles the window and brings `trayActions`/`tray.refresh()`
+        // up to date in one call — the same helper a Settings-window save
+        // uses, so both paths agree.
+        syncPetAndRefreshTray()
       },
       onPickPet: (slug: string) => {
         const live = currentConfig()
         savePet({ enabled: true, slug, scale: live?.pet?.scale ?? 1, x: live?.pet?.x, y: live?.pet?.y })
-        syncPet()
-        trayActions.petEnabled = true
-        trayActions.activeSlug = slug
-        trayActions.pets = listInstalledPets()
-        tray?.refresh()
+        syncPetAndRefreshTray()
       },
     }
     tray = createTray(trayActions)

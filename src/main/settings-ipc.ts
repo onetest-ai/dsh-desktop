@@ -167,6 +167,14 @@ export interface SettingsDeps {
    */
   readMcpPresets(): McpPreset[]
   restartHarness(): Promise<void>
+  /**
+   * The pets installed on this machine (from `~/.petdex/pets/`, via
+   * `pet-catalog.ts`'s `listInstalledPets`), for the Pet section's dropdown.
+   * Reduced to just `slug`/`name`: the rest of `PetMeta` (sprite paths,
+   * frame metadata) is what the pet window itself needs, not this form.
+   * @returns the installed pets, in the catalog's own order.
+   */
+  listPets(): { slug: string; name: string }[]
 }
 
 /** What the MCP tab needs beyond the servers themselves. */
@@ -361,6 +369,12 @@ export interface SettingsHandlers {
    * @returns the entries, in file order.
    */
   readMcpServers(): McpServerEntry[]
+  /**
+   * The pets installed on this machine, for the Settings window's Pet
+   * section dropdown.
+   * @returns the installed pets, in the catalog's own order.
+   */
+  listPets(): { slug: string; name: string }[]
   /**
    * Persist the configured servers and respawn the harness with them.
    * @param servers - the entries to write, in display order.
@@ -713,6 +727,19 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       config = { ...config, mcpClientVersion: priorClientVersion }
     }
 
+    // `pet.x`/`pet.y` are window state (the pet's last dragged-to position),
+    // not something this form ever shows or edits — carried forward the same
+    // way `mcpClientVersion` is, so a save from this window (which builds
+    // `config.pet` fresh from the enable/slug/scale fields only) does not
+    // snap a repositioned pet back to its default spot.
+    const priorPet = previous?.pet
+    if (config.pet !== undefined && priorPet !== undefined) {
+      config = {
+        ...config,
+        pet: { ...config.pet, ...(priorPet.x === undefined ? {} : { x: priorPet.x }), ...(priorPet.y === undefined ? {} : { y: priorPet.y }) },
+      }
+    }
+
     deps.writeConfig(config)
 
     const { warnings } = await scheduleJob(
@@ -976,6 +1003,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       )
     },
     readMcpServers: () => deps.readMcpServers(),
+    listPets: () => deps.listPets(),
     saveMcpServers: (servers) => performSaveMcpServers(servers),
     pasteMcpBlock: (text) => performPasteMcpBlock(text),
     openMcpConfigFile: () => deps.openMcpConfigFile(),

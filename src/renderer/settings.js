@@ -9,7 +9,7 @@ const kindOf = () => document.querySelector('input[name="kind"]:checked').value
 // Save, and never appears in a save result — so an Add error never drives a
 // tab switch; `plugins` names the accumulated-list error Save can still
 // return (see `error-plugins` in the Plugins panel).
-const TABS = ['harness', 'plugins', 'mcp', 'notifications', 'advanced', 'updates']
+const TABS = ['harness', 'plugins', 'mcp', 'notifications', 'pet', 'advanced', 'updates']
 const FIELD_TAB = {
   repo: 'harness',
   package: 'harness',
@@ -79,6 +79,12 @@ let projectWriting = false
 
 // The shipped preset catalog, from `read()` rather than duplicated here.
 let mcpPresets = []
+
+// The pets installed on this machine (`{ slug, name }`), from `listPets()`.
+// Read fresh on every `load()`, the same as `mcpPresets` and `workspaces`:
+// this app never writes to `~/.petdex/pets/`, so there is nothing of this
+// list to preserve across a reload the way `pluginRows` is.
+let pets = []
 
 // A server whose probe failed and which "Add anyway" would write regardless.
 // Cleared on every new attempt, so the button can never write a stale entry.
@@ -164,6 +170,9 @@ function collect() {
   form.mcpEnabled = el('mcp-enabled').checked
   form.viewTools = el('view-tools').checked
   form.showBuiltinRightSidebar = el('show-builtin-right-sidebar').checked
+  form.petEnabled = el('pet-enabled').checked
+  form.petSlug = el('pet-slug').value
+  form.petScale = el('pet-scale').value
   return form
 }
 
@@ -252,6 +261,34 @@ function fillPresetPicker(ids, taken, busy) {
       : `${selected.label} ${selected.unavailable}.`
   el(ids.add).disabled =
     busy || selected === undefined || selected.unavailable !== undefined || taken.has(selected.id)
+}
+
+/**
+ * Fill the pet picker from the catalog, keeping the current choice, and
+ * disable both the picker and the enable switch when nothing is installed —
+ * there is nothing a checked switch could then show.
+ */
+function renderPetPicker() {
+  const picker = el('pet-slug')
+  const chosen = picker.value
+  picker.textContent = ''
+  if (pets.length === 0) {
+    const option = document.createElement('option')
+    option.value = ''
+    option.textContent = 'None installed — run: npx petdex install <slug>'
+    option.disabled = true
+    picker.append(option)
+  } else {
+    for (const pet of pets) {
+      const option = document.createElement('option')
+      option.value = pet.slug
+      option.textContent = pet.name
+      picker.append(option)
+    }
+    if (pets.some((pet) => pet.slug === chosen)) picker.value = chosen
+  }
+  picker.disabled = pets.length === 0
+  el('pet-enabled').disabled = pets.length === 0
 }
 
 /**
@@ -1474,6 +1511,16 @@ async function load() {
   el('mcp-enabled').checked = form.mcpEnabled
   el('view-tools').checked = form.viewTools
   el('show-builtin-right-sidebar').checked = form.showBuiltinRightSidebar
+
+  // The catalog comes from its own channel, not the form, the same way the
+  // MCP servers below do — it is read off `~/.petdex/pets/`, never stored in
+  // desktop.json.
+  pets = await window.settings.listPets()
+  renderPetPicker()
+  el('pet-slug').value = form.petSlug
+  el('pet-enabled').checked = form.petEnabled
+  el('pet-scale').value = form.petScale
+
   // The servers come from mcp.json through their own channel, not from the
   // form: that file is the portable one, and `save` writes desktop.json.
   mcpServers = await window.settings.readMcpServers()

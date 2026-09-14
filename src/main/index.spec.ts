@@ -270,7 +270,10 @@ vi.mock('./tray', () => ({
     openSettings(): void
   }) => {
     trayActions = actions
-    return { setStatus: setTrayStatus, setUpdate: setTrayUpdate, destroy: vi.fn() }
+    // `refresh` is exercised by `applySettings`'s pet reconciliation
+    // (`syncPetAndRefreshTray` in index.ts), not by anything these
+    // `setTrayStatus`/`setTrayUpdate` spies already cover.
+    return { setStatus: setTrayStatus, setUpdate: setTrayUpdate, refresh: vi.fn(), destroy: vi.fn() }
   },
 }))
 

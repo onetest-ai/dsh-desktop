@@ -25,6 +25,9 @@
     <button type="button" role="tab" id="tab-notifications" aria-controls="panel-notifications" aria-selected="false" tabindex="-1" class="tab">
       Notifications<span class="tab-error-dot" id="tab-notifications-error-dot" aria-hidden="true" hidden></span>
     </button>
+    <button type="button" role="tab" id="tab-pet" aria-controls="panel-pet" aria-selected="false" tabindex="-1" class="tab">
+      Pet<span class="tab-error-dot" id="tab-pet-error-dot" aria-hidden="true" hidden></span>
+    </button>
     <button type="button" role="tab" id="tab-advanced" aria-controls="panel-advanced" aria-selected="false" tabindex="-1" class="tab">
       Advanced<span class="tab-error-dot" id="tab-advanced-error-dot" aria-hidden="true" hidden></span>
     </button>
@@ -231,6 +234,34 @@
         <input id="hotkey" type="text">
       </div>
       <p class="error setting-error" id="error-hotkey"></p>
+    </div>
+  </section>
+
+  <section id="panel-pet" role="tabpanel" aria-labelledby="tab-pet" tabindex="0" class="panel" hidden>
+    <div class="settings-list">
+      <div class="setting setting-switch">
+        <div class="setting-text">
+          <label for="pet-enabled">Enable desktop pet</label>
+          <p class="setting-note">A small, always-on-top animated companion that floats over your desktop and reacts to what the agent is doing.</p>
+        </div>
+        <input type="checkbox" id="pet-enabled">
+      </div>
+
+      <div class="setting">
+        <div class="setting-text">
+          <label for="pet-slug">Pet</label>
+          <p class="setting-note">Sprites installed from <code>~/.petdex/pets/</code>.</p>
+        </div>
+        <select id="pet-slug"></select>
+      </div>
+
+      <div class="setting">
+        <div class="setting-text">
+          <label for="pet-scale">Size</label>
+          <p class="setting-note">Scales the sprite; the floating window resizes to match as soon as you save.</p>
+        </div>
+        <input type="range" id="pet-scale" min="0.5" max="2.5" step="0.1">
+      </div>
     </div>
   </section>
 

@@ -491,6 +491,10 @@ async function load(
       return (onValidatePlugin ?? defaultValidatePlugin)(spec, existingPackages)
     }),
     readMcpServers: vi.fn(async () => mcpServerStore),
+    // No test here exercises the pet catalog's own contents (see
+    // `pet-catalog.spec.ts` and `settings-ipc.spec.ts`'s `listPets` cases for
+    // that); this just needs to resolve so `load()` does not hang.
+    listPets: vi.fn(async () => [] as { slug: string; name: string }[]),
     saveMcpServers: vi.fn(async (servers: Record<string, unknown>[]) => {
       saveMcpServersCalls.push(servers)
       if (saveMcpServersGate !== undefined) await saveMcpServersGate
@@ -1427,9 +1431,9 @@ describe('load', () => {
 describe('tabs', () => {
   it('declares real tab semantics: role, aria-selected, and tabpanels', () => {
     expect(MARKUP).toMatch(/role="tablist"/)
-    expect((MARKUP.match(/role="tab"/g) ?? []).length).toBe(6)
-    expect((MARKUP.match(/role="tabpanel"/g) ?? []).length).toBe(6)
-    expect(declaredTabIds()).toEqual(['harness', 'plugins', 'mcp', 'notifications', 'advanced', 'updates'])
+    expect((MARKUP.match(/role="tab"/g) ?? []).length).toBe(7)
+    expect((MARKUP.match(/role="tabpanel"/g) ?? []).length).toBe(7)
+    expect(declaredTabIds()).toEqual(['harness', 'plugins', 'mcp', 'notifications', 'pet', 'advanced', 'updates'])
   })
 
   it('starts on the harness tab, with the rest hidden', async () => {

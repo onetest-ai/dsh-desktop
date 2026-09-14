@@ -37,7 +37,10 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
  * *call* into main — they only let the renderer listen for what main chooses
  * to push, each returning an unsubscribe function. `validatePlugin`,
  * `checkBinaries`, and `openConfigFile` add no new push channel: each
- * answers over its own `invoke`, like the other operations.
+ * answers over its own `invoke`, like the other operations. `listPets` is a
+ * later addition, the same read-only shape as `readMcpServers`: it lists
+ * `~/.petdex/pets/` installs for the Pet section's dropdown, and — like the
+ * MCP servers — is never part of `save`'s own form payload.
  */
 contextBridge.exposeInMainWorld('settings', {
   read: () => ipcRenderer.invoke('settings:read'),
@@ -52,6 +55,7 @@ contextBridge.exposeInMainWorld('settings', {
   openConfigFile: () => ipcRenderer.invoke('settings:open-config-file'),
   prepareMcpServer: (server: unknown) => ipcRenderer.invoke('settings:prepare-mcp-server', server),
   readMcpServers: () => ipcRenderer.invoke('settings:read-mcp-servers'),
+  listPets: () => ipcRenderer.invoke('settings:list-pets'),
   saveMcpServers: (servers: unknown) => ipcRenderer.invoke('settings:save-mcp-servers', servers),
   pasteMcpBlock: (text: string) => ipcRenderer.invoke('settings:paste-mcp-block', text),
   openMcpConfigFile: () => ipcRenderer.invoke('settings:open-mcp-config-file'),

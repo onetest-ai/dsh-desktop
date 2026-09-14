@@ -27,7 +27,8 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
   return {
     kind: 'local', repo: REPO, package: PKG, version: 'latest',
     notifyPort: '43117', hotkey: 'CommandOrControl+Shift+D',
-    pnpmPath: '', npmPath: '', extraPath: '', terminalShell: '', plugins: [], mcpEnabled: false, ...overrides,
+    pnpmPath: '', npmPath: '', extraPath: '', terminalShell: '', plugins: [], mcpEnabled: false,
+    petEnabled: false, petSlug: '', petScale: '1', ...overrides,
   }
 }
 
@@ -59,6 +60,7 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     clientLinkWarnings: vi.fn(() => ({})),
     openConfigFile: vi.fn(async () => ({ ok: true }) as const),
     readMcpServers: vi.fn(() => [] as never[]),
+    listPets: vi.fn(() => []),
     writeMcpServers: vi.fn(),
     openMcpConfigFile: vi.fn(async () => ({ ok: true }) as const),
     readWorkspaces: vi.fn(() => []),
@@ -306,6 +308,7 @@ describe('save', () => {
       notifyPort: 43117,
       hotkey: 'CommandOrControl+Shift+D',
       plugins: [],
+      pet: { enabled: false, slug: '', scale: 1 },
     })
     expect(d.apply).toHaveBeenCalledWith(STORED, expect.objectContaining({ notifyPort: 43117 }))
   })

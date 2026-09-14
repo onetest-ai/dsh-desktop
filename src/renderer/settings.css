@@ -409,6 +409,7 @@ select option:disabled {
 
 input[type='text']:focus-visible,
 input[type='radio']:focus-visible,
+input[type='range']:focus-visible,
 select:focus-visible,
 button:focus-visible,
 summary:focus-visible {
@@ -419,6 +420,13 @@ summary:focus-visible {
 input[type='radio'] {
   accent-color: var(--accent);
   margin: 0;
+}
+
+/* The scale slider on the Pet tab. `accent-color` is enough to theme the
+   track/thumb without a `::-webkit-slider-thumb`/`::-moz-range-thumb` pair —
+   both engines already read it for a native range input. */
+input[type='range'] {
+  accent-color: var(--accent);
 }
 
 .row {
