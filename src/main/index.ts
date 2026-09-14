@@ -49,7 +49,7 @@ import { composePath, dshWebCommand, resolveBinary, startServer, type ServerHand
 import { createSettingsHandlers } from './settings-ipc'
 import { settingsContents, openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
-import { createTray, type TrayController } from './tray'
+import { createTray, type TrayActions, type TrayController } from './tray'
 import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, createWindow, installMenu, registerPaneScheme, servePane, showError, type MainWindow,
   DEFAULT_TERMINAL_HEIGHT,
   DEFAULT_TERMINAL_WIDTH,
@@ -3491,13 +3491,39 @@ if (!app.requestSingleInstanceLock()) {
       window = undefined
       views = undefined
     })
-    tray = createTray({
+    // Mutated in place (not re-created) so `tray.refresh()` can re-render
+    // against fresh values without a new `createTray` closure per change.
+    const trayActions: TrayActions = {
       toggleWindow,
       restart: () => void restartOnce(),
       openSettings: showSettings,
       quit: () => app.quit(),
       restartToInstall: () => appUpdater?.quitAndInstall(),
-    })
+      petEnabled: currentConfig()?.pet?.enabled === true,
+      pets: listInstalledPets(),
+      activeSlug: currentConfig()?.pet?.slug ?? listInstalledPets()[0]?.slug ?? '',
+      onTogglePet: () => {
+        const live = currentConfig()
+        const next = !(live?.pet?.enabled === true)
+        const slug = live?.pet?.slug ?? listInstalledPets()[0]?.slug ?? ''
+        savePet({ enabled: next, slug, scale: live?.pet?.scale ?? 1, x: live?.pet?.x, y: live?.pet?.y })
+        syncPet()
+        trayActions.petEnabled = next
+        trayActions.activeSlug = slug
+        trayActions.pets = listInstalledPets()
+        tray?.refresh()
+      },
+      onPickPet: (slug: string) => {
+        const live = currentConfig()
+        savePet({ enabled: true, slug, scale: live?.pet?.scale ?? 1, x: live?.pet?.x, y: live?.pet?.y })
+        syncPet()
+        trayActions.petEnabled = true
+        trayActions.activeSlug = slug
+        trayActions.pets = listInstalledPets()
+        tray?.refresh()
+      },
+    }
+    tray = createTray(trayActions)
     const hotkey = safeHotkey()
     if (hotkey !== undefined && !globalShortcut.register(hotkey, toggleWindow)) {
       console.warn(`dsh-desktop: the hotkey ${hotkey} could not be registered; another app already owns it.`)

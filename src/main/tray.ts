@@ -10,6 +10,16 @@ export interface TrayActions {
   quit(): void
   /** Quit and install a downloaded APP update (distinct from the harness update). */
   restartToInstall(): void
+  /** Whether the desktop pet is currently shown, for the "Show desktop pet" checkbox. */
+  petEnabled: boolean
+  /** Installed pets, for the "Pet" submenu; empty disables the submenu. */
+  pets: { slug: string; name: string }[]
+  /** The configured pet's slug, for the radio-checked row in the "Pet" submenu. */
+  activeSlug: string
+  /** Flip the pet on/off. */
+  onTogglePet(): void
+  /** Switch the active pet to `slug`, enabling the pet if it was off. */
+  onPickPet(slug: string): void
 }
 
 /** Live handle on the tray icon. */
@@ -39,6 +49,13 @@ export interface TrayController {
    * @param version - the version downloaded, or undefined to drop the row.
    */
   setAppUpdate(version: string | undefined): void
+  /**
+   * Re-render the menu against the current `actions` (the pet fields are
+   * plain data on it, mutated in place by the caller rather than pushed
+   * through a setter — this just replays the same render `setStatus` and the
+   * update setters already use).
+   */
+  refresh(): void
   destroy(): void
 }
 
@@ -98,6 +115,23 @@ export function createTray(actions: TrayActions): TrayController {
         { type: 'separator' },
         { label: 'Show / Hide', click: () => actions.toggleWindow() },
         { label: 'Restart harness', click: () => actions.restart() },
+        { type: 'separator' },
+        {
+          label: 'Show desktop pet',
+          type: 'checkbox',
+          checked: actions.petEnabled,
+          click: () => actions.onTogglePet(),
+        },
+        {
+          label: 'Pet',
+          enabled: actions.pets.length > 0,
+          submenu: actions.pets.map((p) => ({
+            label: p.name,
+            type: 'radio',
+            checked: p.slug === actions.activeSlug,
+            click: () => actions.onPickPet(p.slug),
+          })),
+        },
         { label: 'Settings…', click: () => actions.openSettings() },
         // Only when there is one: an item saying nothing is available is a
         // line the user reads every time to learn nothing.
@@ -128,6 +162,7 @@ export function createTray(actions: TrayActions): TrayController {
       appUpdate = version
       render(current.status, current.note)
     },
+    refresh: () => render(current.status, current.note),
     destroy: () => tray.destroy(),
   }
 }
