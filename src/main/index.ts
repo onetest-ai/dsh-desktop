@@ -23,7 +23,7 @@ import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-
 import { portIsFree, startNotifyListener, type HookKind, type NotifyServer } from './notify'
 import { createPetState, type PetStateMachine } from './pet-state'
 import { listInstalledPets, loadPetSprite } from './pet-catalog'
-import { createPetWindow } from './pet-window'
+import { createPetWindow, petWindowSize } from './pet-window'
 import { openConfigFile } from './open-config-file'
 import {
   bundlePatchDeclaration,
@@ -2730,6 +2730,15 @@ function syncPet(): void {
       savePet({ ...live, x, y })
     })
   } else {
+    // A scale-only change (no slug/enable change) reuses this same window
+    // rather than recreating it, so its content size — fixed at creation
+    // time by `createPetWindow`'s own `petWindowSize(scale)` — has to be
+    // resized here too, or a larger sprite the renderer now draws clips
+    // against the old bounds instead of growing the window to fit it.
+    if (!petWindow.isDestroyed()) {
+      const size = petWindowSize(pet.scale)
+      petWindow.setContentSize(size.width, size.height)
+    }
     petWindow.webContents.send('pet:sprite', loadPetSprite(meta), pet.scale)
     petState?.setEnabled(true)
   }
