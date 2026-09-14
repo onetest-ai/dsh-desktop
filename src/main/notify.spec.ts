@@ -1,6 +1,6 @@
 import { connect, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import { startNotifyListener, type NotifyServer } from './notify'
+import { startNotifyListener, type HookKind, type NotifyServer } from './notify'
 
 let server: NotifyServer | undefined
 let socket: Socket | undefined
@@ -14,19 +14,33 @@ afterEach(async () => {
 
 describe('startNotifyListener', () => {
   it('invokes the callback when the hook posts', async () => {
-    let fired = 0
-    server = await startNotifyListener(0, () => { fired += 1 })
+    const seen: HookKind[] = []
+    server = await startNotifyListener(0, (kind) => { seen.push(kind) })
     const response = await fetch(`http://127.0.0.1:${server.port}/turn-end`, { method: 'POST' })
     expect(response.status).toBe(204)
-    expect(fired).toBe(1)
+    expect(seen).toEqual(['turn-end'])
   })
 
   it('ignores unrelated paths', async () => {
-    let fired = 0
-    server = await startNotifyListener(0, () => { fired += 1 })
+    const seen: HookKind[] = []
+    server = await startNotifyListener(0, (kind) => { seen.push(kind) })
     const response = await fetch(`http://127.0.0.1:${server.port}/nope`, { method: 'POST' })
     expect(response.status).toBe(404)
-    expect(fired).toBe(0)
+    expect(seen).toEqual([])
+  })
+
+  it('dispatches each hook route to onHook', async () => {
+    const seen: string[] = []
+    server = await startNotifyListener(0, (kind) => seen.push(kind))
+    const post = (path: string) =>
+      fetch(`http://127.0.0.1:${server?.port}${path}`, { method: 'POST' }).then((r) => r.status)
+    expect(await post('/turn-end')).toBe(204)
+    expect(await post('/hook/prompt')).toBe(204)
+    expect(await post('/hook/tool')).toBe(204)
+    expect(await post('/hook/notify')).toBe(204)
+    expect(await post('/nope')).toBe(404)
+    await server.close()
+    expect(seen).toEqual(['turn-end', 'prompt', 'tool', 'notify'])
   })
 
   it('rejects when the port is already taken', async () => {
@@ -39,7 +53,7 @@ describe('startNotifyListener', () => {
     // that connects, sends headers, then stalls (a dropped connection, a
     // killed process) — leaves the socket "in use" from Node's own
     // perspective even though the handler already ran and responded: the
-    // response is written and `onTurnEnd` fires, but nothing ever signals
+    // response is written and `onHook` fires, but nothing ever signals
     // the request itself as finished. Node's `http.Server.close()` invokes
     // its callback only once every accepted connection has ended, so without
     // `close()`'s own force-close bound this hangs forever instead of
