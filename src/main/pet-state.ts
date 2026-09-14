@@ -1,9 +1,17 @@
 import type { HookKind } from './notify'
 
-export type PetDriveState = 'idle' | 'running' | 'waiting' | 'wave'
+/**
+ * 'idle' | 'running' | 'waiting' | 'wave' are the v1 set driven by `onHook`.
+ * 'jumping' | 'failed' | 'review' are richer states the hook-script templater
+ * (A7) emits over `onEvent` once a task's outcome is known; the state machine
+ * doesn't interpret them, it just carries and dedupes whatever it's given.
+ */
+export type PetDriveState = 'idle' | 'running' | 'waiting' | 'wave' | 'jumping' | 'failed' | 'review'
 export interface PetSnapshot {
   state: PetDriveState
   badge: boolean
+  /** Bubble copy for the pet window, e.g. "Reading auth.ts" or "Done." Absent hides the bubble. */
+  text?: string
 }
 export interface PetStateDeps {
   emit: (snap: PetSnapshot) => void
@@ -14,6 +22,13 @@ export interface PetStateDeps {
 }
 export interface PetStateMachine {
   onHook: (kind: HookKind) => void
+  /**
+   * The richer path: a templated hook event carries its own state and bubble
+   * text directly, plus an optional auto-revert `duration` (ms) — the same
+   * idea as the wave timer, generalized so a caller doesn't have to know
+   * WAVE_MS is specific to waving.
+   */
+  onEvent: (e: { state: PetDriveState; text?: string; duration?: number }) => void
   setEnabled: (on: boolean) => void
   clearBadge: () => void
   dispose: () => void
@@ -38,7 +53,11 @@ export function createPetState(deps: PetStateDeps): PetStateMachine {
 
   let enabled = false
   let state: PetDriveState = 'idle'
+  let text: string | undefined
   let badge = false
+  // Named for its v1 origin (the wave->idle timer) but now doubles as the
+  // generic auto-revert timer for any onEvent(duration) — there is only ever
+  // one pending revert at a time, so one handle covers both.
   let waveTimer: ReturnType<typeof setTimeout> | undefined
   let last: PetSnapshot | undefined
 
@@ -51,13 +70,14 @@ export function createPetState(deps: PetStateDeps): PetStateMachine {
 
   const push = (): void => {
     if (!enabled) return
-    if (last !== undefined && last.state === state && last.badge === badge) return
-    last = { state, badge }
+    if (last !== undefined && last.state === state && last.badge === badge && last.text === text) return
+    last = { state, badge, text }
     deps.emit(last)
   }
 
-  const set = (next: PetDriveState): void => {
+  const set = (next: PetDriveState, nextText?: string): void => {
     state = next
+    text = nextText
     push()
   }
 
@@ -83,6 +103,16 @@ export function createPetState(deps: PetStateDeps): PetStateMachine {
           break
       }
     },
+    onEvent(e): void {
+      clearWave()
+      set(e.state, e.text)
+      if (e.duration !== undefined && e.duration > 0) {
+        waveTimer = schedule(() => {
+          waveTimer = undefined
+          set('idle')
+        }, e.duration)
+      }
+    },
     setEnabled(on: boolean): void {
       enabled = on
       if (on) {
@@ -94,6 +124,7 @@ export function createPetState(deps: PetStateDeps): PetStateMachine {
         // idle rather than replaying a stale 'wave' with no timer left to
         // bring it back down.
         state = 'idle'
+        text = undefined
       }
     },
     clearBadge(): void {

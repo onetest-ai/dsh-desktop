@@ -75,4 +75,46 @@ describe('pet-state', () => {
     vi.advanceTimersByTime(WAVE_MS)
     expect(emitted.at(-1)).toEqual({ state: 'idle', badge: false })
   })
+
+  it('onEvent carries bubble text', () => {
+    const { m, emitted } = make()
+    m.onEvent({ state: 'running', text: 'Reading x' })
+    expect(emitted.at(-1)).toEqual({ state: 'running', badge: false, text: 'Reading x' })
+  })
+
+  it('onEvent does not re-emit an identical consecutive state+text', () => {
+    const { m, emitted } = make()
+    m.onEvent({ state: 'running', text: 'Reading x' })
+    m.onEvent({ state: 'running', text: 'Reading x' })
+    expect(emitted.filter((e) => e.state === 'running')).toHaveLength(1)
+  })
+
+  it('onEvent re-emits when only the text changes', () => {
+    const { m, emitted } = make()
+    m.onEvent({ state: 'running', text: 'Reading x' })
+    m.onEvent({ state: 'running', text: 'Reading y' })
+    expect(emitted.map((e) => e.text)).toEqual([undefined, 'Reading x', 'Reading y'])
+  })
+
+  it('onEvent with a duration auto-reverts to idle with no text', () => {
+    const { m, emitted } = make()
+    m.onEvent({ state: 'running', text: 'Reading x', duration: 500 })
+    vi.advanceTimersByTime(500)
+    expect(emitted.at(-1)).toEqual({ state: 'idle', badge: false, text: undefined })
+  })
+
+  it('onEvent with no duration does not auto-revert', () => {
+    const { m, emitted } = make()
+    m.onEvent({ state: 'waiting', text: 'Stuck' })
+    vi.advanceTimersByTime(WAVE_MS * 10)
+    expect(emitted.at(-1)).toEqual({ state: 'waiting', badge: false, text: 'Stuck' })
+  })
+
+  it('a later onEvent cancels a pending duration revert', () => {
+    const { m, emitted } = make()
+    m.onEvent({ state: 'running', text: 'Reading x', duration: 500 })
+    m.onEvent({ state: 'waiting', text: 'Blocked' })
+    vi.advanceTimersByTime(500)
+    expect(emitted.at(-1)).toEqual({ state: 'waiting', badge: false, text: 'Blocked' })
+  })
 })
