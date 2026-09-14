@@ -477,7 +477,7 @@ describe('save', () => {
       expect(installPlugin).toHaveBeenCalledWith(DECK, '0.2.1', undefined, undefined, expect.any(Function))
     })
 
-    it('adds and removes entries, round-tripping through config', async () => {
+    it('adds and removes entries, round-tripping through config, and never persists the bridge', async () => {
       const installPlugin = vi.fn(async (_spec: string, priorVersion: string | undefined) => ({ version: priorVersion ?? '1.0.0' }))
       const d = deps({
         installPlugin,
@@ -487,14 +487,37 @@ describe('save', () => {
         }),
       })
 
-      // The saved form keeps the bridge, drops the deck, and adds a third entry.
+      // The saved form types the bridge explicitly, drops the deck, and adds
+      // a third entry — but the bridge is app-managed, so it never lands in
+      // the persisted config regardless of what the form submitted (see
+      // `installAndApply`): only the deck's replacement survives the round trip.
       await createSettingsHandlers(d).save(form({ plugins: rows(`${HOOKS_PACKAGE}\n@onetest/other`) }))
 
       expect(d.writeConfig).toHaveBeenCalledWith(
         expect.objectContaining({
-          plugins: [{ spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' }, { spec: '@onetest/other', version: '1.0.0' }],
+          plugins: [{ spec: '@onetest/other', version: '1.0.0' }],
         }),
       )
+    })
+
+    it('never persists the bridge into config.plugins, even when a prior save had left a stale one on disk', async () => {
+      // This is the exact regression: an earlier save had persisted the
+      // bridge pinned to a now-stale version. If that leaked back into
+      // `config.plugins` here, `withHookBridge` would see `hasBridge` true on
+      // the next boot and never correct it — see `withHookBridge`'s own doc.
+      const installPlugin = vi.fn(async (spec: string) => ({ version: spec.includes(HOOKS_PACKAGE) ? '0.1.1-rc.2' : '1.0.0' }))
+      const d = deps({
+        installPlugin,
+        readConfig: () => ({
+          configured: true,
+          config: { ...MANAGED_STORED, plugins: [{ spec: HOOKS_PACKAGE, version: '0.0.1-rc.5' }, { spec: DECK, version: '0.2.1' }] },
+        }),
+      })
+
+      await createSettingsHandlers(d).save(form({ kind: 'managed', version: '0.1.1-rc.2', plugins: rows(DECK) }))
+
+      const written = d.writeConfig.mock.calls.at(-1)?.[0] as DesktopConfig
+      expect(written.plugins?.some((entry) => entry.spec.includes(HOOKS_PACKAGE))).toBe(false)
     })
 
     it('keeps the previously resolved version and reports a warning when an install fails', async () => {

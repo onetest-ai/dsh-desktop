@@ -614,9 +614,14 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     // The bridge is installed unconditionally — a Settings save must not
     // leave it uninstalled just because the user's own list omits it (see
     // `withHookBridge`) — but that must not leak into what gets persisted:
-    // `resolved` below is written straight back to `config.plugins`, so a
-    // bridge entry absent from the user's own list is stripped back out
-    // before it reaches `resolvedConfig`, below.
+    // `resolved` below is written straight back to `config.plugins`, so the
+    // bridge entry is always stripped back out before it reaches
+    // `resolvedConfig`, below, regardless of whether the user's own list
+    // already carried one. It must never survive into the saved config: a
+    // resolved bridge entry looks exactly like a legitimately pinned one,
+    // so a persisted copy would defeat `withHookBridge`'s re-pin on the next
+    // boot the same way a hand-added one used to — the boot guarantee
+    // (`withHookBridge`) re-adds it, correctly pinned, every time.
     // Pin a newly added bridge to the managed harness's own resolved
     // version — see `withHookBridge`'s doc comment for why a bare spec is
     // wrong here.
@@ -627,10 +632,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       config.npmPath,
       onProgress ?? (() => {}),
     )
-    const userHadBridge = (config.plugins ?? []).some((entry) => parseSpec(entry.spec).package === HOOKS_PACKAGE)
-    const resolved = userHadBridge
-      ? installedResolved
-      : installedResolved.filter((entry) => parseSpec(entry.spec).package !== HOOKS_PACKAGE)
+    const resolved = installedResolved.filter((entry) => parseSpec(entry.spec).package !== HOOKS_PACKAGE)
     // The MCP client rides the same install path as a plugin entry — one
     // package, however many servers it backs — by being handed to
     // `installPlugins` as a one-entry list. It is installed only when a

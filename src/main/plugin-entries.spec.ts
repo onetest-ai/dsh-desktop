@@ -76,9 +76,26 @@ describe('withHookBridge', () => {
     ])
   })
 
-  it('leaves a list that already carries the bridge unchanged, by any spec form, version ignored', () => {
+  it('re-pins a stale bridge entry (version field form) to the current harness version', () => {
+    const stale = [{ spec: PKG }, { spec: HOOKS_PACKAGE, version: '0.0.1-rc.5' }]
+    expect(withHookBridge(stale, '0.1.5-rc.1')).toEqual([
+      { spec: `${HOOKS_PACKAGE}@0.1.5-rc.1`, version: '0.1.5-rc.1' },
+      { spec: PKG },
+    ])
+  })
+
+  it('re-pins a stale bridge entry (pinned-spec form) to the current harness version', () => {
+    const stale = [{ spec: PKG }, { spec: `${HOOKS_PACKAGE}@0.0.1-rc.5` }]
+    expect(withHookBridge(stale, '0.1.5-rc.1')).toEqual([
+      { spec: `${HOOKS_PACKAGE}@0.1.5-rc.1`, version: '0.1.5-rc.1' },
+      { spec: PKG },
+    ])
+  })
+
+  it('leaves an existing bridge entry untouched when no harness version is known', () => {
     const pinned = [{ spec: PKG }, { spec: `${HOOKS_PACKAGE}@1.2.3` }]
-    expect(withHookBridge(pinned, '0.1.5-rc.1')).toEqual(pinned)
+    expect(withHookBridge(pinned)).toEqual(pinned)
+    expect(withHookBridge(pinned, undefined)).toEqual(pinned)
   })
 
   it('never duplicates the bridge', () => {
