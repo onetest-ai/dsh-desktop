@@ -218,12 +218,17 @@ function openCompose(): void {
   if (rich) populateChip()
   composeChipWrap.hidden = !rich
   composePanel.hidden = false
+  // The panel takes the controls row's own slot rather than growing past
+  // it — see the `body.composing #pet-controls` rule in pet.html — so the
+  // sprite above never shifts when the panel opens or closes.
+  document.body.classList.add('composing')
   composeText.focus()
 }
 
 function closeCompose(): void {
   composeText.value = ''
   composePanel.hidden = true
+  document.body.classList.remove('composing')
   window.pet.setComposeOpen(false)
 }
 

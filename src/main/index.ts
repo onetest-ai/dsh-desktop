@@ -23,7 +23,7 @@ import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-
 import { portIsFree, startNotifyListener, type HookEvent, type HookKind, type NotifyServer } from './notify'
 import { createPetState, type PetStateMachine, type PetDriveState } from './pet-state'
 import { listInstalledPets, loadPetSprite } from './pet-catalog'
-import { createPetWindow, petComposePanelSize, petWindowSize } from './pet-window'
+import { createPetWindow, petComposePanelSize, petWindowSize, resizePetWindow } from './pet-window'
 import { openConfigFile } from './open-config-file'
 import {
   bundlePatchDeclaration,
@@ -2839,8 +2839,7 @@ function syncPet(): void {
     // resized here too, or a larger sprite the renderer now draws clips
     // against the old bounds instead of growing the window to fit it.
     if (!petWindow.isDestroyed()) {
-      const size = petWindowSize(pet.scale)
-      petWindow.setContentSize(size.width, size.height)
+      resizePetWindow(petWindow, petWindowSize(pet.scale))
     }
     try {
       petWindow.webContents.send('pet:sprite', loadPetSprite(meta), pet.scale)
@@ -3177,19 +3176,22 @@ if (!app.requestSingleInstanceLock()) {
       if (petWindow === undefined || petWindow.isDestroyed()) return
       petWindow.webContents.send('pet:composer-options', opts as ComposerOptions)
     })
-    // The rich panel needs more room above the sprite than the resting
-    // bubble band; the plain fallback input does not. Rather than have the
-    // renderer poke at window bounds it cannot see, it just says when the
-    // panel opens/closes, and this resizes the (fixed-size, `resizable:
-    // false`) frameless window to `petComposePanelSize` and back to
-    // `petWindowSize` — the same content-size dance `syncPet` already does
-    // for a scale change, just transient instead of persisted.
+    // The compose panel replaces the controls row in place rather than
+    // growing past it (see `pet.html`'s `#pet-chrome`), and the input wants
+    // more width than the resting controls row's floor besides. Rather than
+    // have the renderer poke at window bounds it cannot see, it just says
+    // when the panel opens/closes, and this resizes the (fixed-size,
+    // `resizable: false`) frameless window to `petComposePanelSize` and back
+    // to `petWindowSize` — the same resize `syncPet` already does for a
+    // scale change, just transient instead of persisted. `resizePetWindow`
+    // keeps the window's current top-left corner fixed, so the sprite above
+    // the panel never shifts — only the window grows down/right and shrinks
+    // back on close.
     ipcMain.on('pet:compose-open', (_event, open: unknown) => {
       if (petWindow === undefined || petWindow.isDestroyed()) return
       const pet = currentConfig()?.pet
       if (pet === undefined) return
-      const size = open === true ? petComposePanelSize(pet.scale) : petWindowSize(pet.scale)
-      petWindow.setContentSize(size.width, size.height)
+      resizePetWindow(petWindow, open === true ? petComposePanelSize(pet.scale) : petWindowSize(pet.scale))
     })
     // The board's own read, for both of its views. A full walk of
     // `.dsh/tasks/` every time and never a cache: the read is milliseconds,

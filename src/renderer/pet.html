@@ -74,6 +74,18 @@
     display: flex;
     gap: 10px;
   }
+  /* The compose panel occupies the controls row's own slot rather than
+     growing past it — pet.ts adds this class to `body` exactly when the
+     panel opens, and drops it on close. Hiding the row this way (rather
+     than the panel overlapping it) is what keeps the sprite from jumping:
+     `#pet-chrome`'s flex `gap` only applies between *visible* children, so
+     with the row gone there is nothing left pushing the panel down by an
+     extra row's worth of space, and `petComposePanelSize` in
+     `src/main/pet-window.ts` sizes the window on that same assumption —
+     mirror any change to the row/panel band here there too. */
+  body.composing #pet-controls {
+    display: none;
+  }
   /* One shared shape for the compose pencil and the notification bell: a
      circular token-surfaced button, always visible below the sprite.
      `currentColor` inside the glyph paths is the one place this repo's
@@ -126,6 +138,7 @@
   #compose-panel {
     box-sizing: border-box;
     width: 100%;
+    min-width: 360px;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -190,10 +203,18 @@
     border-radius: 16px;
     border: 1px solid var(--dsw-alias-border-l2);
     background: var(--dsw-alias-bg-layer-2);
-    color: var(--dsw-alias-label-primary-foreground);
+    /* `bg-layer-2` flips with the theme (white in light, near-black in
+       dark), so the text wants a label token that flips the same way it
+       does — `label-primary`, not `-foreground`. `-foreground` is meant for
+       text on a surface that stays fixed opposite the theme (like the
+       panel's own `tooltip-bg`, always a dark chip); paired with a surface
+       that flips instead, it put white-on-white text in the light theme and
+       near-black-on-near-black in the dark theme — invisible either way,
+       which is the contrast bug this fixes. */
+    color: var(--dsw-alias-label-primary);
   }
   #compose-text::placeholder {
-    color: var(--dsw-alias-label-tertiary);
+    color: var(--dsw-alias-label-secondary);
   }
   /* The one accent colour in this page: the send button, which carries the
      app's business-primary token rather than a neutral surface. */

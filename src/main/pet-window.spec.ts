@@ -13,16 +13,22 @@ describe('petWindowSize', () => {
 })
 
 describe('petComposePanelSize', () => {
-  it('floors width at the panel minimum and grows height by the panel band, at the default scale', () => {
-    expect(petComposePanelSize(1)).toEqual({ width: 300, height: 498 })
+  it('floors width at the panel minimum and swaps the controls-row band for the panel band, at the default scale', () => {
+    expect(petComposePanelSize(1)).toEqual({ width: 380, height: 444 })
   })
 
   it('floors width at the panel minimum when the sprite is scaled down small', () => {
-    expect(petComposePanelSize(0.5)).toEqual({ width: 300, height: 346 })
+    expect(petComposePanelSize(0.5)).toEqual({ width: 380, height: 292 })
   })
 
-  it('leaves width alone once the scaled sprite is already wider than the floor, still adding the panel band to height', () => {
-    const base = petWindowSize(2)
-    expect(petComposePanelSize(2)).toEqual({ width: base.width, height: base.height + 150 })
+  it('leaves width alone once the scaled sprite is already wider than the floor, replacing the controls-row band with the panel band in height', () => {
+    expect(petComposePanelSize(2)).toEqual({ width: 384, height: 748 })
+  })
+
+  it('replaces the controls row rather than adding to it: at every scale the panel height equals the sprite region plus the panel band alone', () => {
+    for (const scale of [0.5, 1, 1.5, 2]) {
+      const sprite = petWindowSize(scale).height - 44 // CONTROLS_ROW_H, mirrored by hand
+      expect(petComposePanelSize(scale).height).toBe(sprite + 140) // COMPOSE_PANEL_H, mirrored by hand
+    }
   })
 })

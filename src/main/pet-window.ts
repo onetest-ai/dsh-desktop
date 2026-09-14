@@ -40,27 +40,55 @@ export function petWindowSize(scale: number): { width: number; height: number } 
 }
 
 /**
- * Extra room the compose panel needs below the controls row: a project
- * chip, a big roomy input, and its send control — the Codex-style generous
- * box the design calls for, not the old cramped pill. Fixed in window
- * pixels rather than scaled with the sprite, for the same reason
+ * Room the compose panel needs in the controls row's own slot: a project
+ * chip, a big roomy input (min-height ~72px so there's room to type a
+ * multi-line message), and its send control — the Codex-style generous box
+ * the design calls for, not the old cramped pill. The panel *replaces* the
+ * controls row rather than adding beneath it (see `pet.html`'s `#pet-chrome`,
+ * where `#pet-controls` is hidden while composing), so this is the slot's
+ * whole height while composing, not an addition to `CONTROLS_ROW_H`. Fixed
+ * in window pixels rather than scaled with the sprite, for the same reason
  * `CONTROLS_ROW_H` is.
  */
-const COMPOSE_PANEL_H = 150
-/** Floor on content width so the roomy input has real width to grow into,
- * even when the sprite itself is scaled down small. */
-const COMPOSE_PANEL_MIN_W = 300
+const COMPOSE_PANEL_H = 140
+/**
+ * Floor on content width so the roomy input has real width to grow into —
+ * wide enough that the placeholder ("Type a message… Enter to send") fits
+ * on one line at the panel's own font/padding, even when the sprite itself
+ * is scaled down small.
+ */
+const COMPOSE_PANEL_MIN_W = 380
 
 /**
- * The pet window's content size while the compose panel is open: the idle
- * box, stretched downward to fit the panel below the controls row.
- * `syncPet`/the `pet:compose-open` handler swap between this and
- * `petWindowSize` as the panel opens and closes — the sprite's own region
- * at the top never moves, only the window grows taller beneath it.
+ * The pet window's content size while the compose panel is open: the same
+ * sprite region as `petWindowSize`, but with the bottom slot swapped from
+ * the controls row's height/width floor to the panel's own — it replaces
+ * that row in place rather than growing past it, so the sprite above never
+ * shifts. `syncPet`/the `pet:compose-open` handler swap between this and
+ * `petWindowSize` as the panel opens and closes; both callers resize via
+ * `setBounds` with the window's current `x`/`y` so the top-left corner the
+ * window was placed at stays put and only the bottom-right moves.
  */
 export function petComposePanelSize(scale: number): { width: number; height: number } {
-  const base = petWindowSize(scale)
-  return { width: Math.max(base.width, COMPOSE_PANEL_MIN_W), height: base.height + COMPOSE_PANEL_H }
+  const spriteW = Math.round(PET_FRAME.w * scale)
+  const spriteH = Math.round((PET_FRAME.h + BUBBLE_BAND) * scale)
+  return { width: Math.max(spriteW, COMPOSE_PANEL_MIN_W), height: spriteH + COMPOSE_PANEL_H }
+}
+
+/**
+ * Resizes the pet window to `size`, keeping the corner it was dragged to
+ * fixed — only the bottom-right edge moves. `setContentSize`/`setSize`
+ * alone are not safe for that here: this window is frameless and can sit
+ * anywhere on screen (including a bottom or right edge, where the default
+ * corner already leaves no room to grow outward without this), and nothing
+ * in Electron's contract promises they anchor the top-left rather than
+ * recentering or growing from the window's center on some platform. Reading
+ * the window's own current `x`/`y` and passing them back through
+ * `setBounds` pins the corner explicitly instead of trusting that anchor.
+ */
+export function resizePetWindow(win: BrowserWindow, size: { width: number; height: number }): void {
+  const { x, y } = win.getBounds()
+  win.setBounds({ x, y, width: size.width, height: size.height })
 }
 
 /**
