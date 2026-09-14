@@ -90,7 +90,7 @@ function drawBubble(): void {
   const tailX = FRAME_W / 2
 
   const bg = token('--dsw-alias-tooltip-bg')
-  const fg = token('--dsw-alias-label-primary-foreground')
+  const fg = token('--dsw-alias-label-primary')
   const border = token('--dsw-alias-border-l2')
 
   ctx.beginPath()
