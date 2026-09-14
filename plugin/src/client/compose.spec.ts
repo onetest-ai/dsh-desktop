@@ -30,7 +30,7 @@ function observable<T>(initial: T): {
 
 interface SessionSnapshot {
   current: string | undefined
-  byId: Record<string, { cwd?: string }>
+  byId: Record<string, { cwd?: string; agentPreset?: string }>
 }
 interface WorkspaceSnapshot {
   items: { workspaceId: string; path: string; title: string }[]
@@ -183,6 +183,84 @@ describe('reportComposerOptions', () => {
     stop()
     r.workspaces.list.set({ items: [] })
     expect(report).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports the current mode and model when the session carries them', () => {
+    const session = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      command: vi.fn().mockResolvedValue(undefined),
+      getSnapshot: () => ({ nodes: [{ requestConfig: { model: 'deepseek-v3' } }] }),
+      subscribe: () => () => {},
+    }
+    const sessions = {
+      list: observable<SessionSnapshot>({ current: 's1', byId: { s1: { cwd: '/p/demo', agentPreset: 'Standard mode' } } }),
+      binding: vi.fn(() => ({ session })),
+    }
+    const workspaces = { list: observable<WorkspaceSnapshot>(PROJECTS), startSession: vi.fn() }
+    const report = vi.fn()
+    reportComposerOptions(workspaces, sessions, report)
+    expect(report).toHaveBeenCalledWith(
+      expect.objectContaining({ currentMode: 'Standard mode', currentModel: 'deepseek-v3' }),
+    )
+  })
+
+  // reason: the model of the latest request is the truthful current one, and a
+  // finalized message reports it as provenance rather than a request config.
+  it('reads the model from the newest node’s provenance when there is no request config', () => {
+    const session = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      command: vi.fn().mockResolvedValue(undefined),
+      getSnapshot: () => ({
+        nodes: [{ provenance: { model: 'old-model' } }, { provenance: { model: 'deepseek-r1' } }],
+      }),
+      subscribe: () => () => {},
+    }
+    const sessions = {
+      list: observable<SessionSnapshot>({ current: 's1', byId: { s1: { cwd: '/p/demo' } } }),
+      binding: vi.fn(() => ({ session })),
+    }
+    const workspaces = { list: observable<WorkspaceSnapshot>(PROJECTS), startSession: vi.fn() }
+    const report = vi.fn()
+    reportComposerOptions(workspaces, sessions, report)
+    expect(report.mock.calls[0]?.[0]).toMatchObject({ currentModel: 'deepseek-r1' })
+  })
+
+  // reason: absent labels are omitted, not sent empty, so the app shows none.
+  it('omits mode and model when the session reports neither', () => {
+    const r = runtime()
+    const report = vi.fn()
+    reportComposerOptions(r.workspaces, r.sessions, report)
+    const opts = report.mock.calls[0]?.[0]
+    expect(opts?.currentMode).toBeUndefined()
+    expect(opts?.currentModel).toBeUndefined()
+  })
+
+  // reason: this feeds a label, never a decision — a missing session or a
+  // conversation face that throws must degrade to no label, not take the fiber down.
+  it('never throws when the current session or its snapshot is missing', () => {
+    const throwing = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      command: vi.fn().mockResolvedValue(undefined),
+      getSnapshot: () => {
+        throw new Error('not open yet')
+      },
+      subscribe: () => () => {},
+    }
+    const sessions = {
+      list: observable<SessionSnapshot>({ current: 's1', byId: { s1: { cwd: '/p/demo' } } }),
+      binding: vi.fn(() => ({ session: throwing })),
+    }
+    const workspaces = { list: observable<WorkspaceSnapshot>(PROJECTS), startSession: vi.fn() }
+    const report = vi.fn()
+    expect(() => reportComposerOptions(workspaces, sessions, report)).not.toThrow()
+    expect(report.mock.calls[0]?.[0]?.currentModel).toBeUndefined()
+
+    // And with no session bound at all.
+    const none = {
+      list: observable<SessionSnapshot>({ current: undefined, byId: {} }),
+      binding: vi.fn(() => undefined),
+    }
+    expect(() => reportComposerOptions(workspaces, none, vi.fn())).not.toThrow()
   })
 })
 

@@ -35,6 +35,15 @@ export interface ComposerOptions {
    * control rather than showing an empty one.
    */
   models?: { id: string; label: string; current: boolean }[]
+  /**
+   * The current session's mode (its agent preset, e.g. "Standard mode") and
+   * the model of its latest request — read-only labels the pet composer shows
+   * the way the harness bar does. There is no cross-process setter for either;
+   * these only display. Omitted when unknown (no open session, no preset, or a
+   * conversation that has not run a request yet) so the app shows no label.
+   */
+  currentMode?: string
+  currentModel?: string
 }
 
 /** What the desktop app's preload exposes on the harness page. */

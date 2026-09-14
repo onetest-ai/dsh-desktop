@@ -32,13 +32,43 @@ interface WorkspaceSnapshot {
 
 interface SessionSnapshot {
   current: string | undefined
-  byId: Record<string, { cwd?: string }>
+  /**
+   * `agentPreset` is the session's mode (e.g. "Standard mode") — the label the
+   * harness header shows for what this session actually runs; absent when the
+   * deployment composes no presets.
+   */
+  byId: Record<string, { cwd?: string; agentPreset?: string }>
 }
 
-/** The one session verb pair this needs: send a prompt, run a slash command. */
+/**
+ * One conversation node, narrowed to the model identity the pet's label reads.
+ * Only assistant nodes carry a request config / provenance; every other kind
+ * has neither. Read off an `unknown` node (the snapshot's `nodes` stays
+ * `unknown[]` here — a union of node kinds is not worth mirroring for one field).
+ */
+interface ModelBearingNode {
+  requestConfig?: { model?: unknown }
+  provenance?: { model?: unknown }
+}
+
+/** The current session's conversation, narrowed to the transcript this reads. */
+interface ConversationSnapshot {
+  nodes?: readonly unknown[]
+}
+
+/**
+ * The session face this touches: the two behaviour verbs (send a prompt, run a
+ * slash command) plus the conversation read side — `getSnapshot` to read the
+ * current model and `subscribe` to keep the reported label fresh as the turn
+ * records requests. The read side is optional: a just-started session's face
+ * may not carry it yet, and the callers guard for that. The real `SessionFace`
+ * always has both (it is an `ObservableSnapshot`).
+ */
 interface SessionHandle {
   prompt(content: { type: 'text'; text: string }[], mode: 'queue' | 'steer'): Promise<unknown>
   command(line: string): Promise<unknown>
+  getSnapshot?(): ConversationSnapshot
+  subscribe?(listener: () => void): () => void
 }
 
 interface Sessions {
@@ -67,6 +97,51 @@ function currentWorkspaceId(sessions: Sessions, workspaces: Workspaces): string 
 function currentSession(sessions: Sessions): SessionHandle | undefined {
   const { current } = sessions.list.getSnapshot()
   return current === undefined ? undefined : sessions.binding(current)?.session
+}
+
+/**
+ * The current session's mode — its agent preset — or undefined when there is
+ * no open session, the deployment composes no presets, or the label is blank.
+ * A read-only display value: nothing here can change the mode.
+ * @param list - the session list snapshot.
+ * @returns the mode label, or undefined.
+ */
+function currentMode(list: SessionSnapshot): string | undefined {
+  const { current } = list
+  if (current === undefined) return undefined
+  const preset = list.byId[current]?.agentPreset
+  return typeof preset === 'string' && preset.length > 0 ? preset : undefined
+}
+
+/**
+ * The model of the current session's latest request, or undefined.
+ *
+ * The conversation carries no top-level model; the truthful "current model" is
+ * the one the newest assistant node recorded (its request config, or the
+ * provenance a finalized message reports). Read defensively — a just-started
+ * session may have no face, and a fresh conversation no request yet — and omit
+ * on any doubt rather than throw: this feeds a label, never a decision.
+ * @param sessions - the session service.
+ * @returns the model id, or undefined.
+ */
+function currentModel(sessions: Sessions): string | undefined {
+  const { current } = sessions.list.getSnapshot()
+  if (current === undefined) return undefined
+  const session = sessions.binding(current)?.session
+  if (session === undefined || typeof session.getSnapshot !== 'function') return undefined
+  let nodes: readonly unknown[] | undefined
+  try {
+    nodes = session.getSnapshot()?.nodes
+  } catch {
+    return undefined
+  }
+  if (!Array.isArray(nodes)) return undefined
+  for (let i = nodes.length - 1; i >= 0; i -= 1) {
+    const node = nodes[i] as ModelBearingNode | null | undefined
+    const model = node?.requestConfig?.model ?? node?.provenance?.model
+    if (typeof model === 'string' && model.length > 0) return model
+  }
+  return undefined
 }
 
 /**
@@ -103,7 +178,8 @@ function waitForSession(sessions: Sessions, timeoutMs = 3000): Promise<SessionHa
 }
 
 /**
- * Build the projects (and, when reachable, models) the app may offer.
+ * Build the projects (and, when reachable, models) the app may offer, plus the
+ * current mode and model as read-only labels.
  *
  * The current project is the one whose directory is the open session's cwd —
  * the same derivation `followCurrentWorkspace` reports, read from the two
@@ -113,29 +189,47 @@ function waitForSession(sessions: Sessions, timeoutMs = 3000): Promise<SessionHa
  * *catalog* feed a plugin may read (only a per-session selection setter, which
  * the app drives blind via `/model`), so there is nothing truthful to list —
  * and the app hides the control on an absent field. Do not fabricate one.
+ *
+ * `currentMode` / `currentModel` are the harness bar's read-only labels for the
+ * open session: its agent preset, and the model of its latest request. The
+ * model is passed in rather than derived here because reading it needs the
+ * session binding, not just the list snapshot. Both are omitted when unknown.
  * @param workspaces - the workspace list snapshot.
- * @param sessions - the session list snapshot, for the current project.
+ * @param sessions - the session list snapshot, for the current project and mode.
+ * @param model - the current model label, when one is known.
  * @returns the options to report.
  */
-function composerOptions(workspaces: WorkspaceSnapshot, sessions: SessionSnapshot): ComposerOptions {
+function composerOptions(
+  workspaces: WorkspaceSnapshot,
+  sessions: SessionSnapshot,
+  model?: string,
+): ComposerOptions {
   const cwd = currentCwd(sessions)
-  return {
+  const mode = currentMode(sessions)
+  const opts: ComposerOptions = {
     workspaces: workspaces.items.map((row) => ({
       id: row.workspaceId,
       title: row.title,
       current: cwd !== undefined && row.path === cwd,
     })),
   }
+  if (mode !== undefined) opts.currentMode = mode
+  if (model !== undefined) opts.currentModel = model
+  return opts
 }
 
 /**
- * Report the composer options whenever the projects or the open session change.
+ * Report the composer options whenever the projects, the open session, or its
+ * conversation change.
  *
- * Both feeds matter: the workspace list changes when a project is added or
- * renamed, and the session list changes when the user switches which project's
- * session is on stage — either moves the `current` mark. Deduped on the
- * serialized options so the two feeds' constant churn (every token, every
- * title) does not redraw the app's dropdowns for no change.
+ * Three feeds matter: the workspace list changes when a project is added or
+ * renamed, the session list changes when the user switches which project's
+ * session is on stage (moving the `current` mark and the mode label), and the
+ * current session's conversation changes as its turn records a request (moving
+ * the model label). The conversation subscription follows the stage — it is
+ * swapped to the new session whenever `current` moves, and never more than one
+ * is held. Deduped on the serialized options so the feeds' constant churn
+ * (every token, every title) does not redraw the app's dropdowns for no change.
  * @param workspaces - the workspace service.
  * @param sessions - the session service.
  * @param report - called with each distinct set of options.
@@ -148,18 +242,45 @@ function reportComposerOptions(
 ): () => void {
   let last: string | undefined
   const check = (): void => {
-    const opts = composerOptions(workspaces.list.getSnapshot(), sessions.list.getSnapshot())
+    const opts = composerOptions(workspaces.list.getSnapshot(), sessions.list.getSnapshot(), currentModel(sessions))
     const serialized = JSON.stringify(opts)
     if (serialized === last) return
     last = serialized
     report(opts)
   }
+
+  // Keep exactly one subscription on the staged session's conversation, moved
+  // whenever the stage does. Guarded because a just-started session's face may
+  // not carry the read side yet; a missing subscribe simply means no model feed.
+  let watchedId: string | undefined
+  let stopConversation: (() => void) | undefined
+  const followConversation = (): void => {
+    const { current } = sessions.list.getSnapshot()
+    if (current === watchedId) return
+    watchedId = current
+    stopConversation?.()
+    stopConversation = undefined
+    const session = current === undefined ? undefined : sessions.binding(current)?.session
+    if (session !== undefined && typeof session.subscribe === 'function') {
+      try {
+        stopConversation = session.subscribe(check)
+      } catch {
+        stopConversation = undefined
+      }
+    }
+  }
+
+  followConversation()
   check()
   const stopWorkspaces = workspaces.list.subscribe(check)
-  const stopSessions = sessions.list.subscribe(check)
+  const stopSessions = sessions.list.subscribe(() => {
+    followConversation()
+    check()
+  })
   return () => {
     stopWorkspaces()
     stopSessions()
+    stopConversation?.()
   }
 }
 

@@ -27,6 +27,8 @@ interface ComposeRequest {
 interface ComposerOptions {
   workspaces: { id: string; title: string; current: boolean }[]
   models?: { id: string; label: string; current: boolean }[]
+  currentMode?: string
+  currentModel?: string
 }
 
 /**
