@@ -2477,11 +2477,17 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
     // bridge must still boot with hooks working (see `withHookBridge`'s own
     // doc comment), and `excludePackages`/the MCP-client carve-out are about
     // *other* packages entirely.
+    // A newly added bridge is pinned to the managed harness's own resolved
+    // version — it is released in lockstep with the harness, so a bare spec's
+    // `latest` dist-tag can lag it (see `withHookBridge`'s doc comment). A
+    // non-managed (local) harness has no such version to pin to.
+    const hookVersion = config.harness.kind === 'managed' ? config.harness.version : undefined
     const configured = withHookBridge(
       (config.plugins ?? []).filter(
         (entry) =>
           !excludePackages.has(parseSpec(entry.spec).package) && parseSpec(entry.spec).package !== MCP_CLIENT_PACKAGE,
       ),
+      hookVersion,
     )
     // The MCP client is not a plugin entry the user manages: it is one
     // package backing however many servers the MCP tab configures, so it is

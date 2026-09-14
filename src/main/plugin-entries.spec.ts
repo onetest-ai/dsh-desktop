@@ -59,18 +59,23 @@ describe('defaultPlugins', () => {
 })
 
 describe('withHookBridge', () => {
-  it('prepends the bridge to an empty list', () => {
+  it('prepends the bridge to an empty list, unpinned when no harness version is given', () => {
     expect(withHookBridge([])).toEqual([{ spec: HOOKS_PACKAGE }])
+    expect(withHookBridge([], undefined)).toEqual([{ spec: HOOKS_PACKAGE }])
+  })
+
+  it('pins a newly added bridge to the given harness version', () => {
+    expect(withHookBridge([], '0.1.5-rc.1')).toEqual([{ spec: HOOKS_PACKAGE, version: '0.1.5-rc.1' }])
   })
 
   it('prepends the bridge to a custom list that omits it', () => {
     const custom = [{ spec: PKG }]
-    expect(withHookBridge(custom)).toEqual([{ spec: HOOKS_PACKAGE }, { spec: PKG }])
+    expect(withHookBridge(custom, '0.1.5-rc.1')).toEqual([{ spec: HOOKS_PACKAGE, version: '0.1.5-rc.1' }, { spec: PKG }])
   })
 
-  it('leaves a list that already carries the bridge unchanged, by any spec form', () => {
+  it('leaves a list that already carries the bridge unchanged, by any spec form, version ignored', () => {
     const pinned = [{ spec: PKG }, { spec: `${HOOKS_PACKAGE}@1.2.3` }]
-    expect(withHookBridge(pinned)).toEqual(pinned)
+    expect(withHookBridge(pinned, '0.1.5-rc.1')).toEqual(pinned)
   })
 
   it('never duplicates the bridge', () => {

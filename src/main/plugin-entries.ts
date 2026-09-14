@@ -72,14 +72,30 @@ export function defaultPlugins(): PluginEntry[] {
  * must run it through here first — but the value saved back to the user's
  * own config must stay exactly what they wrote, so this is never called on
  * the save path itself.
+ *
+ * When it needs to add the bridge, it pins the install to `hookVersion` — the
+ * managed harness's own resolved version — rather than leaving the spec bare.
+ * The bridge is released in lockstep with `@deepseek-ai/dsh`, but a bare spec
+ * installs npm's `latest` dist-tag, which lags the harness (observed: harness
+ * `0.1.5-rc.1` against a bare-spec-installed bridge still on `0.0.1-rc.5`) and
+ * ships peer code for the old harness lineage — e.g. the old bridge's
+ * `[...agent.session.events]` throws `agent.session.events is not iterable`
+ * against the newer harness, breaking `ask_user_question`. A bridge entry the
+ * user already configured is left untouched: their explicit spec (bare or
+ * pinned) wins over this guess.
  * @param entries - the entries as configured (or about to be installed).
+ * @param hookVersion - the managed harness's resolved version to pin a newly
+ *   added bridge to; omitted (or empty) for a non-managed harness, where a
+ *   bare spec is the only option.
  * @returns `entries` unchanged if the bridge is already present by any spec
  *   form (bare, pinned, or otherwise); otherwise `entries` with the bridge
  *   prepended, matching `defaultPlugins`' own ordering.
  */
-export function withHookBridge(entries: PluginEntry[]): PluginEntry[] {
+export function withHookBridge(entries: PluginEntry[], hookVersion?: string): PluginEntry[] {
   const hasBridge = entries.some((entry) => parseSpec(entry.spec).package === HOOKS_PACKAGE)
-  return hasBridge ? entries : [{ spec: HOOKS_PACKAGE }, ...entries]
+  if (hasBridge) return entries
+  const pin = hookVersion !== undefined && hookVersion !== '' ? { version: hookVersion } : {}
+  return [{ spec: HOOKS_PACKAGE, ...pin }, ...entries]
 }
 
 /** A spec's package name and, when present, the pinned version it named. */

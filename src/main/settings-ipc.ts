@@ -617,8 +617,12 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     // `resolved` below is written straight back to `config.plugins`, so a
     // bridge entry absent from the user's own list is stripped back out
     // before it reaches `resolvedConfig`, below.
+    // Pin a newly added bridge to the managed harness's own resolved
+    // version — see `withHookBridge`'s doc comment for why a bare spec is
+    // wrong here.
+    const hookVersion = config.harness.kind === 'managed' ? config.harness.version : undefined
     const { resolved: installedResolved, warnings: pluginWarnings } = await installPlugins(
-      withHookBridge(config.plugins ?? []),
+      withHookBridge(config.plugins ?? [], hookVersion),
       priorPlugins,
       config.npmPath,
       onProgress ?? (() => {}),
