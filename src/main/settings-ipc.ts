@@ -7,7 +7,15 @@ import { parseMcpBlock, type McpServerEntry } from './mcp-config'
 import type { ProbeResult, ProbeTarget } from './mcp-probe'
 import type { McpPreset } from './mcp-presets'
 import { MCP_CLIENT_PACKAGE, mcpErrors } from './mcp-servers'
-import { entryKey, parsePluginSource, parseSpec, type InstalledPlugin, type PluginEntry } from './plugin-entries'
+import {
+  entryKey,
+  HOOKS_PACKAGE,
+  parsePluginSource,
+  parseSpec,
+  withHookBridge,
+  type InstalledPlugin,
+  type PluginEntry,
+} from './plugin-entries'
 import {
   formFor,
   parsePluginConfig,
@@ -167,6 +175,14 @@ export interface SettingsDeps {
    */
   readMcpPresets(): McpPreset[]
   restartHarness(): Promise<void>
+  /**
+   * The pets installed on this machine (from `~/.petdex/pets/`, via
+   * `pet-catalog.ts`'s `listInstalledPets`), for the Pet section's dropdown.
+   * Reduced to just `slug`/`name`: the rest of `PetMeta` (sprite paths,
+   * frame metadata) is what the pet window itself needs, not this form.
+   * @returns the installed pets, in the catalog's own order.
+   */
+  listPets(): { slug: string; name: string }[]
 }
 
 /** What the MCP tab needs beyond the servers themselves. */
@@ -361,6 +377,12 @@ export interface SettingsHandlers {
    * @returns the entries, in file order.
    */
   readMcpServers(): McpServerEntry[]
+  /**
+   * The pets installed on this machine, for the Settings window's Pet
+   * section dropdown.
+   * @returns the installed pets, in the catalog's own order.
+   */
+  listPets(): { slug: string; name: string }[]
   /**
    * Persist the configured servers and respawn the harness with them.
    * @param servers - the entries to write, in display order.
@@ -589,12 +611,28 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
   ): Promise<{ warnings: string[] }> {
     if (deps.isQuitting()) return { warnings: [] }
 
-    const { resolved, warnings: pluginWarnings } = await installPlugins(
-      config.plugins ?? [],
+    // The bridge is installed unconditionally — a Settings save must not
+    // leave it uninstalled just because the user's own list omits it (see
+    // `withHookBridge`) — but that must not leak into what gets persisted:
+    // `resolved` below is written straight back to `config.plugins`, so the
+    // bridge entry is always stripped back out before it reaches
+    // `resolvedConfig`, below, regardless of whether the user's own list
+    // already carried one. It must never survive into the saved config: a
+    // resolved bridge entry looks exactly like a legitimately pinned one,
+    // so a persisted copy would defeat `withHookBridge`'s re-pin on the next
+    // boot the same way a hand-added one used to — the boot guarantee
+    // (`withHookBridge`) re-adds it, correctly pinned, every time.
+    // Pin a newly added bridge to the managed harness's own resolved
+    // version — see `withHookBridge`'s doc comment for why a bare spec is
+    // wrong here.
+    const hookVersion = config.harness.kind === 'managed' ? config.harness.version : undefined
+    const { resolved: installedResolved, warnings: pluginWarnings } = await installPlugins(
+      withHookBridge(config.plugins ?? [], hookVersion),
       priorPlugins,
       config.npmPath,
       onProgress ?? (() => {}),
     )
+    const resolved = installedResolved.filter((entry) => parseSpec(entry.spec).package !== HOOKS_PACKAGE)
     // The MCP client rides the same install path as a plugin entry — one
     // package, however many servers it backs — by being handed to
     // `installPlugins` as a one-entry list. It is installed only when a
@@ -711,6 +749,19 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
     const priorClientVersion = previous?.mcpClientVersion
     if (config.mcpClientVersion === undefined && priorClientVersion !== undefined) {
       config = { ...config, mcpClientVersion: priorClientVersion }
+    }
+
+    // `pet.x`/`pet.y` are window state (the pet's last dragged-to position),
+    // not something this form ever shows or edits — carried forward the same
+    // way `mcpClientVersion` is, so a save from this window (which builds
+    // `config.pet` fresh from the enable/slug/scale fields only) does not
+    // snap a repositioned pet back to its default spot.
+    const priorPet = previous?.pet
+    if (config.pet !== undefined && priorPet !== undefined) {
+      config = {
+        ...config,
+        pet: { ...config.pet, ...(priorPet.x === undefined ? {} : { x: priorPet.x }), ...(priorPet.y === undefined ? {} : { y: priorPet.y }) },
+      }
     }
 
     deps.writeConfig(config)
@@ -976,6 +1027,7 @@ export function createSettingsHandlers(deps: SettingsDeps): SettingsHandlers {
       )
     },
     readMcpServers: () => deps.readMcpServers(),
+    listPets: () => deps.listPets(),
     saveMcpServers: (servers) => performSaveMcpServers(servers),
     pasteMcpBlock: (text) => performPasteMcpBlock(text),
     openMcpConfigFile: () => deps.openMcpConfigFile(),

@@ -91,6 +91,7 @@ export function openSettings(handlers: SettingsHandlers, onClosed: () => void, d
       handlers.prepareMcpServer(server, (line) => pushToSender(event.sender, 'settings:mcp-progress', line)),
     )
     ipcMain.handle('settings:read-mcp-servers', () => handlers.readMcpServers())
+    ipcMain.handle('settings:list-pets', () => handlers.listPets())
     ipcMain.handle('settings:save-mcp-servers', (_event, servers: McpServerEntry[]) => handlers.saveMcpServers(servers))
     ipcMain.handle('settings:paste-mcp-block', (_event, text: string) => handlers.pasteMcpBlock(text))
     ipcMain.handle('settings:open-mcp-config-file', () => handlers.openMcpConfigFile())

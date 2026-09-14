@@ -2,12 +2,17 @@ import type { Context } from '@deepseek-ai/cordis'
 // Pulls in the client runtime's `declare module`, which is what types
 // `ctx.sessions` — the session list, and which of them is open.
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
+import { startCompose } from './compose.ts'
 import { appendToComposer } from './composer.ts'
 import { followCurrentWorkspace } from './current-workspace.ts'
 import { desktop } from './desktop.ts'
 
-/** Required service: the session list, which knows what the user is looking at. */
-export const inject = ['sessions']
+/**
+ * Required services: the session list, which knows what the user is looking at,
+ * and the workspace list, which the compose bridge switches projects through
+ * and reports as the app's project dropdown.
+ */
+export const inject = ['sessions', 'workspaces']
 
 /**
  * Browser half: the two things that have to happen inside the harness page.
@@ -38,4 +43,9 @@ export function apply(ctx: Context): void {
       bridge.setWorkspace?.(cwd)
     }),
   )
+
+  // The mini-composer: run its built compose through the real session APIs,
+  // and report the projects it may offer. Both halves feature-detect the
+  // newer bridge calls, so an older desktop app leaves them dormant.
+  startCompose(ctx, bridge)
 }

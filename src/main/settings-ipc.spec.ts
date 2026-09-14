@@ -27,7 +27,8 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
   return {
     kind: 'local', repo: REPO, package: PKG, version: 'latest',
     notifyPort: '43117', hotkey: 'CommandOrControl+Shift+D',
-    pnpmPath: '', npmPath: '', extraPath: '', terminalShell: '', plugins: [], mcpEnabled: false, ...overrides,
+    pnpmPath: '', npmPath: '', extraPath: '', terminalShell: '', plugins: [], mcpEnabled: false,
+    petEnabled: false, petSlug: '', petScale: '1', ...overrides,
   }
 }
 
@@ -59,6 +60,7 @@ function deps(overrides: Partial<SettingsDeps> = {}): SettingsDeps {
     clientLinkWarnings: vi.fn(() => ({})),
     openConfigFile: vi.fn(async () => ({ ok: true }) as const),
     readMcpServers: vi.fn(() => [] as never[]),
+    listPets: vi.fn(() => []),
     writeMcpServers: vi.fn(),
     openMcpConfigFile: vi.fn(async () => ({ ok: true }) as const),
     readWorkspaces: vi.fn(() => []),
@@ -306,6 +308,7 @@ describe('save', () => {
       notifyPort: 43117,
       hotkey: 'CommandOrControl+Shift+D',
       plugins: [],
+      pet: { enabled: false, slug: '', scale: 1 },
     })
     expect(d.apply).toHaveBeenCalledWith(STORED, expect.objectContaining({ notifyPort: 43117 }))
   })
@@ -474,7 +477,7 @@ describe('save', () => {
       expect(installPlugin).toHaveBeenCalledWith(DECK, '0.2.1', undefined, undefined, expect.any(Function))
     })
 
-    it('adds and removes entries, round-tripping through config', async () => {
+    it('adds and removes entries, round-tripping through config, and never persists the bridge', async () => {
       const installPlugin = vi.fn(async (_spec: string, priorVersion: string | undefined) => ({ version: priorVersion ?? '1.0.0' }))
       const d = deps({
         installPlugin,
@@ -484,14 +487,37 @@ describe('save', () => {
         }),
       })
 
-      // The saved form keeps the bridge, drops the deck, and adds a third entry.
+      // The saved form types the bridge explicitly, drops the deck, and adds
+      // a third entry — but the bridge is app-managed, so it never lands in
+      // the persisted config regardless of what the form submitted (see
+      // `installAndApply`): only the deck's replacement survives the round trip.
       await createSettingsHandlers(d).save(form({ plugins: rows(`${HOOKS_PACKAGE}\n@onetest/other`) }))
 
       expect(d.writeConfig).toHaveBeenCalledWith(
         expect.objectContaining({
-          plugins: [{ spec: HOOKS_PACKAGE, version: '0.1.1-rc.2' }, { spec: '@onetest/other', version: '1.0.0' }],
+          plugins: [{ spec: '@onetest/other', version: '1.0.0' }],
         }),
       )
+    })
+
+    it('never persists the bridge into config.plugins, even when a prior save had left a stale one on disk', async () => {
+      // This is the exact regression: an earlier save had persisted the
+      // bridge pinned to a now-stale version. If that leaked back into
+      // `config.plugins` here, `withHookBridge` would see `hasBridge` true on
+      // the next boot and never correct it — see `withHookBridge`'s own doc.
+      const installPlugin = vi.fn(async (spec: string) => ({ version: spec.includes(HOOKS_PACKAGE) ? '0.1.1-rc.2' : '1.0.0' }))
+      const d = deps({
+        installPlugin,
+        readConfig: () => ({
+          configured: true,
+          config: { ...MANAGED_STORED, plugins: [{ spec: HOOKS_PACKAGE, version: '0.0.1-rc.5' }, { spec: DECK, version: '0.2.1' }] },
+        }),
+      })
+
+      await createSettingsHandlers(d).save(form({ kind: 'managed', version: '0.1.1-rc.2', plugins: rows(DECK) }))
+
+      const written = d.writeConfig.mock.calls.at(-1)?.[0] as DesktopConfig
+      expect(written.plugins?.some((entry) => entry.spec.includes(HOOKS_PACKAGE))).toBe(false)
     })
 
     it('keeps the previously resolved version and reports a warning when an install fails', async () => {
@@ -506,7 +532,10 @@ describe('save', () => {
       const result = await createSettingsHandlers(d).save(form({ plugins: rows(DECK) }))
 
       expect(result.ok).toBe(true)
-      if (result.ok) expect(result.warnings[0]).toMatch(/dsh-deck.*registry unreachable/)
+      // The hook bridge is installed too (see `withHookBridge`), and this
+      // mock fails every install, so its own warning lands alongside the
+      // deck's rather than at a fixed index.
+      if (result.ok) expect(result.warnings.some((warning) => /dsh-deck.*registry unreachable/.test(warning))).toBe(true)
       expect(d.writeConfig).toHaveBeenCalledWith(
         expect.objectContaining({ plugins: [{ spec: DECK, version: '0.2.1' }] }),
       )
@@ -642,11 +671,15 @@ describe('acceptPluginUpdate', () => {
 
   it('shares the install/apply queue with save: a save arriving mid-update still writes immediately', async () => {
     let release: (version: string) => void = () => {}
-    const installPlugin = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
-          release = resolve
-        }),
+    // `withHookBridge` means the concurrent `save` below installs the hook
+    // bridge too, alongside `DECK`'s own update — resolved immediately here
+    // since only `DECK`'s own install is what this test holds pending.
+    const installPlugin = vi.fn((spec: string) =>
+      spec === DECK
+        ? new Promise<string>((resolve) => {
+            release = resolve
+          })
+        : Promise.resolve('0.1.0'),
     )
     const apply = vi.fn(async () => [])
     const d = deps({ installPlugin, apply, readConfig: () => ({ configured: true, config: CONFIG_WITH_FLOATING_DECK }) })

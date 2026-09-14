@@ -14,7 +14,17 @@ vi.mock('electron', () => ({
 
 const { createTray } = await import('./tray')
 
-const actions = { toggleWindow: () => {}, restart: () => {}, openSettings: () => {}, quit: () => {} }
+const actions = {
+  toggleWindow: () => {},
+  restart: () => {},
+  openSettings: () => {},
+  quit: () => {},
+  petEnabled: false,
+  pets: [],
+  activeSlug: '',
+  onTogglePet: () => {},
+  onPickPet: () => {},
+}
 
 describe('tray note', () => {
   it('never renders a menu label long enough to distort the menu', () => {
@@ -45,7 +55,18 @@ describe('tray app update', () => {
   it('renders a Restart-to-install row when an app update is set, wired to restartToInstall', () => {
     menus.length = 0
     const restartToInstall = vi.fn()
-    const controller = createTray({ toggleWindow() {}, restart() {}, openSettings() {}, quit() {}, restartToInstall })
+    const controller = createTray({
+      toggleWindow() {},
+      restart() {},
+      openSettings() {},
+      quit() {},
+      restartToInstall,
+      petEnabled: false,
+      pets: [],
+      activeSlug: '',
+      onTogglePet() {},
+      onPickPet() {},
+    })
     controller.setAppUpdate('1.4.0')
     const template = lastBuiltTemplate()
     const row = template.find((item) => typeof item.label === 'string' && item.label.includes('Restart to install'))
@@ -64,11 +85,66 @@ describe('tray app update', () => {
       openSettings() {},
       quit() {},
       restartToInstall() {},
+      petEnabled: false,
+      pets: [],
+      activeSlug: '',
+      onTogglePet() {},
+      onPickPet() {},
     })
     controller.setAppUpdate('1.4.0')
     controller.setAppUpdate(undefined)
     const template = lastBuiltTemplate()
     expect(template.find((i) => String(i.label).includes('Restart to install'))).toBeUndefined()
+    controller.destroy()
+  })
+})
+
+describe('tray pet controls', () => {
+  it('renders a Show desktop pet checkbox wired to onTogglePet', () => {
+    menus.length = 0
+    const onTogglePet = vi.fn()
+    const controller = createTray({ ...actions, petEnabled: true, onTogglePet })
+    const template = menus[menus.length - 1] as { label?: string; type?: string; checked?: boolean; click?: () => void }[]
+    const row = template.find((item) => item.label === 'Show desktop pet')
+    expect(row?.type).toBe('checkbox')
+    expect(row?.checked).toBe(true)
+    row?.click?.()
+    expect(onTogglePet).toHaveBeenCalledTimes(1)
+    controller.destroy()
+  })
+
+  it('renders a Pet submenu of radio rows, checked for the active slug, disabled when there are no pets', () => {
+    menus.length = 0
+    const none = createTray({ ...actions, pets: [] })
+    const noneTemplate = menus[menus.length - 1] as { label?: string; enabled?: boolean }[]
+    expect(noneTemplate.find((item) => item.label === 'Pet')?.enabled).toBe(false)
+    none.destroy()
+
+    menus.length = 0
+    const onPickPet = vi.fn()
+    const controller = createTray({
+      ...actions,
+      pets: [
+        { slug: 'cat', name: 'Cat' },
+        { slug: 'dog', name: 'Dog' },
+      ],
+      activeSlug: 'dog',
+      onPickPet,
+    })
+    const template = menus[menus.length - 1] as {
+      label?: string
+      enabled?: boolean
+      submenu?: { label?: string; type?: string; checked?: boolean; click?: () => void }[]
+    }[]
+    const petRow = template.find((item) => item.label === 'Pet')
+    expect(petRow?.enabled).toBe(true)
+    const dog = petRow?.submenu?.find((item) => item.label === 'Dog')
+    const cat = petRow?.submenu?.find((item) => item.label === 'Cat')
+    expect(dog?.type).toBe('radio')
+    expect(dog?.checked).toBe(true)
+    expect(cat?.checked).toBe(false)
+    cat?.click?.()
+    expect(onPickPet).toHaveBeenCalledWith('cat')
     controller.destroy()
   })
 })

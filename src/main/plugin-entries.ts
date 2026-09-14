@@ -54,7 +54,71 @@ export interface InstalledPlugin {
 
 /** The plugin list a fresh, never-configured install starts from. */
 export function defaultPlugins(): PluginEntry[] {
-  return [{ spec: HOOKS_PACKAGE }, ...DEFAULT_PLUGIN_SPECS.map((spec) => ({ spec }))]
+  return withHookBridge(DEFAULT_PLUGIN_SPECS.map((spec) => ({ spec })))
+}
+
+/**
+ * Guarantee the Claude Code hook bridge is present in a set of plugin
+ * entries, prepending it when missing.
+ *
+ * The bridge is infrastructure this app's own features depend on — the
+ * desktop pet and turn-completion notifications both fire off the hooks it
+ * relays — not an ordinary plugin the user opted into. `defaultPlugins()`
+ * seeds it for a never-configured install, but a user who later hand-edits
+ * `desktop.json` (or types a custom list in Settings) can supply a
+ * `config.plugins` that omits it entirely; used as-is, that silently kills
+ * every hook-driven feature with no error anywhere. Every place that turns
+ * `config.plugins` into a *working* set (the boot overlay, the install call)
+ * must run it through here first — but the value saved back to the user's
+ * own config must stay exactly what they wrote, so this is never called on
+ * the save path itself.
+ *
+ * When `hookVersion` is known, this does more than add a missing bridge: it
+ * *re-pins* whatever bridge entry is already there, replacing it outright
+ * rather than trusting a persisted version. The bridge is app-owned
+ * infrastructure released in lockstep with `@deepseek-ai/dsh` — its correct
+ * version is always "whatever the harness currently resolved to", never a
+ * value read back from a previous save. A `config.plugins` entry can carry a
+ * stale pin (a prior save persisted the bridge at `0.0.1-rc.5`, then the
+ * managed harness moved on to `0.1.5-rc.1`) or a bare spec that resolved
+ * npm's `latest` — either way, leaving it alone would mean booting a bridge
+ * built for an older harness lineage, e.g. the old bridge's
+ * `[...agent.session.events]` throwing `agent.session.events is not
+ * iterable` against the newer harness and breaking `ask_user_question`. So
+ * every existing bridge entry (matched by package name, regardless of its
+ * own spec or version) is dropped and one freshly pinned entry is prepended
+ * in its place; every other entry keeps its relative order.
+ *
+ * When `hookVersion` is unknown (a non-managed/local harness has no
+ * "current" version to pin to), the old add-if-missing behavior applies
+ * instead: an entry already present is left completely untouched, bare spec
+ * and all, since there is nothing better to pin it to.
+ * @param entries - the entries as configured (or about to be installed).
+ * @param hookVersion - the managed harness's resolved version to pin the
+ *   bridge to; omitted (or empty) for a non-managed harness, where a bare
+ *   spec is the only option and an existing entry is left alone.
+ * @returns `entries` with exactly one bridge entry, pinned to `hookVersion`
+ *   when given (replacing any prior bridge entry) and prepended, matching
+ *   `defaultPlugins`' own ordering; when `hookVersion` is empty, `entries`
+ *   unchanged if a bridge is already present in any spec form, otherwise
+ *   `entries` with a bare bridge entry prepended.
+ */
+export function withHookBridge(entries: PluginEntry[], hookVersion?: string): PluginEntry[] {
+  const isBridge = (entry: PluginEntry) => parseSpec(entry.spec).package === HOOKS_PACKAGE
+  // The pin has to live in BOTH the spec string and the `version` field,
+  // because the two consumers read different places: `installPlugins` (a
+  // Settings save) installs from `entry.spec` — a bare spec would resolve
+  // npm's `latest` dist-tag, which is stale (0.0.1-rc.x) against a 0.1.x
+  // harness and ships a bridge that iterates a session shape the harness no
+  // longer has — while `pluginStatus` (the boot overlay) resolves the
+  // installed directory from `entry.version`. Set neither and the bridge
+  // silently mismatches the harness; set only one and either the install or
+  // the boot resolution falls back to the stale build.
+  if (hookVersion !== undefined && hookVersion !== '') {
+    return [{ spec: `${HOOKS_PACKAGE}@${hookVersion}`, version: hookVersion }, ...entries.filter((entry) => !isBridge(entry))]
+  }
+  if (entries.some(isBridge)) return entries
+  return [{ spec: HOOKS_PACKAGE }, ...entries]
 }
 
 /** A spec's package name and, when present, the pinned version it named. */

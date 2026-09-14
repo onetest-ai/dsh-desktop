@@ -1,4 +1,4 @@
-import { createServer, type Server } from 'node:http'
+import { createServer, type IncomingMessage, type Server } from 'node:http'
 
 /** The running notification endpoint. */
 export interface NotifyServer {
@@ -22,24 +22,133 @@ export interface NotifyServer {
  */
 const CLOSE_TIMEOUT_MS = 3000
 
+/** The harness hook a loopback ping reports; a later task maps each to a pet animation state. */
+export type HookKind = 'turn-end' | 'prompt' | 'tool' | 'notify'
+
 /**
- * Listen on loopback for turn-end pings from the harness Stop hook.
+ * One dispatch from the listener: a bare hook ping carries only its `kind`;
+ * `/pet/event` additionally carries the pet state and templated bubble text
+ * the harness hook script computed, when its body parsed as such.
+ */
+export interface HookEvent {
+  kind: HookKind | 'event'
+  state?: string
+  text?: string
+}
+
+/** Maps each bare-ping route this listener answers to the `HookKind` it dispatches. */
+const ROUTES: Record<string, HookKind> = {
+  '/turn-end': 'turn-end',
+  '/hook/prompt': 'prompt',
+  '/hook/tool': 'tool',
+  '/hook/notify': 'notify',
+}
+
+/** Upper bound on a `/pet/event` request body; anything beyond is discarded unread. */
+const MAX_EVENT_BODY_BYTES = 64 * 1024
+
+/**
+ * Read a bounded, best-effort JSON body off `request` and resolve the
+ * `{state, text}` it carries. Never rejects: a body over the cap, one that
+ * never parses as JSON, or one whose shape doesn't match just yields `{}` —
+ * this is a loopback ping from our own hook script, not a channel worth
+ * failing loudly over.
+ */
+function readEventBody(request: IncomingMessage): Promise<{ state?: string; text?: string }> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = []
+    let bytes = 0
+    let overflowed = false
+    const done = (result: { state?: string; text?: string }): void => {
+      request.removeAllListeners('data')
+      request.removeAllListeners('end')
+      request.removeAllListeners('error')
+      resolve(result)
+    }
+    request.on('data', (chunk: Buffer) => {
+      if (overflowed) return
+      bytes += chunk.length
+      if (bytes > MAX_EVENT_BODY_BYTES) {
+        // Over the cap: stop buffering and ignore the rest of the body, but
+        // keep draining it (rather than `destroy()`ing the request) so the
+        // socket stays intact for the 204 this same connection still owes —
+        // destroying it here would tear down the response along with it.
+        overflowed = true
+        chunks.length = 0
+        return
+      }
+      chunks.push(chunk)
+    })
+    request.on('end', () => {
+      if (overflowed) {
+        done({})
+        return
+      }
+      try {
+        const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        const state = typeof parsed === 'object' && parsed !== null && 'state' in parsed ? (parsed as { state: unknown }).state : undefined
+        const text = typeof parsed === 'object' && parsed !== null && 'text' in parsed ? (parsed as { text: unknown }).text : undefined
+        done({
+          state: typeof state === 'string' ? state : undefined,
+          text: typeof text === 'string' ? text : undefined,
+        })
+      } catch {
+        done({})
+      }
+    })
+    request.on('error', () => done({}))
+  })
+}
+
+/**
+ * Listen on loopback for hook pings from the harness: `/turn-end` (the Stop
+ * hook), `/hook/prompt` (a submitted prompt), `/hook/tool` (a tool call),
+ * `/hook/notify` (a harness notification), and `/pet/event` (the pet hook
+ * script's own POST, carrying `{state, text}` — the animation state and the
+ * already-templated bubble line to show).
  *
  * The port is the configured one rather than OS-assigned because the harness
- * reads its hook config once at load: the `curl` in the Stop hook command is
+ * reads its hook config once at load: the `curl` in each hook command is
  * generated with this port baked in (see `runtime-files`) and cannot discover
  * one chosen after the fact.
  * @param port - the configured port; 0 is used by tests for an ephemeral port.
- * @param onTurnEnd - invoked once per POST to `/turn-end`.
+ * @param onHook - invoked once per POST to a matched route, with the event it matched.
  * @returns the listening server.
  */
-export function startNotifyListener(port: number, onTurnEnd: () => void): Promise<NotifyServer> {
+export function startNotifyListener(port: number, onHook: (event: HookEvent) => void): Promise<NotifyServer> {
   return new Promise<NotifyServer>((resolve, reject) => {
     const server: Server = createServer((request, response) => {
-      if (request.method === 'POST' && request.url === '/turn-end') {
+      if (request.method === 'POST' && request.url === '/pet/event') {
+        readEventBody(request)
+          .then(({ state, text }) => {
+            // Write and end the reply before touching `onHook`: a caller-supplied
+            // hook that throws must never turn into a second `writeHead` on this
+            // same response (ERR_HTTP_HEADERS_SENT) — the 204 is this request's
+            // whole contract, and it is satisfied before anything else can fail.
+            response.writeHead(204).end()
+            try {
+              onHook({ kind: 'event', state, text })
+            } catch {
+              // onHook must never break the reply; the reply is already sent.
+            }
+          })
+          .catch(() => {
+            // readEventBody never rejects, but keep this belt-and-braces so a
+            // malformed request can never leave the connection hanging.
+            response.writeHead(204).end()
+            try {
+              onHook({ kind: 'event' })
+            } catch {
+              // onHook must never break the reply; the reply is already sent.
+            }
+          })
+        return
+      }
+      const kind = request.method === 'POST' && request.url !== undefined ? ROUTES[request.url] : undefined
+      if (kind !== undefined) {
         request.resume()
         response.writeHead(204).end()
-        onTurnEnd()
+        onHook({ kind })
         return
       }
       request.resume()

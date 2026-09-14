@@ -378,6 +378,27 @@ describe('writeConfig and a reader racing it', () => {
   })
 })
 
+describe('pet', () => {
+  it('round-trips the pet field', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-desktop-config-'))
+    const file = join(dir, 'desktop.json')
+    const config = {
+      harness: { kind: 'local' as const, repo: '/tmp/harness' },
+      notifyPort: 43117,
+      hotkey: 'CommandOrControl+Shift+D',
+      pet: { enabled: true, slug: 'boba', scale: 1.5, x: 40, y: 60 },
+    }
+    writeConfig(file, config)
+    expect(loadConfig(file)).toEqual({ configured: true, config })
+  })
+
+  it('treats a file with no pet field as pet-absent (not defaulted on)', () => {
+    const file = writeConfigFile(JSON.stringify({ harness: { kind: 'local', repo: '/tmp/harness' } }))
+    const result = loadConfig(file)
+    expect(result.configured && result.config.pet).toBeUndefined()
+  })
+})
+
 describe('terminalShell', () => {
   /**
    * Load a config with the given extra fields.

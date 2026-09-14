@@ -101,6 +101,14 @@ export interface DesktopConfig {
    * `sidebarRight` service — so only its UI is hidden, not the service.
    */
   showBuiltinRightSidebar?: boolean
+  /**
+   * The desktop pet: a floating, always-on-top animated companion that reacts
+   * to harness activity. Reuses the Petdex sprite format read from
+   * `~/.petdex/pets/`. Absent means never configured; `enabled` is opt-in, so a
+   * file predating this field shows no pet. `slug` is the chosen pet's directory
+   * name; `x`/`y` are the last window position (window state, like `pane`).
+   */
+  pet?: { enabled: boolean; slug: string; scale: number; x?: number; y?: number }
 }
 
 export const DEFAULT_NOTIFY_PORT = 43117
@@ -239,6 +247,7 @@ function parseConfig(filePath: string, raw: string): DesktopConfig {
     ...(typeof record.viewTools === 'boolean' ? { viewTools: record.viewTools } : {}),
     ...(typeof record.viewToolsPort === 'number' ? { viewToolsPort: record.viewToolsPort } : {}),
     ...(typeof record.showBuiltinRightSidebar === 'boolean' ? { showBuiltinRightSidebar: record.showBuiltinRightSidebar } : {}),
+    ...(record.pet === undefined ? {} : { pet: record.pet }),
   }
 }
 

@@ -58,6 +58,20 @@ export interface SettingsForm {
    * loaded (the chat UI needs its service); only its UI is hidden.
    */
   showBuiltinRightSidebar: boolean
+  /** Whether the floating desktop pet is shown. */
+  petEnabled: boolean
+  /**
+   * The chosen pet's directory (catalog) slug, or '' when none is installed
+   * or none is chosen yet. `''` with `petEnabled: true` is treated the same
+   * as disabled by `syncPet` in `index.ts` — there is nothing to show.
+   */
+  petSlug: string
+  /**
+   * The pet sprite's scale, as the range input's string value (e.g. `'1.2'`).
+   * A string like every other numeric field here (`notifyPort`), converted
+   * in `validateSettings`.
+   */
+  petScale: string
 }
 
 /** Per-field messages for a rejected form; absent keys validated cleanly. */
@@ -87,6 +101,12 @@ const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$
  * `managedDir` as a traversal or multi-segment string.
  */
 const VERSION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.+-]*$/
+
+/** The pet sprite scale range, matching the `<input type="range">`'s own `min`/`max` in settings.html. */
+const PET_SCALE_MIN = 0.5
+const PET_SCALE_MAX = 2.5
+/** Fallback scale for a value the slider could never have produced (absent field, non-numeric text). */
+const DEFAULT_PET_SCALE = 1.5
 
 /** Result of validating one plugin's config textarea. */
 export type PluginConfigValidation = { ok: true; config?: Record<string, unknown> } | { ok: false; message: string }
@@ -290,6 +310,17 @@ export function validateSettings(form: SettingsForm): ValidationResult {
   const npmPath = form.npmPath.trim()
   const extraPath = form.extraPath.trim()
   const terminalShell = form.terminalShell.trim()
+
+  // `x`/`y` are not part of this: they are window state (last dragged-to
+  // position), never shown by this form, and `settings-ipc.ts`'s
+  // `performSave` carries them forward from the previously stored config the
+  // same way it carries `mcpClientVersion` forward — a save from this window
+  // must not snap a repositioned pet back to a default spot.
+  const petScaleNumber = Number(form.petScale.trim())
+  const petScale = Number.isFinite(petScaleNumber)
+    ? Math.min(PET_SCALE_MAX, Math.max(PET_SCALE_MIN, petScaleNumber))
+    : DEFAULT_PET_SCALE
+
   return {
     ok: true,
     config: {
@@ -308,6 +339,11 @@ export function validateSettings(form: SettingsForm): ValidationResult {
       // Written only when enabled: absent means off (hidden), so a default
       // install carries no field for it.
       ...(form.showBuiltinRightSidebar === true ? { showBuiltinRightSidebar: true } : {}),
+      // Always written, unlike the switches above: unchecking "Enable desktop
+      // pet" is itself a save this window must persist (`enabled: false`),
+      // not just an absence — the tray's own `onTogglePet`/`onPickPet` always
+      // write a full pet block for the same reason.
+      pet: { enabled: form.petEnabled, slug: form.petSlug.trim(), scale: petScale },
       ...(pnpmPath === '' ? {} : { pnpmPath }),
       ...(npmPath === '' ? {} : { npmPath }),
       ...(extraPath === '' ? {} : { extraPath }),
@@ -344,12 +380,17 @@ export function formFor(result: ConfigResult): SettingsForm {
     // Off by default: the harness's own right sidebar duplicates this app's
     // right rail.
     showBuiltinRightSidebar: false,
+    // Off, with no pet chosen yet — the same "never configured" default
+    // `config.pet` being absent means in `syncPet` (`index.ts`).
+    petEnabled: false,
+    petSlug: '',
+    petScale: String(DEFAULT_PET_SCALE),
   }
   if (!result.configured) return base
 
   const {
     harness, notifyPort, hotkey, pnpmPath, npmPath, extraPath, terminalShell, plugins, mcpEnabled, viewTools,
-    showBuiltinRightSidebar,
+    showBuiltinRightSidebar, pet,
   } = result.config
   return {
     ...base,
@@ -369,5 +410,8 @@ export function formFor(result: ConfigResult): SettingsForm {
     mcpEnabled: mcpEnabled === true,
     viewTools: viewTools !== false,
     showBuiltinRightSidebar: showBuiltinRightSidebar === true,
+    petEnabled: pet?.enabled === true,
+    petSlug: pet?.slug ?? '',
+    petScale: pet === undefined ? String(DEFAULT_PET_SCALE) : String(pet.scale),
   }
 }

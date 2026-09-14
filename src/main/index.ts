@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeTheme, Notification, shell, utilityProcess } from 'electron'
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, watch, type FSWatcher } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { autoUpdater } from 'electron-updater'
 import { createAppUpdater, type AppUpdater } from './app-update'
@@ -20,7 +20,10 @@ import { repairPlugins } from './repair'
 import { closeStartup, pushFindings, pushPhase, pushProgress, showStartup } from './startup-window'
 import { loadPresets, shippedPresetsPath, userPresetsPath } from './mcp-presets'
 import { activeServers, MCP_CLIENT_PACKAGE, serverEnv, serverRows } from './mcp-servers'
-import { portIsFree, startNotifyListener, type NotifyServer } from './notify'
+import { portIsFree, startNotifyListener, type HookEvent, type HookKind, type NotifyServer } from './notify'
+import { createPetState, type PetStateMachine, type PetDriveState } from './pet-state'
+import { listInstalledPets, loadPetSprite } from './pet-catalog'
+import { createPetWindow, petComposePanelSize, petWindowSize, resizePetWindow } from './pet-window'
 import { openConfigFile } from './open-config-file'
 import {
   bundlePatchDeclaration,
@@ -32,6 +35,7 @@ import {
   pluginInstallMarker,
   pluginStatus,
   presetsDeclaration,
+  withHookBridge,
   type InstalledPlugin,
   type PluginEntry,
   type PluginStatus,
@@ -46,7 +50,7 @@ import { composePath, dshWebCommand, resolveBinary, startServer, type ServerHand
 import { createSettingsHandlers } from './settings-ipc'
 import { settingsContents, openSettings } from './settings-window'
 import { singleFlight } from './single-flight'
-import { createTray, type TrayController } from './tray'
+import { createTray, type TrayActions, type TrayController } from './tray'
 import { DEFAULT_EDITOR_WIDTH, DEFAULT_FILES_WIDTH, PANE_ORIGIN, applyLayout, createWindow, installMenu, registerPaneScheme, servePane, showError, type MainWindow,
   DEFAULT_TERMINAL_HEIGHT,
   DEFAULT_TERMINAL_WIDTH,
@@ -1415,6 +1419,9 @@ function pushTheme(): void {
     views.tasks.webContents,
     views.terminal.webContents,
     ...(settings === undefined ? [] : [settings]),
+    // The floating pet is a page of this app's own too; without this its body
+    // never gets `data-ds-dark-theme` and every token resolves to the light value.
+    ...(petWindow !== undefined && !petWindow.isDestroyed() ? [petWindow.webContents] : []),
   ]) {
     target.send('theme', dark)
   }
@@ -1540,7 +1547,41 @@ let windowHasContent = false
 let revealPending = false
 let quitting = false
 let tray: TrayController | undefined
+/**
+ * The mutable object `tray.refresh()` re-renders from — see `TrayActions`'s
+ * own comment on why it is mutated in place rather than recreated. Held at
+ * module scope (not just inside the boot flow that builds it) so a settings
+ * save's `applySettings` can update the pet fields it reads and then ask for
+ * a redraw, exactly like `onTogglePet`/`onPickPet` already do from the tray
+ * menu itself.
+ */
+let trayActions: TrayActions | undefined
 let notifier: NotifyServer | undefined
+/**
+ * Wire types for the pet's rich compose round trip: `pet:compose-rich` carries
+ * a `ComposeRequest` up from the pet, `harness:compose` carries the same
+ * shape down into the harness page, and `harness:composer-options` /
+ * `pet:composer-options` carry a `ComposerOptions` back the other way.
+ * Re-declared here rather than imported — this file compiles under
+ * `tsconfig.json`, which also reaches `src/preload/**`, but the preload and
+ * plugin sides declare their own copies too, since the plugin lives outside
+ * this compile entirely. Keep all copies identical by hand.
+ */
+interface ComposeRequest {
+  text: string
+  workspaceId?: string
+  model?: string
+  send: boolean
+}
+interface ComposerOptions {
+  workspaces: { id: string; title: string; current: boolean }[]
+  models?: { id: string; label: string; current: boolean }[]
+  currentMode?: string
+  currentModel?: string
+}
+/** The floating pet window, and the machine that drives its animation. */
+let petWindow: BrowserWindow | undefined
+let petState: PetStateMachine | undefined
 let appUpdater: AppUpdater | undefined
 let appUpdateTimer: ReturnType<typeof setInterval> | undefined
 let appUpdateNotified = false
@@ -1854,7 +1895,7 @@ export async function applySettings(previous: DesktopConfig | undefined, next: D
     notifier = undefined
     if (!quitting) {
       try {
-        const started = await startNotifyListener(next.notifyPort, onTurnEnd)
+        const started = await startNotifyListener(next.notifyPort, onHook)
         if (quitting) {
           // `will-quit` already closed whatever it knew about; this listener
           // was bound after that, so nothing else would ever close it.
@@ -1884,6 +1925,12 @@ export async function applySettings(previous: DesktopConfig | undefined, next: D
       }
     }
   }
+
+  // Idempotent (see `syncPet`'s own doc), so this runs on every save rather
+  // than only when `pet` looks changed: the window position `moved` listener
+  // and the tray menu can each have written `pet` since `previous` was last
+  // read, and diffing against a stale `previous` here would miss that.
+  if (!quitting) syncPetAndRefreshTray()
 
   return warnings
 }
@@ -1988,6 +2035,7 @@ const settingsHandlers = createSettingsHandlers({
   openProjectMcpFile: (file) => openConfigFile(file, existsSync, (path) => shell.openPath(path)),
   writeProjectMcpServers: (file, servers) => writeMcpConfig(file, servers),
   readMcpPresets: () => loadPresets(shippedPresetsPath(), userPresetsPath(DSH_HOME)),
+  listPets: () => listInstalledPets().map((p) => ({ slug: p.slug, name: p.name })),
   probeMcpServer: (target, onLine) =>
     // The probe spawns the server's command directly from this process,
     // which under a Finder launch has only the system PATH — `npx` and
@@ -2365,6 +2413,31 @@ type BootAttempt =
     }
 
 /**
+ * Best-effort absolute path to `node`, to invoke the pet hook script with —
+ * see `runtime-files.ts`'s `hooksConfig`.
+ *
+ * A configured `npmPath`/`pnpmPath` almost always sits in the same directory
+ * as `node` (both are installed by the same nvm/Volta/Homebrew/system
+ * layout), so the sibling `node` next to whichever one is configured is
+ * tried first. With neither configured, or the sibling not on disk, this
+ * falls back to the bare string `'node'`: the harness child's own PATH
+ * already includes the node directory (via `composePath`'s `extraPath`), so
+ * an unqualified `node` resolves there exactly the way the harness's other
+ * hook commands rely on their own PATH today.
+ * @param npmPath - the configured `npm` override, if any.
+ * @param pnpmPath - the configured `pnpm` override, if any.
+ * @returns an absolute path to `node`, or the bare string `'node'`.
+ */
+function resolveNodePath(npmPath: string | undefined, pnpmPath: string | undefined): string {
+  for (const configured of [npmPath, pnpmPath]) {
+    if (configured === undefined) continue
+    const candidate = join(dirname(configured), 'node')
+    if (existsSync(candidate)) return candidate
+  }
+  return 'node'
+}
+
+/**
  * Write the runtime files and spawn the harness once, with every configured
  * plugin entry resolved except those in `excludePackages` — the shape
  * `bootNow` uses for the primary boot (empty set) and for every isolation or
@@ -2399,9 +2472,22 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
     // MCP tab. A save drops such an entry permanently (see
     // `settings-validate.ts`); this keeps one that is still on disk from
     // failing the boot in the meantime.
-    const configured = (config.plugins ?? []).filter(
-      (entry) =>
-        !excludePackages.has(parseSpec(entry.spec).package) && parseSpec(entry.spec).package !== MCP_CLIENT_PACKAGE,
+    // `withHookBridge` runs after the exclude/MCP-client filter so it cannot
+    // be filtered back out: a custom `config.plugins` that simply omits the
+    // bridge must still boot with hooks working (see `withHookBridge`'s own
+    // doc comment), and `excludePackages`/the MCP-client carve-out are about
+    // *other* packages entirely.
+    // A newly added bridge is pinned to the managed harness's own resolved
+    // version — it is released in lockstep with the harness, so a bare spec's
+    // `latest` dist-tag can lag it (see `withHookBridge`'s doc comment). A
+    // non-managed (local) harness has no such version to pin to.
+    const hookVersion = config.harness.kind === 'managed' ? config.harness.version : undefined
+    const configured = withHookBridge(
+      (config.plugins ?? []).filter(
+        (entry) =>
+          !excludePackages.has(parseSpec(entry.spec).package) && parseSpec(entry.spec).package !== MCP_CLIENT_PACKAGE,
+      ),
+      hookVersion,
     )
     // The MCP client is not a plugin entry the user manages: it is one
     // package backing however many servers the MCP tab configures, so it is
@@ -2462,7 +2548,15 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
       const declaredPath = bundlePatchDeclaration(status.packageDir)
       return declaredPath !== undefined ? loadDeclaredPatchRows(status.packageDir, declaredPath) : undefined
     }
-    const files = writeRuntimeFiles(runtimeDirectory(), config.notifyPort, statuses, undefined, resolveName, resolveDeclaredPatch)
+    const files = writeRuntimeFiles(
+      runtimeDirectory(),
+      config.notifyPort,
+      statuses,
+      undefined,
+      resolveName,
+      resolveDeclaredPatch,
+      resolveNodePath(config.npmPath, config.pnpmPath),
+    )
     reconcilePluginLinks(DSH_HOME, PROFILE, linked)
     reconcilePluginPresets(DSH_HOME, presetIds)
     patchPath = files.patchPath
@@ -2621,12 +2715,182 @@ function toggleWindow(): void {
   revealWindow()
 }
 
-/** Raise a turn-complete notification, but only when the user is looking elsewhere. */
-function onTurnEnd(): void {
-  console.log(`[notify] turn-end ping received at ${new Date().toISOString()}`)
+/**
+ * Map a legacy bare-ping `HookKind` to the same `{state, text}` the templater
+ * would emit for it. Since A3 every harness hook (Stop included) POSTs a
+ * templated body to `/pet/event`, so these routes are no longer the live path —
+ * but notify still answers them, so keep them driving the pet identically
+ * rather than let an old caller regress the animation.
+ */
+function legacyDrive(kind: HookKind): { state: PetDriveState; text?: string } {
+  switch (kind) {
+    case 'turn-end':
+      return { state: 'wave', text: 'Done.' }
+    case 'prompt':
+    case 'tool':
+      return { state: 'running' }
+    case 'notify':
+      return { state: 'waiting' }
+  }
+}
+
+/**
+ * The single entry point for every harness hook ping.
+ *
+ * The primary path is `/pet/event`: the harness hook script templates the tool
+ * metadata into `{state, text}` (see `pet-bubble.ts`) and POSTs it, which
+ * `notify.ts` dispatches as `kind:'event'`. Everything — including the Stop
+ * hook, which templates to `{state:'wave', text:'Done.'}` — flows through here,
+ * so main mostly forwards the already-decided state to the pet. Legacy bare
+ * kinds still map through `onEvent` so nothing regresses.
+ *
+ * The turn-complete notification (and the missed-turn badge, handled inside
+ * `onEvent`) now key off the *wave* event, not a `/turn-end` route — that route
+ * no longer fires now that Stop POSTs `/pet/event`. It must fire independently
+ * of whether the pet is enabled or shown, because the hook fires for every
+ * turn whether or not the pet window exists.
+ */
+function onHook(event: HookEvent): void {
+  const drive =
+    event.kind === 'event'
+      ? // A garbage/oversized body yields `{kind:'event'}` with no state; don't
+        // drive the pet (or notify) off a state we never actually received.
+        event.state !== undefined
+        ? { state: event.state as PetDriveState, text: event.text }
+        : undefined
+      : legacyDrive(event.kind)
+  if (drive !== undefined) petState?.onEvent(drive)
+
+  // The wave event is the Stop-hook proxy for "the agent finished its turn".
+  if (drive?.state !== 'wave') return
+  // Preserved verbatim from the former onTurnEnd: raise a turn-complete
+  // notification, but only when the user is looking elsewhere.
+  console.log(`[notify] turn-end (wave) ping received at ${new Date().toISOString()}`)
   if (window === undefined || window.isDestroyed()) return
   if (window.isFocused()) return
   new Notification({ title: 'DeepSeek Harness', body: 'The agent finished its turn.' }).show()
+}
+
+/** The live desktop config, or undefined when the app is not yet configured. */
+function currentConfig(): DesktopConfig | undefined {
+  try {
+    const stored = loadConfig(CONFIG_PATH)
+    return stored.configured ? stored.config : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Persist a new pet block into the on-disk config, tolerating a write failure. */
+function savePet(pet: DesktopConfig['pet']): void {
+  try {
+    const stored = loadConfig(CONFIG_PATH)
+    if (!stored.configured) return
+    writeConfig(CONFIG_PATH, { ...stored.config, pet })
+  } catch (error) {
+    console.warn(`dsh-desktop: the pet settings could not be stored: ${(error as Error).message}`)
+  }
+}
+
+/**
+ * Reconcile the pet window with `config.pet`: create/update it when a pet is
+ * enabled and installed, tear it down otherwise. Idempotent, so Tasks 9 & 10
+ * can call it after any change to the pet block.
+ */
+function syncPet(): void {
+  const pet = currentConfig()?.pet
+  const on = pet?.enabled === true && pet.slug.length > 0
+  if (!on) {
+    petState?.setEnabled(false)
+    petWindow?.destroy()
+    petWindow = undefined
+    return
+  }
+  const meta = listInstalledPets().find((p) => p.slug === pet.slug)
+  if (meta === undefined) {
+    console.warn(`[pet] configured pet "${pet.slug}" is not installed`)
+    petState?.setEnabled(false)
+    petWindow?.destroy()
+    petWindow = undefined
+    return
+  }
+  if (petWindow === undefined || petWindow.isDestroyed()) {
+    const created = createPetWindow({
+      scale: pet.scale,
+      position: pet.x !== undefined && pet.y !== undefined ? { x: pet.x, y: pet.y } : undefined,
+      deps: { preloadPath: join(__dirname, '..', 'preload', 'pet.js'), paneOrigin: PANE_ORIGIN },
+    })
+    petWindow = created
+    created.webContents.once('did-finish-load', () => {
+      try {
+        created.webContents.send('pet:sprite', loadPetSprite(meta), pet.scale)
+      } catch (err) {
+        console.warn(`[pet] failed to read sprite for "${meta.slug}":`, err)
+        petState?.setEnabled(false)
+        created.destroy()
+        if (petWindow === created) petWindow = undefined
+        return
+      }
+      // Sent here rather than left to the next `pushTheme()` (nativeTheme
+      // change or harness-settings watch): those may not fire again for a
+      // long time, and without this the badge/focus tokens stay on the light
+      // value from first paint until one does.
+      created.webContents.send('theme', currentDark())
+      petState?.setEnabled(true)
+    })
+    // Persist moves as window state, like pane widths. The current config is
+    // re-read rather than closed over, so a slug/scale change between creation
+    // and the drag is not clobbered by the saved position.
+    created.on('moved', () => {
+      if (created.isDestroyed()) return
+      const live = currentConfig()?.pet
+      if (live === undefined) return
+      const [x, y] = created.getPosition()
+      savePet({ ...live, x, y })
+    })
+  } else {
+    // A scale-only change (no slug/enable change) reuses this same window
+    // rather than recreating it, so its content size — fixed at creation
+    // time by `createPetWindow`'s own `petWindowSize(scale)` — has to be
+    // resized here too, or a larger sprite the renderer now draws clips
+    // against the old bounds instead of growing the window to fit it.
+    if (!petWindow.isDestroyed()) {
+      resizePetWindow(petWindow, petWindowSize(pet.scale))
+    }
+    try {
+      petWindow.webContents.send('pet:sprite', loadPetSprite(meta), pet.scale)
+    } catch (err) {
+      console.warn(`[pet] failed to read sprite for "${meta.slug}":`, err)
+      petState?.setEnabled(false)
+      petWindow.destroy()
+      petWindow = undefined
+      return
+    }
+    petState?.setEnabled(true)
+  }
+}
+
+/**
+ * Reconcile the pet window and then bring the tray menu's own pet fields
+ * (the "Show desktop pet" checkbox and the active radio in its submenu) up
+ * to date with whatever is now on disk, and ask for a redraw.
+ *
+ * `syncPet()` alone is not enough after a Settings-window save: that window
+ * writes `config.pet` through a completely different path (the form's
+ * `pet` field, validated in `settings-ipc.ts`) than the tray's own
+ * `onTogglePet`/`onPickPet`, which mutate `trayActions` themselves before
+ * calling `tray?.refresh()`. This is that same follow-up, factored out so
+ * both paths end up consistent rather than the tray silently going stale
+ * after a save made from the Settings window instead of the tray menu.
+ */
+function syncPetAndRefreshTray(): void {
+  syncPet()
+  if (trayActions === undefined) return
+  const live = currentConfig()
+  trayActions.petEnabled = live?.pet?.enabled === true
+  trayActions.activeSlug = live?.pet?.slug ?? listInstalledPets()[0]?.slug ?? ''
+  trayActions.pets = listInstalledPets()
+  tray?.refresh()
 }
 
 /**
@@ -2799,6 +3063,152 @@ if (!app.requestSingleInstanceLock()) {
       toggleSideView('tasks')
     })
     ipcMain.on('shell:toggle-web', toggleWeb)
+    // Clicking the pet acknowledges any unread turn and brings the harness up.
+    ipcMain.on('pet:activate', () => {
+      petState?.clearBadge()
+      revealWindow()
+    })
+    // Right-clicking the pet raises its own context menu: switch pets, hide it,
+    // or jump to Settings. Every branch persists through `savePet` and then
+    // re-syncs, so the on-disk config stays the single source of truth.
+    ipcMain.on('pet:menu', () => {
+      const config = currentConfig()
+      const pets = listInstalledPets()
+      const menu = Menu.buildFromTemplate([
+        {
+          label: 'Pick pet',
+          submenu: pets.map((p) => ({
+            label: p.name,
+            type: 'radio',
+            checked: p.slug === config?.pet?.slug,
+            click: () => {
+              // 1.5, not 1: a freshly-picked pet with no stored scale should read as legible by default.
+              savePet({ enabled: true, slug: p.slug, scale: config?.pet?.scale ?? 1.5, x: config?.pet?.x, y: config?.pet?.y })
+              syncPet()
+            },
+          })),
+        },
+        { type: 'separator' },
+        {
+          label: 'Hide pet',
+          click: () => {
+            savePet({ ...(config?.pet ?? { slug: '', scale: 1.5 }), enabled: false })
+            syncPet()
+          },
+        },
+        { label: 'Settings…', click: () => showSettings() },
+      ])
+      menu.popup({ window: petWindow })
+    })
+    // Click-to-compose: a quick message typed into the pet is dropped into the
+    // harness chat composer and sent, then the window is revealed so the user
+    // sees the turn start. The composer is a rich `contenteditable`, so its
+    // model only updates through `webContents.insertText` on the focused node —
+    // setting textContent/value would not register. The user's text therefore
+    // travels ONLY as an `insertText` argument and is never interpolated into
+    // the injected JS (which just locates and focuses the field): that keeps the
+    // door shut on script injection through the message body.
+    ipcMain.on('pet:compose', (_event, text: unknown) => {
+      if (typeof text !== 'string') return
+      const message = text.trim().slice(0, 4000)
+      if (message === '') return
+      if (views === undefined || views.window.isDestroyed()) return
+      const contents = views.harness.webContents
+      if (contents.isDestroyed()) return
+      void (async () => {
+        try {
+          contents.focus()
+          // No user text in this snippet — it only finds the composer (a rich
+          // contenteditable whose aria-label starts "Describe what you want to
+          // build…"; its class is a hashed css-module name, so never selected by
+          // class), focuses it, and reports whether it was found.
+          const found = (await contents.executeJavaScript(
+            'const el = document.querySelector(\'[role="textbox"][contenteditable="true"]\') || ' +
+              '[...document.querySelectorAll(\'[contenteditable="true"],textarea\')].find(e => ' +
+              "/describe what you want/i.test(e.getAttribute('aria-label') || e.getAttribute('placeholder') || '')); " +
+              'if (el) { el.focus(); } !!el;',
+          )) as boolean
+          if (found) {
+            // The text goes in through the editor's own input path.
+            contents.insertText(message)
+            // Then submit by clicking the composer's Send button. A synthetic
+            // Return does not drive this rich editor's submit; the button does.
+            // Its `aria-label="Send message"` is stable where its css-module
+            // class is hashed, and it only enables once the editor is non-empty
+            // — so wait a tick for the inserted text to register, then click.
+            // Fall back to Return if the button can't be found.
+            await new Promise((resolve) => setTimeout(resolve, 200))
+            const sent = (await contents.executeJavaScript(
+              'const b = document.querySelector(\'button[aria-label="Send message"]\'); ' +
+                'if (b && !b.disabled) { b.click(); true } else { false }',
+            )) as boolean
+            if (!sent) {
+              contents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' })
+              contents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' })
+            }
+          } else {
+            console.warn('[pet] compose: harness composer not found; revealing so the message can be pasted manually')
+          }
+        } catch (err) {
+          console.warn('[pet] compose: injection failed', err)
+        } finally {
+          // Reveal regardless: on success to watch the turn, on failure so the
+          // user can paste it themselves.
+          revealWindow()
+        }
+      })()
+    })
+    // A compose request the plugin's browser half can fulfil precisely
+    // (workspace switch, model command, queue vs. send) rather than by
+    // guessing at the composer's DOM. `harness:compose` is a fire-and-forget
+    // push to the page; nothing here waits on it, since the plugin half may
+    // simply be absent and the DOM path above is the fallback either way.
+    ipcMain.on('pet:compose-rich', (_event, req: unknown) => {
+      if (typeof req !== 'object' || req === null) return
+      const candidate = req as Partial<ComposeRequest>
+      if (typeof candidate.text !== 'string') return
+      const text = candidate.text.trim().slice(0, 4000)
+      if (text === '') return
+      if (candidate.workspaceId !== undefined && typeof candidate.workspaceId !== 'string') return
+      if (candidate.model !== undefined && typeof candidate.model !== 'string') return
+      if (typeof candidate.send !== 'boolean') return
+      if (views === undefined || views.window.isDestroyed()) return
+      const contents = views.harness.webContents
+      if (contents.isDestroyed()) return
+      const message: ComposeRequest = {
+        text,
+        workspaceId: candidate.workspaceId,
+        model: candidate.model,
+        send: candidate.send,
+      }
+      contents.send('harness:compose', message)
+      revealWindow()
+    })
+    // The reverse leg: the plugin's browser half reports which workspaces
+    // (and, where it can reach them, models) exist so the pet's composer can
+    // offer them instead of a bare text box. Dropped on the floor when the
+    // pet window is not up — nothing is showing it yet.
+    ipcMain.on('harness:composer-options', (_event, opts: unknown) => {
+      if (petWindow === undefined || petWindow.isDestroyed()) return
+      petWindow.webContents.send('pet:composer-options', opts as ComposerOptions)
+    })
+    // The compose panel replaces the controls row in place rather than
+    // growing past it (see `pet.html`'s `#pet-chrome`), and the input wants
+    // more width than the resting controls row's floor besides. Rather than
+    // have the renderer poke at window bounds it cannot see, it just says
+    // when the panel opens/closes, and this resizes the (fixed-size,
+    // `resizable: false`) frameless window to `petComposePanelSize` and back
+    // to `petWindowSize` — the same resize `syncPet` already does for a
+    // scale change, just transient instead of persisted. `resizePetWindow`
+    // keeps the window's current top-left corner fixed, so the sprite above
+    // the panel never shifts — only the window grows down/right and shrinks
+    // back on close.
+    ipcMain.on('pet:compose-open', (_event, open: unknown) => {
+      if (petWindow === undefined || petWindow.isDestroyed()) return
+      const pet = currentConfig()?.pet
+      if (pet === undefined) return
+      resizePetWindow(petWindow, open === true ? petComposePanelSize(pet.scale) : petWindowSize(pet.scale))
+    })
     // The board's own read, for both of its views. A full walk of
     // `.dsh/tasks/` every time and never a cache: the read is milliseconds,
     // and a cached board is a second thing that can disagree with disk.
@@ -3349,6 +3759,10 @@ if (!app.requestSingleInstanceLock()) {
     // the moment the panel is about to be read, so it is the moment to check.
     window.on('focus', () => {
       notifyGitChanged()
+      // Looking at the harness is acknowledging the finished turn, so the pet's
+      // unread badge clears the same moment the desktop notification would stop
+      // mattering.
+      petState?.clearBadge()
     })
     window.on('close', (event) => {
       // Closing the window leaves the app running in the tray; only a quit,
@@ -3361,13 +3775,38 @@ if (!app.requestSingleInstanceLock()) {
       window = undefined
       views = undefined
     })
-    tray = createTray({
+    // Mutated in place (not re-created) so `tray.refresh()` can re-render
+    // against fresh values without a new `createTray` closure per change.
+    // Assigned to the module-level `trayActions` (not `const`-scoped here)
+    // so `applySettings`'s Settings-window save path can reach the same
+    // object `onTogglePet`/`onPickPet` mutate below.
+    trayActions = {
       toggleWindow,
       restart: () => void restartOnce(),
       openSettings: showSettings,
       quit: () => app.quit(),
       restartToInstall: () => appUpdater?.quitAndInstall(),
-    })
+      petEnabled: currentConfig()?.pet?.enabled === true,
+      pets: listInstalledPets(),
+      activeSlug: currentConfig()?.pet?.slug ?? listInstalledPets()[0]?.slug ?? '',
+      onTogglePet: () => {
+        const live = currentConfig()
+        const next = !(live?.pet?.enabled === true)
+        const slug = live?.pet?.slug ?? listInstalledPets()[0]?.slug ?? ''
+        // 1.5, not 1: a freshly-picked pet with no stored scale should read as legible by default.
+        savePet({ enabled: next, slug, scale: live?.pet?.scale ?? 1.5, x: live?.pet?.x, y: live?.pet?.y })
+        // Reconciles the window and brings `trayActions`/`tray.refresh()`
+        // up to date in one call — the same helper a Settings-window save
+        // uses, so both paths agree.
+        syncPetAndRefreshTray()
+      },
+      onPickPet: (slug: string) => {
+        const live = currentConfig()
+        savePet({ enabled: true, slug, scale: live?.pet?.scale ?? 1.5, x: live?.pet?.x, y: live?.pet?.y })
+        syncPetAndRefreshTray()
+      },
+    }
+    tray = createTray(trayActions)
     const hotkey = safeHotkey()
     if (hotkey !== undefined && !globalShortcut.register(hotkey, toggleWindow)) {
       console.warn(`dsh-desktop: the hotkey ${hotkey} could not be registered; another app already owns it.`)
@@ -3375,11 +3814,19 @@ if (!app.requestSingleInstanceLock()) {
     try {
       const result = loadConfig(CONFIG_PATH)
       if (result.configured) {
-        notifier = await startNotifyListener(result.config.notifyPort, onTurnEnd)
+        notifier = await startNotifyListener(result.config.notifyPort, onHook)
       }
     } catch (error) {
       console.warn((error as Error).message)
     }
+    // The pet is a pure puppet of this machine: every animation the renderer
+    // shows is a snapshot pushed from here, and the machine asks back only
+    // whether the harness is focused (to decide the turn-end badge).
+    petState = createPetState({
+      emit: (snap) => petWindow?.webContents.send('pet:state', snap),
+      isHarnessFocused: () => window?.isFocused() ?? false,
+    })
+    syncPet()
     if (deepLinkPending) {
       deepLinkPending = false
       revealWindow()
@@ -3427,5 +3874,8 @@ if (!app.requestSingleInstanceLock()) {
     globalShortcut.unregisterAll()
     tray?.destroy()
     void notifier?.close()
+    petState?.dispose()
+    petWindow?.destroy()
+    petWindow = undefined
   })
 }

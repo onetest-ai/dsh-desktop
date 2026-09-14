@@ -32,6 +32,9 @@ function form(overrides: Partial<SettingsForm> = {}): SettingsForm {
     terminalShell: '',
     plugins: pluginRows(HOOKS_PACKAGE),
     mcp: { enabled: false, servers: [] },
+    petEnabled: false,
+    petSlug: '',
+    petScale: '1',
     ...overrides,
   }
 }
@@ -47,6 +50,7 @@ describe('validateSettings — local source', () => {
         notifyPort: 43117,
         hotkey: 'CommandOrControl+Shift+D',
         plugins: [{ spec: HOOKS_PACKAGE }],
+        pet: { enabled: false, slug: '', scale: 1 },
       },
     })
   })
@@ -89,6 +93,7 @@ describe('validateSettings — managed source', () => {
         notifyPort: 43117,
         hotkey: 'CommandOrControl+Shift+D',
         plugins: [{ spec: HOOKS_PACKAGE }],
+        pet: { enabled: false, slug: '', scale: 1 },
       },
     })
   })

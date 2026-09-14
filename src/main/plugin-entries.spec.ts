@@ -17,6 +17,7 @@ import {
   presetsDeclaration,
   resolvePluginEntry,
   validSpecShape,
+  withHookBridge,
 } from './plugin-entries'
 import type { InstallDeps } from './runtime-install'
 
@@ -54,6 +55,52 @@ describe('defaultPlugins', () => {
     // Empty while defaults cannot be installed at startup: a declared but
     // absent plugin reads as a failure the user did not cause.
     expect(defaultPlugins().map((entry) => entry.spec)).toEqual([HOOKS_PACKAGE, ...DEFAULT_PLUGIN_SPECS])
+  })
+})
+
+describe('withHookBridge', () => {
+  it('prepends the bridge to an empty list, unpinned when no harness version is given', () => {
+    expect(withHookBridge([])).toEqual([{ spec: HOOKS_PACKAGE }])
+    expect(withHookBridge([], undefined)).toEqual([{ spec: HOOKS_PACKAGE }])
+  })
+
+  it('pins a newly added bridge to the harness version in both the spec and the version field', () => {
+    expect(withHookBridge([], '0.1.5-rc.1')).toEqual([{ spec: `${HOOKS_PACKAGE}@0.1.5-rc.1`, version: '0.1.5-rc.1' }])
+  })
+
+  it('prepends the bridge to a custom list that omits it', () => {
+    const custom = [{ spec: PKG }]
+    expect(withHookBridge(custom, '0.1.5-rc.1')).toEqual([
+      { spec: `${HOOKS_PACKAGE}@0.1.5-rc.1`, version: '0.1.5-rc.1' },
+      { spec: PKG },
+    ])
+  })
+
+  it('re-pins a stale bridge entry (version field form) to the current harness version', () => {
+    const stale = [{ spec: PKG }, { spec: HOOKS_PACKAGE, version: '0.0.1-rc.5' }]
+    expect(withHookBridge(stale, '0.1.5-rc.1')).toEqual([
+      { spec: `${HOOKS_PACKAGE}@0.1.5-rc.1`, version: '0.1.5-rc.1' },
+      { spec: PKG },
+    ])
+  })
+
+  it('re-pins a stale bridge entry (pinned-spec form) to the current harness version', () => {
+    const stale = [{ spec: PKG }, { spec: `${HOOKS_PACKAGE}@0.0.1-rc.5` }]
+    expect(withHookBridge(stale, '0.1.5-rc.1')).toEqual([
+      { spec: `${HOOKS_PACKAGE}@0.1.5-rc.1`, version: '0.1.5-rc.1' },
+      { spec: PKG },
+    ])
+  })
+
+  it('leaves an existing bridge entry untouched when no harness version is known', () => {
+    const pinned = [{ spec: PKG }, { spec: `${HOOKS_PACKAGE}@1.2.3` }]
+    expect(withHookBridge(pinned)).toEqual(pinned)
+    expect(withHookBridge(pinned, undefined)).toEqual(pinned)
+  })
+
+  it('never duplicates the bridge', () => {
+    const withBridge = [{ spec: HOOKS_PACKAGE }, { spec: PKG }]
+    expect(withHookBridge(withBridge)).toEqual(withBridge)
   })
 })
 
