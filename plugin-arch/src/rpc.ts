@@ -1,6 +1,7 @@
-import { applyEdit, type EditOps } from './edit.ts'
-import { listIcons } from './icons.ts'
-import { createDiagram, deleteDiagram, listDiagrams, readDiagram, writeDiagram } from './store.ts'
+import { DiagramParseError } from './diagram.ts'
+import { applyEdit, EditError, type EditOps } from './edit.ts'
+import { IconError, listIcons } from './icons.ts'
+import { StoreError, createDiagram, deleteDiagram, listDiagrams, readDiagram, writeDiagram } from './store.ts'
 
 /**
  * The part of `ctx.workspaceRegistry` this needs.
@@ -19,6 +20,15 @@ export interface WorkspaceLookup {
  * Shaped by the runtime, not by taste: `ConnectionRpcResult` requires
  * `{ code, message, details }`, and a bare string does not satisfy it. The code
  * is what a caller branches on; the message is what a human reads.
+ *
+ * `code` is one of: `unknown-workspace` (the payload's `workspaceId` does not
+ * resolve), `bad-request` (a missing or malformed field the caller sent —
+ * including an `EditError` or `IconError` raised while acting on it),
+ * `unknown-endpoint` (no such endpoint on this channel), `store-error` (the
+ * diagram store or a diagram file itself is the problem — a `StoreError` or a
+ * `DiagramParseError`), or `internal` (this handler's own defect, such as a
+ * cast that didn't hold — never the caller's fault, and not a storage
+ * problem, so it must not be read as either).
  */
 export interface ArchFailure {
   code: string
@@ -126,10 +136,18 @@ export function createArchHandler(
           return fail('unknown-endpoint', `unknown endpoint "${endpoint}"`)
       }
     } catch (error) {
-      // Distinct messages reach the user: an unknown workspace, a refused path
-      // and a write failure are three different problems, and "something went
-      // wrong" on a tool that owns your documentation is not acceptable.
-      return fail('store-error', error instanceof Error ? error.message : String(error))
+      // Distinct kinds reach the user as distinct codes. The caller is usually
+      // an agent deciding what to do next, and "your request was malformed"
+      // and "the file on disk is broken" call for opposite responses — a single
+      // catch-all told it neither. Anything unrecognised is `internal`, because
+      // a TypeError from this handler's own casts is a bug here, not a storage
+      // problem, and labelling it `store-error` sends the reader to the wrong file.
+      const message = error instanceof Error ? error.message : String(error)
+      if (error instanceof EditError) return fail('bad-request', message)
+      if (error instanceof StoreError) return fail('store-error', message)
+      if (error instanceof DiagramParseError) return fail('store-error', message)
+      if (error instanceof IconError) return fail('bad-request', message)
+      return fail('internal', message)
     }
   }
 }

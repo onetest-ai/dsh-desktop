@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from './context.ts'
-import { createArchHandler, type WorkspaceLookup } from './rpc.ts'
+import { createArchHandler } from './rpc.ts'
 import { registerArchTools } from './tools.ts'
 
 /**
@@ -23,7 +23,7 @@ export const inject = ['connection', 'workspaceRegistry', 'tools']
  * @param ctx - the plugin context.
  */
 export function apply(ctx: Context): void {
-  const workspaces = ctx.workspaceRegistry as unknown as WorkspaceLookup
+  const workspaces = ctx.workspaceRegistry
   const handler = createArchHandler(workspaces)
   // Two arguments. An earlier draft passed `{ authority: 'loopback' }`; that
   // option was removed from the runtime and no longer exists.

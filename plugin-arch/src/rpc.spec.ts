@@ -82,4 +82,57 @@ describe('endpoints', () => {
     const result = await handle('diagram/create', { workspaceId: 'ws1', id: '../escape', title: 'X' })
     expect(result).toMatchObject({ ok: false })
   })
+
+  it('writes a whole diagram and reads it back', async () => {
+    const written = await handle('diagram/write', {
+      workspaceId: 'ws1',
+      id: 'canvas',
+      diagram: { title: 'Canvas', nodes: [], edges: [] },
+    })
+    expect(written).toEqual({ ok: true, value: null })
+
+    const read = await handle('diagram/read', { workspaceId: 'ws1', id: 'canvas' })
+    expect(read).toMatchObject({ ok: true, value: { title: 'Canvas', nodes: [], edges: [] } })
+  })
+
+  it('refuses diagram/write for an id the store refuses to create', async () => {
+    const result = await handle('diagram/write', {
+      workspaceId: 'ws1',
+      id: 'a/b',
+      diagram: { title: 'X', nodes: [], edges: [] },
+    })
+    expect(result).toMatchObject({ ok: false })
+  })
+})
+
+describe('error classification', () => {
+  it('maps an EditError to bad-request', async () => {
+    await handle('diagram/create', { workspaceId: 'ws1', id: 'auth', title: 'Auth' })
+    const result = await handle('diagram/edit', {
+      workspaceId: 'ws1',
+      id: 'auth',
+      ops: { addEdges: [{ from: 'ghost', to: 'also-ghost' }] },
+    })
+    expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+  })
+
+  it('maps a StoreError to store-error', async () => {
+    // The existing "not found" read already exercises this path; confirmed
+    // here under its own name so the classification has a direct test.
+    const result = await handle('diagram/read', { workspaceId: 'ws1', id: 'ghost' })
+    expect(result).toMatchObject({ ok: false, error: { code: 'store-error' } })
+  })
+
+  it('maps an unrecognised throw to internal, not store-error', async () => {
+    await handle('diagram/create', { workspaceId: 'ws1', id: 'auth', title: 'Auth' })
+    // `addNodes` is cast straight through from the payload with no shape
+    // validation; an object here is not iterable, so applyEdit's own
+    // `for...of` throws a plain TypeError rather than an EditError.
+    const result = await handle('diagram/edit', {
+      workspaceId: 'ws1',
+      id: 'auth',
+      ops: { addNodes: {} },
+    })
+    expect(result).toMatchObject({ ok: false, error: { code: 'internal' } })
+  })
 })
