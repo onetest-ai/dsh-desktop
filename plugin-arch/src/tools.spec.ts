@@ -93,6 +93,24 @@ describe('the SSO scenario', () => {
     const result = (await call('arch_read', { id: 'ghost' })) as { error?: string }
     expect(result.error).toMatch(/not found/)
   })
+
+  it('names the missing argument rather than reporting a stringified "undefined"', async () => {
+    const result = (await call('arch_read', {})) as { error?: string }
+    expect(result.error).toBe('missing id')
+  })
+
+  it('reads an existing diagram as an untouched happy path', async () => {
+    await call('arch_create', { id: 'auth', title: 'Auth' })
+    const result = (await call('arch_read', { id: 'auth' })) as { title?: string }
+    expect(result.title).toBe('Auth')
+  })
+})
+
+describe('arch_create', () => {
+  it('names the missing title rather than stringifying "undefined"', async () => {
+    const result = (await call('arch_create', { id: 'auth' })) as { error?: string }
+    expect(result.error).toBe('missing title')
+  })
 })
 
 describe('arch_screenshot', () => {

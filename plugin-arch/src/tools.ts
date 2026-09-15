@@ -39,6 +39,24 @@ function projectOf(workspaces: WorkspaceLookup, args: Record<string, unknown>): 
 }
 
 /**
+ * Read a required string argument, or say which one is missing.
+ *
+ * `String(args['id'])` would turn an absent id into the literal `"undefined"`
+ * and hand it to the store, which then reports `diagram "undefined" not found`
+ * — pointing the caller at a naming problem when the real fault is a missing
+ * argument. The consumer here is a model choosing its next action from this
+ * text, so naming the actual fault is the difference between a retry that can
+ * work and one that cannot.
+ * @param args - the tool arguments.
+ * @param key - the argument name.
+ * @returns the string value, or undefined when absent or not a string.
+ */
+function requiredArg(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key]
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/**
  * Run a tool body against a resolved project, turning throws into messages.
  *
  * A tool that rejects gives the model a stack trace; a tool that returns
@@ -93,7 +111,11 @@ export function archTools(workspaces: WorkspaceLookup): ArchToolDefinition[] {
         required: ['workspaceId', 'id'],
       },
       execute: async (args) =>
-        withProject(workspaces, args, (project) => readDiagram(project, String(args['id']))),
+        withProject(workspaces, args, (project) => {
+          const id = requiredArg(args, 'id')
+          if (id === undefined) return { error: 'missing id' }
+          return readDiagram(project, id)
+        }),
     },
     {
       name: 'arch_create',
@@ -108,9 +130,13 @@ export function archTools(workspaces: WorkspaceLookup): ArchToolDefinition[] {
         required: ['workspaceId', 'id', 'title'],
       },
       execute: async (args) =>
-        withProject(workspaces, args, (project) =>
-          createDiagram(project, String(args['id']), String(args['title'])),
-        ),
+        withProject(workspaces, args, (project) => {
+          const id = requiredArg(args, 'id')
+          if (id === undefined) return { error: 'missing id' }
+          const title = requiredArg(args, 'title')
+          if (title === undefined) return { error: 'missing title' }
+          return createDiagram(project, id, title)
+        }),
     },
     {
       name: 'arch_edit',
@@ -196,7 +222,8 @@ export function archTools(workspaces: WorkspaceLookup): ArchToolDefinition[] {
       },
       execute: async (args) =>
         withProject(workspaces, args, (project) => {
-          const id = String(args['id'])
+          const id = requiredArg(args, 'id')
+          if (id === undefined) return { error: 'missing id' }
           const next = applyEdit(readDiagram(project, id), (args['ops'] ?? {}) as EditOps)
           writeDiagram(project, id, next)
           return next
@@ -246,7 +273,9 @@ export function archTools(workspaces: WorkspaceLookup): ArchToolDefinition[] {
       // answer — returning a blank canvas would be analysed as if it were real.
       execute: async (args) =>
         withProject(workspaces, args, (project) => {
-          readDiagram(project, String(args['id']))
+          const id = requiredArg(args, 'id')
+          if (id === undefined) return { error: 'missing id' }
+          readDiagram(project, id)
           return {
             image: undefined,
             note: 'The designer has never been opened for this diagram, so there is no rendered view to show.',
