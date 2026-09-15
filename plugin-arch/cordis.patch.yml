@@ -1,0 +1,5 @@
+# The @onetest/dsh-arch bundle patch: one row carrying both halves. The node
+# half owns the store and the tools; the client half (Plan 2) draws the canvas.
+- insert:
+    - id: arch
+      name: '@onetest/dsh-arch'
