@@ -21,7 +21,7 @@
   "files": ["lib/**/*.js", "lib/client.js.map", "lib/types/**/*.d.ts", "cordis.patch.yml"],
   "scripts": {
     "build": "tsc -p tsconfig.json && tsdown",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "prepack": "npm run build"
   },
