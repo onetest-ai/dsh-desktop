@@ -67,6 +67,8 @@ describe('parseDiagram', () => {
     ['a string "pinned" on a node', '{"title":"T","nodes":[{"id":"a","name":"A","type":"S","w":1,"h":1,"pinned":"true"}],"edges":[]}'],
     ['a numeric "pinned" on a node', '{"title":"T","nodes":[{"id":"a","name":"A","type":"S","w":1,"h":1,"pinned":1}],"edges":[]}'],
     ['a string "x" on a node', '{"title":"T","nodes":[{"id":"a","name":"A","type":"S","w":1,"h":1,"pinned":false,"x":"700"}],"edges":[]}'],
+    ['a node with "x" but no "y"', '{"title":"T","nodes":[{"id":"a","name":"A","type":"S","w":1,"h":1,"pinned":false,"x":700}],"edges":[]}'],
+    ['a node with "y" but no "x"', '{"title":"T","nodes":[{"id":"a","name":"A","type":"S","w":1,"h":1,"pinned":false,"y":650}],"edges":[]}'],
     ['non-numeric waypoint elements', '{"title":"T","nodes":[],"edges":[{"id":"e","from":"a","to":"b","direction":"none","waypoints":["a",1]}]}'],
     ['a short waypoint tuple', '{"title":"T","nodes":[],"edges":[{"id":"e","from":"a","to":"b","direction":"none","waypoints":[[1,2],[3]]}]}'],
     ['a waypoint with a non-numeric coordinate', '{"title":"T","nodes":[],"edges":[{"id":"e","from":"a","to":"b","direction":"none","waypoints":[[1,"2"]]}]}'],

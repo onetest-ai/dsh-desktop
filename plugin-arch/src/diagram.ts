@@ -198,6 +198,14 @@ function parseNode(raw: unknown, index: number): ArchNode {
   const where = `node ${String(index)}`
   const status = optionalString(record, 'status', where)
   if (status !== undefined && !STATUSES.has(status)) throw new DiagramParseError(`${where}: unknown status "${status}"`)
+  const x = optionalNumber(record, 'x', where)
+  const y = optionalNumber(record, 'y', where)
+  // Both or neither. A node carries a position or it does not; one coordinate
+  // alone is not a position, and treating it as "unplaced" would silently
+  // discard the half the user typed — the one thing placement must never do.
+  if ((x === undefined) !== (y === undefined)) {
+    throw new DiagramParseError(`${where}: "x" and "y" must be set together, or both omitted`)
+  }
   return {
     id: requireString(record, 'id', where),
     name: requireString(record, 'name', where),
@@ -207,8 +215,8 @@ function parseNode(raw: unknown, index: number): ArchNode {
     description: optionalString(record, 'description', where),
     childDiagram: optionalString(record, 'childDiagram', where),
     parent: optionalString(record, 'parent', where),
-    x: optionalNumber(record, 'x', where),
-    y: optionalNumber(record, 'y', where),
+    x,
+    y,
     w: requireNumber(record, 'w', where),
     h: requireNumber(record, 'h', where),
     pinned: optionalBoolean(record, 'pinned', where),
