@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DiagramParseError, parseDiagram, serializeDiagram, type Diagram } from './diagram.ts'
+import { DiagramParseError, assertDiagram, parseDiagram, serializeDiagram, type Diagram } from './diagram.ts'
 
 const FULL: Diagram = {
   title: 'Payments',
@@ -54,6 +54,16 @@ describe('round trip', () => {
     const pending = parseDiagram('{"title":"T","nodes":[{"id":"a","name":"A","type":"System","w":200,"h":100,"pinned":false}],"edges":[]}')
     expect(pending.nodes[0]?.x).toBeUndefined()
     expect(pending.nodes[0]?.pinned).toBe(false)
+  })
+})
+
+describe('assertDiagram', () => {
+  it('accepts an already-decoded value, without going through JSON', () => {
+    expect(assertDiagram({ title: 'T', nodes: [], edges: [] })).toEqual({ title: 'T', nodes: [], edges: [] })
+  })
+
+  it('rejects a decoded value missing a title, by the same rule parseDiagram uses', () => {
+    expect(() => assertDiagram({ nodes: [], edges: [] })).toThrow(DiagramParseError)
   })
 })
 

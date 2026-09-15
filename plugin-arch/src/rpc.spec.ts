@@ -103,6 +103,29 @@ describe('endpoints', () => {
     })
     expect(result).toMatchObject({ ok: false })
   })
+
+  it('refuses diagram/write with no title, and leaves no file behind', async () => {
+    // The old behaviour: serializeDiagram reads title unguarded, JSON.stringify
+    // drops the undefined, and the call reported ok having written a file every
+    // subsequent read then refused. The error code alone would not catch a
+    // regression that still writes the corrupt file — the read below is the
+    // assertion that matters.
+    const result = await handle('diagram/write', {
+      workspaceId: 'ws1',
+      id: 'canvas',
+      diagram: { nodes: [], edges: [] },
+    })
+    expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+
+    const read = await handle('diagram/read', { workspaceId: 'ws1', id: 'canvas' })
+    expect(read).toMatchObject({ ok: false, error: { code: 'store-error' } })
+    expect((read as { error: { message: string } }).error.message).toMatch(/not found/)
+  })
+
+  it('refuses a grossly wrong diagram shape as bad-request, not internal', async () => {
+    const result = await handle('diagram/write', { workspaceId: 'ws1', id: 'canvas', diagram: 42 })
+    expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+  })
 })
 
 describe('error classification', () => {

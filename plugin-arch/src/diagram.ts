@@ -249,6 +249,34 @@ function parseEdge(raw: unknown, index: number): ArchEdge {
 }
 
 /**
+ * Validate an already-decoded value as a diagram.
+ *
+ * Split out from `parseDiagram` because a diagram reaches this module by two
+ * routes — text read off disk, and an object handed in over RPC — and only the
+ * first went through any checking. `serializeDiagram` reads `title`, `nodes`
+ * and `edges` unguarded, so an object missing `title` used to serialize
+ * cleanly and write a file that the next read refuses. One validator, both
+ * doors.
+ * @param raw - the decoded value.
+ * @returns the diagram.
+ * @throws DiagramParseError naming the first field that is wrong.
+ */
+export function assertDiagram(raw: unknown): Diagram {
+  if (typeof raw !== 'object' || raw === null) throw new DiagramParseError('not an object')
+  const record = raw as Record<string, unknown>
+  const title = requireString(record, 'title', 'diagram')
+  const nodes = record['nodes']
+  const edges = record['edges']
+  if (!Array.isArray(nodes)) throw new DiagramParseError('diagram: "nodes" must be an array')
+  if (!Array.isArray(edges)) throw new DiagramParseError('diagram: "edges" must be an array')
+  return {
+    title,
+    nodes: nodes.map((node, index) => parseNode(node, index)),
+    edges: edges.map((edge, index) => parseEdge(edge, index)),
+  }
+}
+
+/**
  * Read a diagram file.
  *
  * Every failure names the field and the node or edge index, because the fix is
@@ -265,18 +293,7 @@ export function parseDiagram(text: string): Diagram {
   } catch (error) {
     throw new DiagramParseError(`not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
   }
-  if (typeof raw !== 'object' || raw === null) throw new DiagramParseError('not an object')
-  const record = raw as Record<string, unknown>
-  const title = requireString(record, 'title', 'diagram')
-  const nodes = record['nodes']
-  const edges = record['edges']
-  if (!Array.isArray(nodes)) throw new DiagramParseError('diagram: "nodes" must be an array')
-  if (!Array.isArray(edges)) throw new DiagramParseError('diagram: "edges" must be an array')
-  return {
-    title,
-    nodes: nodes.map((node, index) => parseNode(node, index)),
-    edges: edges.map((edge, index) => parseEdge(edge, index)),
-  }
+  return assertDiagram(raw)
 }
 
 /**

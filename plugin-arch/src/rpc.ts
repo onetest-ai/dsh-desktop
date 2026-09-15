@@ -1,4 +1,4 @@
-import { DiagramParseError } from './diagram.ts'
+import { DiagramParseError, assertDiagram, type Diagram } from './diagram.ts'
 import { applyEdit, EditError, type EditOps } from './edit.ts'
 import { IconError, listIcons } from './icons.ts'
 import { StoreError, createDiagram, deleteDiagram, listDiagrams, readDiagram, writeDiagram } from './store.ts'
@@ -119,9 +119,19 @@ export function createArchHandler(
         case 'diagram/write': {
           // The canvas writes whole diagrams; the agent never does.
           const id = stringField(payload, 'id')
-          const diagram = (payload as Record<string, unknown>)['diagram']
-          if (id === undefined || diagram === undefined) return fail('bad-request', 'missing id or diagram')
-          writeDiagram(project, id, diagram as Parameters<typeof writeDiagram>[2])
+          const raw = (payload as Record<string, unknown>)['diagram']
+          if (id === undefined || raw === undefined) return fail('bad-request', 'missing id or diagram')
+          // A malformed diagram here is a bad REQUEST, not a broken file — the
+          // caller sent it. `DiagramParseError` maps to `store-error` in the
+          // catch below because that is what it means when it comes off disk,
+          // so this path converts it rather than letting it fall through.
+          let diagram: Diagram
+          try {
+            diagram = assertDiagram(raw)
+          } catch (error) {
+            return fail('bad-request', error instanceof Error ? error.message : String(error))
+          }
+          writeDiagram(project, id, diagram)
           return { ok: true, value: null }
         }
         case 'diagram/delete': {
