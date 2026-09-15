@@ -24,16 +24,38 @@ on the RPC surface (see below). Always re-check against
 | `ctx.workspaceRegistry.get` | dsh-workspace | yes | `Context.workspaceRegistry: WorkspaceRegistry` module augmentation in `index.d.ts`; `WorkspaceRegistry.get(id: WorkspaceId): Workspace \| undefined` at `index.d.ts:85`. |
 | `ctx.tools.register` | dsh-tools | yes | `Context.tools: ToolRuntime` module augmentation at `index.d.ts:24-26`; `register(definition: ToolDefinition): () => void` at `index.d.ts:601`. |
 | `ctx.attachments.saveImage` | dsh-attachment | yes (Plan 2) | `abstract saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef>` at `index.d.ts:72`; batch form `saveImages(inputs: readonly SaveImageAttachment[])` at `index.d.ts:42`. |
-| `ctx.connection.rpc.handle` requires `webServer` in the **caller's** `inject` | dsh-client-connection | **found only by the harness refusing to boot** | `handle` registers its route as `owner.effect(() => owner.webServer.register(route), …)` (`lib/index.js:618`), where `owner` is the fiber that CALLED `handle` — this plugin — not `dsh-client-connection`'s own fiber. A cordis fiber may only touch services it declares, so `apply`'s own `inject` needs `webServer` even though no code in this package names it. Not visible in `rpc.d.ts` — the type signature gives no hint that calling `handle` touches a service beyond `connection` itself. Missing it fails plugin load with `cannot get property "webServer" without inject`, not a type error. |
+| `ctx.connection.rpc.handle` must be called from inside `ctx.inject(['webServer'], …)` | dsh-client-connection | **found only by booting the real harness** | Its `rpc` getter captures the context the *service* is bound to and registers the route through **that** context's `webServer`, so a module-level `inject` entry does not reach it — the harness refuses to boot even though `ctx.webServer` is accessible from the plugin body. A first attempt added `webServer` to the module-level `inject` array alone; a mount probe confirmed `ctx.webServer` was reachable from `apply`, and the harness still failed to boot with the same "cannot get property webServer without inject" error, because the throw comes from inside `dsh-client-connection`'s own service getter, bound to a different context than the one carrying our `inject`. The fix is the scoped form `ctx.inject(['webServer'], (webCtx) => webCtx.connection.rpc.handle(...))`, mirroring how `dsh-client-connection` registers its own `/api` route. Found by booting; invisible to the `.d.ts`, to unit tests, and to a hand-built `ctx` double. |
 
 Re-run this check whenever the managed runtime updates.
 
 **Verifying a runtime API means reading the implementation for what it does to the
-caller's context, not only the `.d.ts` for its signature.** The `authority` argument
-change above was caught by reading types, and that was sufficient. The `webServer`
-requirement could not have been — nothing in `rpc.d.ts` names it — and was found only
-by reading `dsh-client-connection/lib/index.js` after the harness failed to boot with
-this plugin loaded.
+caller's context, not only the `.d.ts` for its signature — and even that is not enough.**
+The `authority` argument change above was caught by reading types, and that was
+sufficient. The `webServer` module-level `inject` requirement was found by reading
+`dsh-client-connection/lib/index.js` after the harness failed to boot, but that reading
+was itself incomplete: a second read of the same file, plus a mount probe confirming
+`ctx.webServer` was reachable, still missed that the service's own `rpc` getter is bound
+to a different context than the caller's. A runtime API's requirements are not only in
+its signature or even its implementation's first line — the only complete check is
+loading the plugin into the real harness and watching it boot. Two verification passes
+and a mount probe missed this; booting caught it.
+
+**A TypeScript quirk found while fixing the `webServer` boot failure:** with the scoped
+`ctx.inject(['webServer'], (webCtx) => …)` form in place, `tsc` reported `Property
+'inject' does not exist on type 'Context'` at that exact call — even though `inject` is
+genuinely part of `@deepseek-ai/cordis`'s `Context` (mixed in from `RegistryService` via
+cordis's own internal `declare module './context.ts'` augmentation, same mechanism as
+`plugin`). Reproduced deterministically: whichever file in `plugin-arch/src` is the
+FIRST, in file-processing order, to reference the merged `Context` type sees it without
+this mixin; a second reference anywhere else in the package resolves it completely, and
+moving that second reference before or after `index.ts` in processing order turns the
+first file's diagnostic on and off. This looks like an ordering interaction between our
+own `declare module '@deepseek-ai/cordis'` augmentation in `context.ts` and cordis's
+internal relative-path one, not a real gap in cordis's types or in the runtime — plugged
+with a narrow, hand-written `Injectable` type and a cast at the one call site in
+`index.ts`, documented there. If this resurfaces (e.g. a future task adds another file
+that is checked before `index.ts` and also references `Context`), that is the same
+quirk, not a new one.
 
 **A trap in checking the registry:** `npm view <pkg> version` prints the `latest`
 dist-tag, not the newest published version — these packages pin `latest` at an old

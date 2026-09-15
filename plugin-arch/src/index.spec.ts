@@ -13,9 +13,15 @@ describe('inject', () => {
   })
 
   it('declares webServer even though no code here names it', () => {
-    // `rpc.handle` registers its route via `owner.webServer.register(route)`,
-    // on the caller's context. Dropping this from inject is a clean-looking
-    // change that stops the harness booting.
+    // This array entry alone will not save you: `ctx.connection.rpc`'s getter
+    // captures the context the SERVICE is bound to, not this fiber, so the
+    // module-level inject below does not reach it — `apply`'s
+    // `ctx.inject(['webServer'], …)` scoped registration is the part that
+    // actually makes the harness boot. Keeping this entry here is still
+    // correct (it is an accurate statement of what this plugin depends on,
+    // and it makes the fiber wait for the service rather than racing it), but
+    // dropping the scoped call in `apply` while leaving this entry in place
+    // would pass every unit test here and still fail to boot.
     expect(inject).toContain('webServer')
   })
 })
