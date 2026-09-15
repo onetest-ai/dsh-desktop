@@ -82,6 +82,7 @@ import { deleteEntry, pasteEntry, renameEntry } from './file-ops'
 import { gitRowMenu, treeMenu, type GitRowAction, type MenuChoice, type TreeAction } from './tree-menu'
 import { isWebPage } from './web-page'
 import { resolveInRoot } from './file-tree'
+import { openPathInPane } from './open-in-pane'
 import { watchProject, type ProjectWatch } from './project-watch'
 import type { HostEvent } from './pty-host'
 import { Terminals } from './terminal'
@@ -654,6 +655,34 @@ function openUrlInPane(url: string): void {
   }
   void views.web.webContents.loadURL(url)
   views.pane.webContents.send('pane:show-web')
+}
+
+/**
+ * Place a file the harness would otherwise open natively into one of this
+ * app's own panes.
+ *
+ * Wired to the notify server's `/open` route: the desktop-pane plugin, running
+ * inside the harness, POSTs here for every file the harness would hand to the
+ * OS (`open <path>`, which sends an `.html` deliverable to the system browser).
+ * A web page renders in the web view, everything else opens in the editor
+ * column. Returns whether a pane took the file — a `false` (a path inside no
+ * open project, or one that will not resolve) is the plugin's cue to fall back
+ * to the native opener, so the button always does something.
+ * @param path - the host-verified absolute file path from the harness.
+ * @returns whether a pane opened it.
+ */
+async function openHarnessPath(path: string): Promise<boolean> {
+  return openPathInPane(
+    {
+      roots: () => readWorkspaces(DSH_HOME).map((workspace) => workspace.path),
+      resolve: resolveInRoot,
+      isWebPage,
+      webPageUrl: webPageInProject,
+      openEditor: openInPane,
+      openWeb: openUrlInPane,
+    },
+    path,
+  )
 }
 
 /**
@@ -1895,7 +1924,7 @@ export async function applySettings(previous: DesktopConfig | undefined, next: D
     notifier = undefined
     if (!quitting) {
       try {
-        const started = await startNotifyListener(next.notifyPort, onHook)
+        const started = await startNotifyListener(next.notifyPort, onHook, openHarnessPath)
         if (quitting) {
           // `will-quit` already closed whatever it knew about; this listener
           // was bound after that, so nothing else would ever close it.
@@ -2576,7 +2605,17 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
 
   try {
     const handle = await startServer({
-      spec: dshWebCommand(config, patchPath, DSH_HOME, mcpEnv(config), cachedShellPath()),
+      // The notify port reaches the desktop-pane plugin (running inside this
+      // child) through the environment, which is what lets its `/open` POST
+      // find this app's loopback endpoint — the same port the hook bridge's
+      // generated config already carries.
+      spec: dshWebCommand(
+        config,
+        patchPath,
+        DSH_HOME,
+        { ...mcpEnv(config), DSH_DESKTOP_OPEN_PORT: String(config.notifyPort) },
+        cachedShellPath(),
+      ),
       timeoutMs: READY_TIMEOUT_MS,
       onSpawned: (stop) => {
         child = { generation: mine, stop }
@@ -3814,7 +3853,7 @@ if (!app.requestSingleInstanceLock()) {
     try {
       const result = loadConfig(CONFIG_PATH)
       if (result.configured) {
-        notifier = await startNotifyListener(result.config.notifyPort, onHook)
+        notifier = await startNotifyListener(result.config.notifyPort, onHook, openHarnessPath)
       }
     } catch (error) {
       console.warn((error as Error).message)

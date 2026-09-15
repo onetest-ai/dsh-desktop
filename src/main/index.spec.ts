@@ -1531,7 +1531,7 @@ describe('applySettings', () => {
   it('rebinds the notify listener when the port changes', async () => {
     await bootReady()
     await applySettingsReady(STORED, { ...STORED, notifyPort: 5000 })
-    expect(startNotifyListenerMock).toHaveBeenLastCalledWith(5000, expect.any(Function))
+    expect(startNotifyListenerMock).toHaveBeenLastCalledWith(5000, expect.any(Function), expect.any(Function))
   })
 
   it('re-registers the hotkey without restarting the harness', async () => {
@@ -1784,7 +1784,10 @@ describe('MCP servers at boot', () => {
     withServers({ gh: { command: 'npx', env: { GITHUB_TOKEN: 'ghp-secret' } } })
     withSwitch(false)
     await bootReady()
-    expect(dshWebCommandMock.mock.calls.at(-1)![3]).toEqual({})
+    // The open-endpoint port is always handed to the child (it is what lets the
+    // desktop-pane plugin redirect file opens into this app); no MCP value rides
+    // along when the switch is off.
+    expect(dshWebCommandMock.mock.calls.at(-1)![3]).toEqual({ DSH_DESKTOP_OPEN_PORT: '44444' })
   })
 })
 
