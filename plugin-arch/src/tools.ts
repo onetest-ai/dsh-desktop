@@ -58,17 +58,34 @@ function requiredArg(args: Record<string, unknown>, key: string): string | undef
 }
 
 /**
+ * Drop `undefined` from a value before it leaves a tool.
+ *
+ * The tool registry snapshots each result through `snapshotJsonValue`, which
+ * refuses anything that cannot round-trip — and `parseDiagram` deliberately
+ * sets absent optional fields to an explicit `undefined` so callers can
+ * distinguish "not set" from "not present". That is right for the parser and
+ * fatal here: a diagram with no icon failed the tool with `tool "arch_read"
+ * returned invalid output: value is not lossless JSON`. Serializing and
+ * re-parsing drops those keys and nothing else.
+ * @param value - the value a tool is about to return.
+ * @returns the same value with undefined-valued keys removed.
+ */
+function jsonSafe<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+/**
  * Run a tool body against the session's project, turning throws into messages.
  *
  * A tool that rejects gives the model a stack trace; a tool that returns
  * `{ error }` gives it something to act on.
  * @param exec - the tool execution context.
  * @param body - the work.
- * @returns the body's value, or an error object.
+ * @returns the body's value, made JSON-safe, or an error object.
  */
 async function withProject<T>(exec: ToolExec, body: (project: string) => T): Promise<T | { error: string }> {
   try {
-    return await body(sessionProject(exec))
+    return jsonSafe(await body(sessionProject(exec)))
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) }
   }
@@ -201,13 +218,96 @@ function iconEntrySchema() {
 }
 
 /**
- * The six tools.
+ * Escape a string for use inside a Mermaid quoted label.
+ *
+ * Mermaid's own escape for a double quote is `#quot;`, not a backslash.
+ * @param text - the raw text.
+ * @returns the text, safe to place inside `"…"` in a Mermaid label or edge.
+ */
+function mermaidEscape(text: string): string {
+  return text.replace(/"/g, '#quot;')
+}
+
+/**
+ * A diagram's own node id, sanitized into a Mermaid-safe node identifier.
+ *
+ * Mermaid ids do not accept dots or dashes unquoted; every character outside
+ * `[A-Za-z0-9_]` becomes `_`. Collisions after sanitizing are accepted —
+ * diagram ids are already unique, and the odds of two colliding after this
+ * substitution are low enough not to complicate the id map over.
+ * @param id - the diagram's own node id.
+ * @returns a Mermaid-safe identifier.
+ */
+function mermaidNodeId(id: string): string {
+  return id.replace(/[^A-Za-z0-9_]/g, '_')
+}
+
+/**
+ * The slice of a diagram `renderMermaid` reads.
+ *
+ * Deliberately not `Diagram` from `diagram.ts`: `status` and `direction` are
+ * closed enums there, and `defineTool`'s `InferValue` only recovers an enum's
+ * literal union when the schema author wrote it with `as const` — this file's
+ * schema fragments do not, since their literal `type`/`required` fields (not
+ * their enums) are what `InferValue` actually needs. The render callback's
+ * `value` is therefore typed with `status`/`direction` widened to `string`,
+ * and a `Diagram`-typed parameter would reject it. This interface asks for
+ * only the fields Mermaid rendering touches, all of them plain strings.
+ */
+interface MermaidDiagram {
+  title: string
+  nodes: ReadonlyArray<{ id: string; name: string; type: string }>
+  edges: ReadonlyArray<{ from: string; to: string; label?: string; direction: string }>
+}
+
+/**
+ * Render one diagram as Mermaid, the way the user actually sees what the
+ * agent just did: there is no canvas until Plan 2, and a JSON file is not a
+ * diagram, but many chat surfaces draw a Mermaid fence natively, and where
+ * they do not it is still compact, readable, and pasteable into anything
+ * that does.
+ * @param diagram - the diagram to render.
+ * @returns a summary line, and — when there is at least one node — a fenced
+ *   Mermaid flowchart beneath it.
+ */
+function renderMermaid(diagram: MermaidDiagram): string {
+  const summary = `${diagram.title} — ${String(diagram.nodes.length)} nodes, ${String(diagram.edges.length)} edges`
+  if (diagram.nodes.length === 0) return `${summary}\n(no nodes yet)`
+
+  const ids = new Map(diagram.nodes.map((node) => [node.id, mermaidNodeId(node.id)]))
+  const lines = ['flowchart TD']
+  for (const node of diagram.nodes) {
+    const label = `${mermaidEscape(node.name)}<br/>[${mermaidEscape(node.type)}]`
+    lines.push(`  ${ids.get(node.id) ?? mermaidNodeId(node.id)}["${label}"]`)
+  }
+  for (const edge of diagram.edges) {
+    const from = ids.get(edge.from) ?? mermaidNodeId(edge.from)
+    const to = ids.get(edge.to) ?? mermaidNodeId(edge.to)
+    const arrow = edge.direction === 'bidirectional' ? '<-->' : edge.direction === 'none' ? '---' : '-->'
+    const label = edge.label !== undefined ? `|"${mermaidEscape(edge.label)}"|` : ''
+    lines.push(`  ${from} ${arrow}${label} ${to}`)
+  }
+  return `${summary}\n\n\`\`\`mermaid\n${lines.join('\n')}\n\`\`\``
+}
+
+/**
+ * The five tools.
  *
  * NONE of them accepts coordinates, and none pins, unpins, or runs layout.
  * Placement is inferred and a human drag pins it; an agent assigning x/y would
  * produce layouts that are technically valid and visually worthless, and would
- * overwrite deliberate human placement. `arch_screenshot` is how the agent
- * CHECKS a layout — it looks and reports, rather than rearranging.
+ * overwrite deliberate human placement.
+ *
+ * There is deliberately no `arch_screenshot` (or any other viewing tool) in
+ * this plan. An earlier version had one, describing itself as a way to "see"
+ * a rendered diagram — there is no renderer yet, only JSON files, so it could
+ * only ever return a canned "never been opened" message. Told it could view
+ * something and finding no view, the model went looking for one via browser
+ * automation on the app's own UI and failed on `querySelector` errors — a
+ * capability advertised that does not exist sent it somewhere useless. It
+ * returns in Plan 2, once the canvas exists and there is genuinely something
+ * to capture; `arch_list` and `arch_read`'s descriptions say plainly that
+ * there is nothing to look at instead.
  *
  * `id`, `title` and `ops` are deliberately NOT declared `required: true` in
  * their parameter schema, even though every tool that has them needs them:
@@ -231,7 +331,9 @@ export function archTools(): ToolDefinition[] {
       description:
         'Every architecture diagram in the project, each with an index of its nodes (id, name, type). ' +
         'Call this FIRST: it shows which diagram a thing belongs on and whether an id is already taken, ' +
-        'so you neither read every file nor create a duplicate box under a new id.',
+        'so you neither read every file nor create a duplicate box under a new id. Diagrams are JSON files ' +
+        'under .dsh/arch/ in the project; there is no viewer and nothing to look at on screen, so read them ' +
+        'with these tools rather than trying to open or inspect anything in the UI.',
       parameters: {},
       output: {
         schema: { oneOf: [{ type: 'array', items: diagramSummarySchema() }, errorSchema()] },
@@ -250,14 +352,14 @@ export function archTools(): ToolDefinition[] {
     }),
     defineTool({
       name: 'arch_read',
-      description: 'One diagram in full, including its edges and each node’s current geometry.',
+      description:
+        'One diagram in full, including its edges and each node’s current geometry. Returns the diagram as ' +
+        'data; there is no rendered view of it.',
       parameters: { id: { type: 'string', description: 'The diagram id.' } },
       output: {
         schema: { oneOf: [diagramSchema(), errorSchema()] },
         render: (_args, value) =>
-          'error' in value
-            ? [{ type: 'text', text: value.error }]
-            : [{ type: 'text', text: `"${value.title}" — ${String(value.nodes.length)} nodes, ${String(value.edges.length)} edges` }],
+          'error' in value ? [{ type: 'text', text: value.error }] : [{ type: 'text', text: renderMermaid(value) }],
       },
       execute: async (args, exec) =>
         withProject(exec, (project) => {
@@ -365,40 +467,6 @@ export function archTools(): ToolDefinition[] {
         withProject(exec, (project) => {
           const query = args['query']
           return listIcons(project, typeof query === 'string' ? query : undefined)
-        }),
-    }),
-    defineTool({
-      name: 'arch_screenshot',
-      description:
-        'See a diagram as it is actually drawn — box positions, overlaps, label readability, connector crossings. ' +
-        'None of that is visible in the JSON. Use it to CHECK a layout and report what you see; you cannot ' +
-        'rearrange the diagram yourself.',
-      parameters: {
-        id: { type: 'string', description: 'The diagram id.' },
-        view: {
-          type: 'string',
-          enum: ['viewport', 'whole'],
-          description: 'What the user currently sees, or the whole diagram fitted. Defaults to viewport.',
-        },
-      },
-      output: {
-        schema: {
-          oneOf: [
-            { type: 'object', additionalProperties: false, properties: { note: { type: 'string', required: true } } },
-            errorSchema(),
-          ],
-        },
-        render: (_args, value) => [{ type: 'text', text: 'error' in value ? value.error : value.note }],
-      },
-      // Plan 2 replaces this body with a real capture. Until the designer
-      // exists there is nothing to photograph, and saying so is the honest
-      // answer — returning a blank canvas would be analysed as if it were real.
-      execute: async (args, exec) =>
-        withProject(exec, (project) => {
-          const id = requiredArg(args, 'id')
-          if (id === undefined) return { error: 'missing id' }
-          readDiagram(project, id)
-          return { note: 'The designer has never been opened for this diagram, so there is no rendered view to show.' }
         }),
     }),
   ]

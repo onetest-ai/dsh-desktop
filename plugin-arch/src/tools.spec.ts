@@ -30,15 +30,16 @@ beforeEach(() => {
 })
 
 describe('the tool set', () => {
-  it('is exactly the six tools the design names', () => {
-    expect([...tools.keys()].sort()).toEqual([
-      'arch_create',
-      'arch_edit',
-      'arch_icons',
-      'arch_list',
-      'arch_read',
-      'arch_screenshot',
-    ])
+  it('is exactly the five tools the design names', () => {
+    expect([...tools.keys()].sort()).toEqual(['arch_create', 'arch_edit', 'arch_icons', 'arch_list', 'arch_read'])
+  })
+
+  it('registers no arch_screenshot', () => {
+    // Returns in Plan 2, alongside the canvas: a tool that can only ever say
+    // "there is nothing to render yet" sent the model looking for a view via
+    // browser automation on the app's own UI instead. Re-adding this before
+    // there is something to actually capture repeats that failure.
+    expect(tools.has('arch_screenshot')).toBe(false)
   })
 
   it('exposes no tool that pins, unpins, or lays out', () => {
@@ -146,11 +147,56 @@ describe('arch_create', () => {
   })
 })
 
-describe('arch_screenshot', () => {
-  it('says the designer has never been opened rather than returning nothing', async () => {
+describe('lossless JSON', () => {
+  it('arch_read on a node with no icon, status or description round-trips through JSON unchanged', async () => {
+    // parseDiagram sets absent optional fields to an explicit `undefined`;
+    // the real registry snapshots every return value through
+    // `snapshotJsonValue`, which refuses anything that cannot round-trip —
+    // this is the assertion that would have caught `value is not lossless
+    // JSON` before it reached the user.
     await call('arch_create', { id: 'auth', title: 'Auth' })
-    const result = (await call('arch_screenshot', { id: 'auth' })) as { image?: unknown; note: string }
-    expect(result.image).toBeUndefined()
-    expect(result.note).toMatch(/never been opened|not open/i)
+    await call('arch_edit', { id: 'auth', ops: { addNodes: [{ id: 'bare', name: 'Bare', type: 'App' }] } })
+    const result = await call('arch_read', { id: 'auth' })
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result)
   })
 })
+
+describe('arch_read render', () => {
+  it('renders a Mermaid flowchart with a summary line', async () => {
+    await call('arch_create', { id: 'payments', title: 'Payments' })
+    await call('arch_edit', {
+      id: 'payments',
+      ops: {
+        addNodes: [
+          { id: 'customer', name: 'Customer', type: 'Actor' },
+          { id: 'checkout', name: 'Checkout Service', type: 'App' },
+          { id: 'stripe', name: 'Stripe', type: 'External system: Stripe' },
+        ],
+        addEdges: [
+          { from: 'customer', to: 'checkout', label: 'submits checkout/card payment' },
+          { from: 'checkout', to: 'stripe', label: 'creates the card charge' },
+        ],
+      },
+    })
+    const tool = tools.get('arch_read')!
+    const value = await tool.execute({ id: 'payments' }, exec)
+    const rendered = tool.output.render({ id: 'payments' }, value)
+    expect(rendered).toEqual([{ type: 'text', text: expect.stringContaining('```mermaid') }])
+    const text = (rendered[0] as { text: string }).text
+    expect(text).toMatch(/^Payments — 3 nodes, 2 edges/)
+    expect(text).toContain('flowchart TD')
+    expect(text).toContain('customer["Customer<br/>[Actor]"]')
+    expect(text).toContain('customer -->|"submits checkout/card payment"| checkout')
+  })
+
+  it('renders "(no nodes yet)" with no fence for an empty diagram', async () => {
+    await call('arch_create', { id: 'empty', title: 'Empty' })
+    const tool = tools.get('arch_read')!
+    const value = await tool.execute({ id: 'empty' }, exec)
+    const rendered = tool.output.render({ id: 'empty' }, value)
+    const text = (rendered[0] as { text: string }).text
+    expect(text).toBe('Empty — 0 nodes, 0 edges\n(no nodes yet)')
+    expect(text).not.toContain('```')
+  })
+})
+
