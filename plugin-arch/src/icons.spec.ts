@@ -147,6 +147,19 @@ describe('listIcons', () => {
     expect(listIcons(project).map((icon) => icon.slug)).toContain('shared/brand-logo')
   })
 
+  it('lists one entry per icon when a symlink loops back on itself', () => {
+    // `ln -s icons icons/self` does not blow the stack — statSync hits ELOOP
+    // around sixteen levels and the inner catch stops it — but the walk had
+    // already emitted one real icon seventeen times, as `a`, `self/a`,
+    // `self/self/a`, …, and handed all of them to an agent tool.
+    const fresh = mkdtempSync(join(tmpdir(), 'icons-'))
+    const icons = join(archRoot(fresh), 'icons')
+    mkdirSync(icons, { recursive: true })
+    writeFileSync(join(icons, 'a.png'), PNG)
+    symlinkSync(icons, join(icons, 'self'))
+    expect(listIcons(fresh).map((icon) => icon.slug)).toEqual(['a'])
+  })
+
   it('lists nothing when .dsh/arch/icons itself is a symlink pointing outside the workspace', () => {
     // The quieter instance of the same gap: the built-in root was join()'d by
     // hand rather than resolved through the fence, so a symlinked icons/

@@ -107,18 +107,35 @@ export function readIconPaths(project: string): string[] {
  * of the project, and every image-shaped file beneath it published as a slug a
  * later reader will happily fetch bytes for. Only a symlink can leave, so only a
  * symlink is resolved; ordinary entries under the fence cannot escape.
+ * A symlink that stays INSIDE the fence is legitimate but can still loop:
+ * `icons/self -> icons` is inside the project, so the fence check passes, and
+ * the walk descended it until `statSync` hit ELOOP around sixteen levels down —
+ * reporting one real icon as seventeen entries (`a`, `self/a`, `self/self/a`, …)
+ * straight into an agent's context.
+ *
+ * `ancestors` is the chain of realpaths currently open, not every directory
+ * seen: a directory that is its own ancestor is a cycle and stops here, while a
+ * directory merely reachable by two different paths — `icons/shared -> icons/vendor`,
+ * the legitimate aliasing case the tests below cover — is still walked under
+ * both names. A single shared "visited" set would silently drop whichever of
+ * the two `readdir` happened to return second.
  * @param dir - the directory to walk.
  * @param fence - the realpathed boundary; entries resolving outside are skipped.
+ * @param ancestors - realpaths of the directories enclosing this one.
  * @returns absolute file paths inside the fence.
  */
-function walk(dir: string, fence: string): string[] {
+function walk(dir: string, fence: string, ancestors: ReadonlySet<string> = new Set()): string[] {
   let entries: string[]
+  let real: string
   try {
     if (!statSync(dir).isDirectory()) return []
+    real = realpathAsFarAsExists(dir)
+    if (ancestors.has(real)) return []
     entries = readdirSync(dir)
   } catch {
     return []
   }
+  const enclosing = new Set(ancestors).add(real)
   const files: string[] = []
   for (const entry of entries) {
     const at = join(dir, entry)
@@ -133,7 +150,7 @@ function walk(dir: string, fence: string): string[] {
       if (real !== fence && !real.startsWith(fence + sep)) continue
     }
     try {
-      if (statSync(at).isDirectory()) files.push(...walk(at, fence))
+      if (statSync(at).isDirectory()) files.push(...walk(at, fence, enclosing))
       else files.push(at)
     } catch {
       // A file that vanished between readdir and stat is simply not listed.
