@@ -29,17 +29,31 @@ export interface DiagramSummary {
 }
 
 /**
+ * A diagram id is a flat filename stem, and this is where that is enforced.
+ *
+ * The path fence refuses an escape, but it has no opinion about ids that are
+ * merely wrong: `""` becomes the file `.json`, `"."` becomes `..json`, and
+ * `"a/b"` writes a nested file that `listDiagrams`' non-recursive read will
+ * never show — so a diagram could be created, read back by id, and still be
+ * absent from the index. Requiring a plain stem closes all of those at once,
+ * and the message tells the caller what to send instead.
+ */
+const DIAGRAM_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+/**
  * The file backing one diagram id, or a refusal.
  * @param project - the workspace root.
  * @param id - the diagram id.
  * @returns the absolute path.
- * @throws StoreError when the id escapes the arch directory.
+ * @throws StoreError when the id is not a well-formed stem, or escapes the
+ *   arch directory.
  */
 function fileFor(project: string, id: string): string {
-  // An empty id resolves to the harmless-looking relative path ".json", which
-  // resolveInArch accepts as a plain filename — only the id itself is empty,
-  // so the fence never sees it. Refuse it here, before it reaches the fence.
-  if (id === '') throw new StoreError('refused an empty diagram id')
+  if (!DIAGRAM_ID.test(id)) {
+    throw new StoreError(
+      `refused diagram id "${id}": use letters, digits, dots, dashes or underscores, starting with a letter or digit`,
+    )
+  }
   const resolved = resolveInArch(project, `${id}.json`)
   if (resolved === undefined) throw new StoreError(`refused diagram id "${id}"`)
   return resolved

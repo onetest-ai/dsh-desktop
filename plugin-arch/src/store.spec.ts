@@ -23,12 +23,23 @@ describe('createDiagram', () => {
     expect(() => createDiagram(project, 'payments', 'Again')).toThrow(StoreError)
   })
 
-  it.each([['a traversal', '../escape'], ['an absolute path', '/etc/passwd'], ['an empty id', '']])(
-    'refuses %s',
-    (_case, id) => {
-      expect(() => createDiagram(project, id, 'X')).toThrow(StoreError)
-    },
-  )
+  it.each([
+    ['a traversal', '../escape'],
+    ['an absolute path', '/etc/passwd'],
+    ['an empty id', ''],
+    ['a nested id', 'a/b'],
+    ['a dot id', '.'],
+    ['a double-dot id', '..'],
+    ['a hidden-file id', '.hidden'],
+  ])('refuses %s', (_case, id) => {
+    expect(() => createDiagram(project, id, 'X')).toThrow(StoreError)
+  })
+
+  // A plain id such as 'payments' is already exercised by the "writes a new
+  // empty diagram" test above; only the dash/underscore case is new here.
+  it('accepts an id with a dash or underscore', () => {
+    expect(createDiagram(project, 'user-flows_v2', 'X').title).toBe('X')
+  })
 })
 
 describe('readDiagram', () => {
