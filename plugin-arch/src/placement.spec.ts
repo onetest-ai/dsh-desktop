@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { placeNewNodes } from './placement'
-import type { ArchNode, Diagram } from './diagram'
+import { placeNewNodes } from './placement.ts'
+import type { ArchNode, Diagram } from './diagram.ts'
 
 /**
  * @param id - the node id.

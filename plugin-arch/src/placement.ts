@@ -1,4 +1,4 @@
-import type { ArchNode, Diagram } from './diagram.js'
+import type { ArchNode, Diagram } from './diagram.ts'
 
 /** Clear space left between boxes when placing. */
 const GAP = 60

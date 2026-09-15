@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { writeFileAtomic } from './atomic-write'
+import { writeFileAtomic } from './atomic-write.ts'
 
 describe('writeFileAtomic', () => {
   it('writes a file, creating missing directories', () => {

@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { archRoot, resolveInArch, resolveInWorkspace } from './paths'
+import { archRoot, resolveInArch, resolveInWorkspace } from './paths.ts'
 
 let project: string
 let outside: string

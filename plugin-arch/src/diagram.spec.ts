@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DiagramParseError, parseDiagram, serializeDiagram, type Diagram } from './diagram'
+import { DiagramParseError, parseDiagram, serializeDiagram, type Diagram } from './diagram.ts'
 
 const FULL: Diagram = {
   title: 'Payments',

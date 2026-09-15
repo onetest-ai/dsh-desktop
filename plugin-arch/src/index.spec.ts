@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { apply } from './index'
+import { apply } from './index.ts'
 
 describe('apply', () => {
   it('is a cordis plugin body', () => {
