@@ -9,18 +9,16 @@
   "types": "lib/types/index.d.ts",
   "exports": {
     ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" },
-    "./client": { "default": "./lib/client.js" },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
-    "client": { "platform": "web" }
+    "bundle": { "patch": "./cordis.patch.yml" }
   },
   "engines": { "node": "^22.19 || >=24" },
-  "files": ["lib/**/*.js", "lib/client.js.map", "lib/types/**/*.d.ts", "cordis.patch.yml"],
+  "files": ["lib/**/*.js", "lib/types/**/*.d.ts", "cordis.patch.yml"],
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsdown",
+    "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "prepack": "npm run build"
