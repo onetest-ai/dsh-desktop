@@ -4,14 +4,19 @@ import { createArchHandler } from './rpc.ts'
 import { registerArchTools } from './tools.ts'
 
 /**
- * Required services: the transport that carries the channel, the workspace
- * registry that resolves a project, and the tool registry.
+ * Required services.
  *
- * `connection` is listed because `apply` calls `ctx.connection.rpc.handle`: a
- * cordis fiber that uses a service it does not inject may mount before that
- * service exists.
+ * `connection` carries the channel, `workspaceRegistry` resolves a project,
+ * `tools` takes the registrations. `webServer` is the subtle one: this package
+ * never names it, but `ctx.connection.rpc.handle` registers its route through
+ * the CALLER's context — `owner.webServer.register(route)` — and a cordis fiber
+ * may only touch services it declares. Without it the harness refuses to boot
+ * with "cannot get property webServer without inject".
+ *
+ * It is not discoverable from the type signature, which is why it survived a
+ * verification pass that read the .d.ts rather than the implementation.
  */
-export const inject = ['connection', 'workspaceRegistry', 'tools']
+export const inject = ['connection', 'webServer', 'workspaceRegistry', 'tools']
 
 /**
  * Node half: the store, the RPC channel, and the agent tools.

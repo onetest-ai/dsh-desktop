@@ -24,8 +24,16 @@ on the RPC surface (see below). Always re-check against
 | `ctx.workspaceRegistry.get` | dsh-workspace | yes | `Context.workspaceRegistry: WorkspaceRegistry` module augmentation in `index.d.ts`; `WorkspaceRegistry.get(id: WorkspaceId): Workspace \| undefined` at `index.d.ts:85`. |
 | `ctx.tools.register` | dsh-tools | yes | `Context.tools: ToolRuntime` module augmentation at `index.d.ts:24-26`; `register(definition: ToolDefinition): () => void` at `index.d.ts:601`. |
 | `ctx.attachments.saveImage` | dsh-attachment | yes (Plan 2) | `abstract saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef>` at `index.d.ts:72`; batch form `saveImages(inputs: readonly SaveImageAttachment[])` at `index.d.ts:42`. |
+| `ctx.connection.rpc.handle` requires `webServer` in the **caller's** `inject` | dsh-client-connection | **found only by the harness refusing to boot** | `handle` registers its route as `owner.effect(() => owner.webServer.register(route), …)` (`lib/index.js:618`), where `owner` is the fiber that CALLED `handle` — this plugin — not `dsh-client-connection`'s own fiber. A cordis fiber may only touch services it declares, so `apply`'s own `inject` needs `webServer` even though no code in this package names it. Not visible in `rpc.d.ts` — the type signature gives no hint that calling `handle` touches a service beyond `connection` itself. Missing it fails plugin load with `cannot get property "webServer" without inject`, not a type error. |
 
 Re-run this check whenever the managed runtime updates.
+
+**Verifying a runtime API means reading the implementation for what it does to the
+caller's context, not only the `.d.ts` for its signature.** The `authority` argument
+change above was caught by reading types, and that was sufficient. The `webServer`
+requirement could not have been — nothing in `rpc.d.ts` names it — and was found only
+by reading `dsh-client-connection/lib/index.js` after the harness failed to boot with
+this plugin loaded.
 
 **A trap in checking the registry:** `npm view <pkg> version` prints the `latest`
 dist-tag, not the newest published version — these packages pin `latest` at an old
