@@ -166,9 +166,15 @@ export function listIcons(project: string, query?: string): IconEntry[] {
     if (resolved !== undefined) roots.push(resolved)
   }
 
+  // The boundary is the WORKSPACE, not the icon folder. `iconPaths` already
+  // lets a project name `docs/icons`, so a symlink from inside icons/ to
+  // another folder in the same project is the same statement by another
+  // spelling — only leaving the project is an escape.
+  const fence = realpathAsFarAsExists(project)
+
   const found = new Map<string, IconEntry>()
   for (const root of roots) {
-    for (const file of walk(root, root)) {
+    for (const file of walk(root, fence)) {
       let bytes: Uint8Array
       try {
         bytes = readFileSync(file)

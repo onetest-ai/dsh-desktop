@@ -122,11 +122,24 @@ describe('listIcons', () => {
     expect(listIcons(project).map((icon) => icon.slug)).not.toContain('leak/secret-logo')
   })
 
-  it('still lists files behind a symlink that stays within the same root', () => {
-    // Not every symlink is an attack — some projects legitimately link asset
-    // folders together within one icon root. Refusing every symlink would be
-    // an over-correction. The fence here is the root being walked (icons/
-    // itself), so the target must stay under that same root.
+  it('still lists files behind a symlink that stays within the workspace, even in another folder', () => {
+    // Not every symlink is an attack — `iconPaths` already lets a project name
+    // a folder like `docs/icons` outside `.dsh/arch/`, so a symlink from
+    // inside icons/ to another folder of the SAME project is the same
+    // statement by another spelling. The fence is the workspace, not the
+    // icon folder being walked, so a target anywhere inside the project —
+    // even one with no relation to icons/ — is followed, not refused.
+    const brand = join(project, 'brand')
+    mkdirSync(brand, { recursive: true })
+    writeFileSync(join(brand, 'logo.png'), PNG)
+    symlinkSync(brand, join(archRoot(project), 'icons', 'linked'))
+    expect(listIcons(project).map((icon) => icon.slug)).toContain('linked/logo')
+  })
+
+  it('still lists files behind a symlink that stays within the same icon root', () => {
+    // The narrower, same-folder case is legitimate too — kept alongside the
+    // cross-folder case above so both directions of "within the workspace"
+    // are covered by a real symlink.
     const vendor = join(archRoot(project), 'icons', 'vendor')
     mkdirSync(vendor, { recursive: true })
     writeFileSync(join(vendor, 'brand-logo.png'), PNG)
