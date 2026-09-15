@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -103,5 +103,46 @@ describe('listIcons', () => {
   it('is sorted, so output is stable', () => {
     const slugs = listIcons(project).map((icon) => icon.slug)
     expect(slugs).toEqual([...slugs].sort())
+  })
+
+  it('does not list files behind a symlink inside icons/ that escapes the workspace', () => {
+    // The attack: commit a symlink under the icon folder pointing at anything
+    // on disk. statSync/readdirSync follow it transparently — only an explicit
+    // check against the fence catches it.
+    const outside = mkdtempSync(join(tmpdir(), 'icons-outside-'))
+    writeFileSync(join(outside, 'secret-logo.png'), PNG)
+    symlinkSync(outside, join(archRoot(project), 'icons', 'leak'))
+    expect(listIcons(project).map((icon) => icon.slug)).not.toContain('leak/secret-logo')
+  })
+
+  it('does not list files behind a symlink inside a declared iconPaths folder that escapes the workspace', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'icons-outside-'))
+    writeFileSync(join(outside, 'secret-logo.png'), PNG)
+    symlinkSync(outside, join(project, 'docs', 'icons', 'leak'))
+    expect(listIcons(project).map((icon) => icon.slug)).not.toContain('leak/secret-logo')
+  })
+
+  it('still lists files behind a symlink that stays within the same root', () => {
+    // Not every symlink is an attack — some projects legitimately link asset
+    // folders together within one icon root. Refusing every symlink would be
+    // an over-correction. The fence here is the root being walked (icons/
+    // itself), so the target must stay under that same root.
+    const vendor = join(archRoot(project), 'icons', 'vendor')
+    mkdirSync(vendor, { recursive: true })
+    writeFileSync(join(vendor, 'brand-logo.png'), PNG)
+    symlinkSync(vendor, join(archRoot(project), 'icons', 'shared'))
+    expect(listIcons(project).map((icon) => icon.slug)).toContain('shared/brand-logo')
+  })
+
+  it('lists nothing when .dsh/arch/icons itself is a symlink pointing outside the workspace', () => {
+    // The quieter instance of the same gap: the built-in root was join()'d by
+    // hand rather than resolved through the fence, so a symlinked icons/
+    // directory itself was never checked.
+    const freshProject = mkdtempSync(join(tmpdir(), 'icons-'))
+    const outside = mkdtempSync(join(tmpdir(), 'icons-outside-'))
+    writeFileSync(join(outside, 'secret-logo.png'), PNG)
+    mkdirSync(archRoot(freshProject), { recursive: true })
+    symlinkSync(outside, join(archRoot(freshProject), 'icons'))
+    expect(listIcons(freshProject)).toEqual([])
   })
 })

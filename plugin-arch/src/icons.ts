@@ -1,6 +1,6 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
-import { archRoot, resolveInArch, resolveInWorkspace } from './paths.ts'
+import { realpathAsFarAsExists, resolveInArch, resolveInWorkspace } from './paths.ts'
 
 /**
  * Per-file cap. A pasted screenshot used as an "icon" is a real failure mode,
@@ -100,22 +100,40 @@ export function readIconPaths(project: string): string[] {
 
 /**
  * Walk a directory, yielding every file path beneath it.
- * @param root - the directory to walk.
- * @returns absolute file paths.
+ *
+ * `fence` is the boundary nothing beneath may leave. Checking only the root is
+ * not enough: `statSync` and `readdirSync` FOLLOW symlinks, so a link committed
+ * under an icon folder — `icons/leak -> /etc` — is walked as though it were part
+ * of the project, and every image-shaped file beneath it published as a slug a
+ * later reader will happily fetch bytes for. Only a symlink can leave, so only a
+ * symlink is resolved; ordinary entries under the fence cannot escape.
+ * @param dir - the directory to walk.
+ * @param fence - the realpathed boundary; entries resolving outside are skipped.
+ * @returns absolute file paths inside the fence.
  */
-function walk(root: string): string[] {
+function walk(dir: string, fence: string): string[] {
   let entries: string[]
   try {
-    if (!statSync(root).isDirectory()) return []
-    entries = readdirSync(root)
+    if (!statSync(dir).isDirectory()) return []
+    entries = readdirSync(dir)
   } catch {
     return []
   }
   const files: string[] = []
   for (const entry of entries) {
-    const at = join(root, entry)
+    const at = join(dir, entry)
+    let link: ReturnType<typeof lstatSync>
     try {
-      if (statSync(at).isDirectory()) files.push(...walk(at))
+      link = lstatSync(at)
+    } catch {
+      continue
+    }
+    if (link.isSymbolicLink()) {
+      const real = realpathAsFarAsExists(at)
+      if (real !== fence && !real.startsWith(fence + sep)) continue
+    }
+    try {
+      if (statSync(at).isDirectory()) files.push(...walk(at, fence))
       else files.push(at)
     } catch {
       // A file that vanished between readdir and stat is simply not listed.
@@ -138,7 +156,11 @@ function walk(root: string): string[] {
  * @returns matching icons, sorted by slug.
  */
 export function listIcons(project: string, query?: string): IconEntry[] {
-  const roots: string[] = [join(archRoot(project), 'icons')]
+  const roots: string[] = []
+  // Through the fence, not join()'d: `.dsh/arch/icons` can itself be a symlink,
+  // and an unchecked root starts the walk outside the project.
+  const own = resolveInArch(project, 'icons')
+  if (own !== undefined) roots.push(own)
   for (const declared of readIconPaths(project)) {
     const resolved = resolveInWorkspace(project, declared)
     if (resolved !== undefined) roots.push(resolved)
@@ -146,7 +168,7 @@ export function listIcons(project: string, query?: string): IconEntry[] {
 
   const found = new Map<string, IconEntry>()
   for (const root of roots) {
-    for (const file of walk(root)) {
+    for (const file of walk(root, root)) {
       let bytes: Uint8Array
       try {
         bytes = readFileSync(file)
