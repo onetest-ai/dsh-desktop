@@ -26,3 +26,14 @@ on the RPC surface (see below). Always re-check against
 | `ctx.attachments.saveImage` | dsh-attachment | yes (Plan 2) | `abstract saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef>` at `index.d.ts:72`; batch form `saveImages(inputs: readonly SaveImageAttachment[])` at `index.d.ts:42`. |
 
 Re-run this check whenever the managed runtime updates.
+
+**A trap in checking the registry:** `npm view <pkg> version` prints the `latest`
+dist-tag, not the newest published version — these packages pin `latest` at an old
+`0.0.1-rc.1` release, which makes the registry look five minors behind the managed
+runtime when it is not. `npm view <pkg> versions` (plural) lists every published
+version, and it does carry the runtime's exact version (e.g. `0.1.5-rc.2` for
+`dsh-client-connection`, matching this tree). That a version is installable is not the
+point, though: `plugin-arch/src/context.ts` still declares this surface locally rather
+than depending on the real packages, because a plugin loads into whichever harness the
+user happens to run, not the one pinned at `npm install` time — see that file's doc
+comment.

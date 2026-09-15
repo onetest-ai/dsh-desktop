@@ -28,18 +28,19 @@ export interface ConnectionHost {
 /**
  * The three services this plugin reads off the cordis Context.
  *
- * The harness's own packages contribute these by declaration merging, but this
- * package deliberately does NOT depend on them: the published versions are five
- * minors behind the runtime the app actually loads (npm 0.0.1-rc.1 against
- * runtime 0.1.5-rc.2), so compiling against them would typecheck this plugin
- * against types that are known to be wrong. That is the same trap that had
- * `rpc.handle` documented with a third `authority` argument the real runtime
- * had already removed.
+ * The harness's own packages contribute these by declaration merging, and this
+ * package deliberately does not depend on them. Not because they are
+ * unavailable — the registry does publish the runtime's exact version — but
+ * because a plugin is loaded into whichever harness the user happens to run.
+ * Pinning a devDependency to one version would typecheck against a snapshot
+ * that goes stale on their next update, while making a green build look like
+ * evidence of runtime compatibility. It is not.
  *
- * So: declare only the surface actually used, verified by hand against
- * `~/.dsh/runtimes/.../0.1.5-rc.1`. The trade is explicit — this file will not
- * notice a runtime change on its own, so RUNTIME-VERIFICATION.md is the thing
- * to re-run when the managed harness updates.
+ * So: declare only the surface actually used, verified by hand against the
+ * managed runtime. The trade is explicit — this file cannot notice a runtime
+ * change on its own, so RUNTIME-VERIFICATION.md is the thing to re-run when the
+ * harness updates. That document, not the type checker, is what caught
+ * `rpc.handle` losing its third argument.
  */
 declare module '@deepseek-ai/cordis' {
   interface Context {
