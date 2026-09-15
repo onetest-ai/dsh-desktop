@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from 'electron'
+import { app, BrowserWindow, screen } from 'electron'
 import { PET_FRAME } from './pet-catalog'
 
 export interface PetWindowDeps {
@@ -143,6 +143,13 @@ export function createPetWindow(opts: {
   // out of whatever they were typing into.
   win.setAlwaysOnTop(true, 'floating')
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  // `visibleOnFullScreen: true` flips the whole app to an accessory (agent) app
+  // on macOS — which silently drops its Dock icon, even though every window
+  // still shows. This app is a normal Dock app, so the pet must not cost it
+  // that tile: restore it right after the flip (and only after — showing it
+  // before would just be undone). Every pet re-creation runs through here, so
+  // pairing the restore with the flip here keeps the two from ever drifting.
+  app.dock?.show()
   win.once('ready-to-show', () => win.showInactive())
   void win.loadURL(`${opts.deps.paneOrigin}/pet.html`)
   return win
