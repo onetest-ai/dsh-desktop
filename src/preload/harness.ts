@@ -40,6 +40,11 @@ interface ComposerOptions {
  */
 contextBridge.exposeInMainWorld('dshDesktop', {
   setWorkspace: (cwd: string) => ipcRenderer.send('harness:workspace', cwd),
+  // The harness page's own file "Open" (the deliverable card's main button),
+  // routed into this app's editor/web pane. Resolves whether a pane took the
+  // file — false when it is outside any open project — so the caller can fall
+  // back to the harness's own open.
+  openPath: (path: string): Promise<boolean> => ipcRenderer.invoke('harness:open-path', path) as Promise<boolean>,
   onAddToChat: (listener: (reference: { path: string; directory: boolean }) => void) => {
     ipcRenderer.on('harness:add-to-chat', (_event, reference: { path: string; directory: boolean }) =>
       listener(reference),

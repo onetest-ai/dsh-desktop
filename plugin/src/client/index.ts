@@ -6,6 +6,7 @@ import { startCompose } from './compose.ts'
 import { appendToComposer } from './composer.ts'
 import { followCurrentWorkspace } from './current-workspace.ts'
 import { desktop } from './desktop.ts'
+import { installFileOpenRedirect, type RedirectContext } from './open-file.ts'
 
 /**
  * Required services: the session list, which knows what the user is looking at,
@@ -48,4 +49,12 @@ export function apply(ctx: Context): void {
   // and report the projects it may offer. Both halves feature-detect the
   // newer bridge calls, so an older desktop app leaves them dormant.
   startCompose(ctx, bridge)
+
+  // Send the harness page's own file "Open" into the desktop app's editor/web
+  // pane instead of the harness's built-in side tab. Scoped so it installs only
+  // where the right sidebar exists, without gating the features above; a no-op
+  // in an app too old to expose `openPath`.
+  ctx.inject(['sidebarRight'], (scope) => {
+    installFileOpenRedirect(scope as unknown as RedirectContext, bridge)
+  })
 }

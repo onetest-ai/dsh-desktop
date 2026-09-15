@@ -658,17 +658,21 @@ function openUrlInPane(url: string): void {
 }
 
 /**
- * Place a file the harness would otherwise open natively into one of this
- * app's own panes.
+ * Place a file the harness's own "Open" would show in its side tab into one of
+ * this app's own panes instead.
  *
- * Wired to the notify server's `/open` route: the desktop-pane plugin, running
- * inside the harness, POSTs here for every file the harness would hand to the
- * OS (`open <path>`, which sends an `.html` deliverable to the system browser).
- * A web page renders in the web view, everything else opens in the editor
- * column. Returns whether a pane took the file — a `false` (a path inside no
- * open project, or one that will not resolve) is the plugin's cue to fall back
- * to the native opener, so the button always does something.
- * @param path - the host-verified absolute file path from the harness.
+ * Reached over the `harness:open-path` channel: the desktop-pane plugin's
+ * browser half intercepts the harness's in-page file open (the deliverable
+ * card's main "Open", which the harness would otherwise render in its built-in
+ * resource tab) and forwards the absolute path here. A web page renders in the
+ * web view, everything else opens in the editor column. Returns whether a pane
+ * took the file — a `false` (a path inside no open project, or one that will
+ * not resolve) is the plugin's cue to let the harness open it its own way.
+ *
+ * The harness's *other* two file actions are deliberately left alone: "Open in
+ * default app" goes to the OS default application, and "Show in Finder" reveals
+ * it — both are native, and neither reaches this.
+ * @param path - the absolute file path from the harness page.
  * @returns whether a pane opened it.
  */
 async function openHarnessPath(path: string): Promise<boolean> {
@@ -1924,7 +1928,7 @@ export async function applySettings(previous: DesktopConfig | undefined, next: D
     notifier = undefined
     if (!quitting) {
       try {
-        const started = await startNotifyListener(next.notifyPort, onHook, openHarnessPath)
+        const started = await startNotifyListener(next.notifyPort, onHook)
         if (quitting) {
           // `will-quit` already closed whatever it knew about; this listener
           // was bound after that, so nothing else would ever close it.
@@ -2605,17 +2609,7 @@ async function attemptBoot(config: DesktopConfig, mine: number, excludePackages:
 
   try {
     const handle = await startServer({
-      // The notify port reaches the desktop-pane plugin (running inside this
-      // child) through the environment, which is what lets its `/open` POST
-      // find this app's loopback endpoint — the same port the hook bridge's
-      // generated config already carries.
-      spec: dshWebCommand(
-        config,
-        patchPath,
-        DSH_HOME,
-        { ...mcpEnv(config), DSH_DESKTOP_OPEN_PORT: String(config.notifyPort) },
-        cachedShellPath(),
-      ),
+      spec: dshWebCommand(config, patchPath, DSH_HOME, mcpEnv(config), cachedShellPath()),
       timeoutMs: READY_TIMEOUT_MS,
       onSpawned: (stop) => {
         child = { generation: mine, stop }
@@ -3598,6 +3592,15 @@ if (!app.requestSingleInstanceLock()) {
       currentProject = undefined
       showProject({ path: workspace.path, title: workspace.title })
     })
+    // The harness page's own file "Open" — routed here by the desktop plugin so
+    // it lands in this app's editor/web pane instead of the harness's built-in
+    // side tab. Replies whether a pane took it, so the plugin can let the
+    // harness open the file its own way when it did not (a path outside any open
+    // project, or one that will not resolve). Only the in-page "Open" comes
+    // here; "Open in default app" and "Show in Finder" stay native.
+    ipcMain.handle('harness:open-path', (_event, path: unknown) =>
+      typeof path === 'string' ? openHarnessPath(path) : false,
+    )
     // A link in a rendered file goes where the user's links go, not into a
     // view of this app. Checked here because the URL comes from a file.
     ipcMain.on('pane:open-external', (_event, url: string) => {
@@ -3853,7 +3856,7 @@ if (!app.requestSingleInstanceLock()) {
     try {
       const result = loadConfig(CONFIG_PATH)
       if (result.configured) {
-        notifier = await startNotifyListener(result.config.notifyPort, onHook, openHarnessPath)
+        notifier = await startNotifyListener(result.config.notifyPort, onHook)
       }
     } catch (error) {
       console.warn((error as Error).message)
