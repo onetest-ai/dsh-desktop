@@ -46,7 +46,7 @@ export const PROJECT_MCP_BRIDGE = '@onetest/dsh-project-mcp-bridge'
  * and is expected to move with it, which is exactly why an update should be
  * a deliberate raise rather than whatever `latest` happens to be.
  */
-export const DESKTOP_PANE = '@onetest/dsh-desktop-pane@0.2.2'
+export const DESKTOP_PANE = '@onetest/dsh-desktop-pane@0.2.3'
 
 /**
  * The Claude Code hook bridge package.
