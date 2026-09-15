@@ -1,12 +1,33 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from './context.ts'
+import { createArchHandler, type WorkspaceLookup } from './rpc.ts'
+import { registerArchTools } from './tools.ts'
+
+/**
+ * Required services: the transport that carries the channel, the workspace
+ * registry that resolves a project, and the tool registry.
+ *
+ * `connection` is listed because `apply` calls `ctx.connection.rpc.handle`: a
+ * cordis fiber that uses a service it does not inject may mount before that
+ * service exists.
+ */
+export const inject = ['connection', 'workspaceRegistry', 'tools']
 
 /**
  * Node half: the store, the RPC channel, and the agent tools.
  *
- * Empty until Task 8 wires the channel in. It exists from the first commit so
- * the plugin row resolves and the package is loadable while the store beneath
- * it is still being built — a half-finished plugin that fails to load teaches
- * nothing about the half that is finished.
- * @param _ctx - the plugin context, unused for now.
+ * The channel writes files in the user's project. It carries no authority
+ * argument because the runtime authenticates every registered channel itself —
+ * `handle` is documented as registering "one authenticated absolute channel
+ * prefix", behind BrowserAuth and the Host/Origin fence.
+ * @param ctx - the plugin context.
  */
-export function apply(_ctx: Context): void {}
+export function apply(ctx: Context): void {
+  const workspaces = ctx.workspaceRegistry as unknown as WorkspaceLookup
+  const handler = createArchHandler(workspaces)
+  // Two arguments. An earlier draft passed `{ authority: 'loopback' }`; that
+  // option was removed from the runtime and no longer exists.
+  ctx.connection.rpc.handle('/arch', async (endpoint, payload) => handler(endpoint, payload))
+
+  registerArchTools(ctx, workspaces)
+}
