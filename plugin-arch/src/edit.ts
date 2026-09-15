@@ -92,6 +92,21 @@ function nextEdgeId(edges: readonly ArchEdge[]): string {
  *   would create a duplicate.
  */
 export function applyEdit(diagram: Diagram, ops: EditOps): Diagram {
+  // `ops` arrives from a cast, at both call sites. Without this, a wrong shape
+  // does not fail — `('nonsense').addNodes` is undefined, every field falls back
+  // to empty, and the call reports success having changed nothing. A caller told
+  // "ok" for an edit that silently did not happen is worse off than one told its
+  // request was malformed.
+  if (typeof ops !== 'object' || ops === null || Array.isArray(ops)) {
+    throw new EditError('ops must be an object')
+  }
+  for (const key of ['addNodes', 'updateNodes', 'removeNodes', 'addEdges', 'removeEdges'] as const) {
+    const value = ops[key]
+    if (value !== undefined && !Array.isArray(value)) {
+      throw new EditError(`ops.${key} must be an array`)
+    }
+  }
+
   const removedNodes = new Set(ops.removeNodes ?? [])
   for (const id of removedNodes) {
     if (!diagram.nodes.some((node) => node.id === id)) throw new EditError(`cannot remove unknown node "${id}"`)

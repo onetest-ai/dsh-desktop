@@ -142,6 +142,9 @@ export function createArchHandler(
       // catch-all told it neither. Anything unrecognised is `internal`, because
       // a TypeError from this handler's own casts is a bug here, not a storage
       // problem, and labelling it `store-error` sends the reader to the wrong file.
+      // With `applyEdit` validating `ops`'s shape itself, no known payload is
+      // expected to reach this final branch — it is a safety net for a defect in
+      // this handler, not a case to go hunting for a test input for.
       const message = error instanceof Error ? error.message : String(error)
       if (error instanceof EditError) return fail('bad-request', message)
       if (error instanceof StoreError) return fail('store-error', message)

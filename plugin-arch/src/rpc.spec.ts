@@ -123,16 +123,36 @@ describe('error classification', () => {
     expect(result).toMatchObject({ ok: false, error: { code: 'store-error' } })
   })
 
-  it('maps an unrecognised throw to internal, not store-error', async () => {
+  it('rejects a wrong-shaped ops field rather than silently doing nothing', async () => {
     await handle('diagram/create', { workspaceId: 'ws1', id: 'auth', title: 'Auth' })
-    // `addNodes` is cast straight through from the payload with no shape
-    // validation; an object here is not iterable, so applyEdit's own
-    // `for...of` throws a plain TypeError rather than an EditError.
+    // `('nonsense').addNodes` and `(42).addNodes` are both `undefined`, so
+    // without applyEdit's own validation every field falls back to empty and
+    // the call reports success having changed nothing — an agent told "ok"
+    // for an edit that silently did not happen. These are the exact inputs
+    // that produced that hole.
+    for (const ops of ['nonsense', 42]) {
+      const result = await handle('diagram/edit', { workspaceId: 'ws1', id: 'auth', ops })
+      expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+    }
+  })
+
+  it('rejects a non-array field inside ops', async () => {
+    await handle('diagram/create', { workspaceId: 'ws1', id: 'auth', title: 'Auth' })
+    // `addNodes` cast straight through from the payload with no shape
+    // validation; an object here is not an array, so applyEdit's own check
+    // throws an EditError naming the field, which classifies as bad-request.
     const result = await handle('diagram/edit', {
       workspaceId: 'ws1',
       id: 'auth',
       ops: { addNodes: {} },
     })
-    expect(result).toMatchObject({ ok: false, error: { code: 'internal' } })
+    expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+    expect((result as { error: { message: string } }).error.message).toMatch(/ops\.addNodes/)
+  })
+
+  it('accepts an empty ops object as a genuine no-op', async () => {
+    await handle('diagram/create', { workspaceId: 'ws1', id: 'auth', title: 'Auth' })
+    const result = await handle('diagram/edit', { workspaceId: 'ws1', id: 'auth', ops: {} })
+    expect(result).toMatchObject({ ok: true })
   })
 })
