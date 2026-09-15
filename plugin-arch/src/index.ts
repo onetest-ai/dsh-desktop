@@ -61,5 +61,5 @@ export function apply(ctx: Context): void {
     webCtx.connection.rpc.handle('/arch', async (endpoint, payload) => handler(endpoint, payload))
   })
 
-  registerArchTools(ctx, workspaces)
+  registerArchTools(ctx)
 }

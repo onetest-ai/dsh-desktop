@@ -2,9 +2,10 @@ import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
+import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { archRoot } from './paths.ts'
 import { createArchHandler, type WorkspaceLookup } from './rpc.ts'
-import { archTools, type ArchToolDefinition } from './tools.ts'
+import { archTools } from './tools.ts'
 
 /**
  * The product's one promise, tested at the seam.
@@ -27,18 +28,19 @@ const PINNED = { id: 'frontend', name: 'Frontend', type: 'App', x: 900, y: 900, 
 
 let project: string
 let handle: ReturnType<typeof createArchHandler>
-let tools: Map<string, ArchToolDefinition>
+let tools: Map<string, ToolDefinition>
+let exec: ToolRunContext
 
 /**
  * Call one agent tool against the fixture workspace.
  * @param name - the tool name.
- * @param args - its arguments, with workspaceId filled in.
+ * @param args - its arguments.
  * @returns whatever the tool returns.
  */
 async function call(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
   const tool = tools.get(name)
   if (tool === undefined) throw new Error(`no tool ${name}`)
-  return tool.execute({ workspaceId: 'ws1', ...args })
+  return tool.execute(args, exec)
 }
 
 /**
@@ -70,7 +72,10 @@ beforeEach(async () => {
   project = mkdtempSync(join(tmpdir(), 'pin-'))
   const workspaces: WorkspaceLookup = { get: (id) => (id === 'ws1' ? { path: project } : undefined) }
   handle = createArchHandler(workspaces)
-  tools = new Map(archTools(workspaces).map((tool) => [tool.name, tool]))
+  tools = new Map(archTools().map((tool) => [tool.name, tool]))
+  // The RPC channel still resolves by workspaceId (`handle`, below); the
+  // agent tools resolve the project from the session's own cwd instead.
+  exec = { agent: { session: { meta: { cwd: project } } } } as unknown as ToolRunContext
 
   await call('arch_create', { id: 'auth', title: 'Auth' })
   await call('arch_edit', {

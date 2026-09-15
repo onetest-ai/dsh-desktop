@@ -1,27 +1,42 @@
-import { defineTool, type ObjectValueSchemaSpec, type ParameterSchemaSpec, type ToolDefinition } from '@deepseek-ai/dsh-tools'
+import { defineTool, type ObjectValueSchemaSpec, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { applyEdit, type EditOps } from './edit.ts'
 import { listIcons } from './icons.ts'
-import type { WorkspaceLookup } from './rpc.ts'
 import { createDiagram, listDiagrams, readDiagram, writeDiagram } from './store.ts'
 import type { ToolHost } from './context.ts'
 
-/** Every tool takes the workspace; the project path is never a parameter. */
-const WORKSPACE_PARAM = {
-  workspaceId: { type: 'string', description: 'The workspace whose diagrams to act on.' },
-} satisfies ParameterSchemaSpec
+/**
+ * The slice of `exec` this file reads. Deliberately narrow and local rather
+ * than the real `ToolRunContext`'s `agent: Agent` field: `Agent['session']`
+ * is a concrete, unrelated `Session` type from `dsh-session` that shares no
+ * declared properties with the loosely-documented `cwd`/`meta.cwd` fields the
+ * reference plugin reads off it at runtime (`agent?.session?.meta?.cwd`,
+ * `agent?.session?.cwd`) — so `session` is typed `unknown` here and cast where
+ * read, rather than claiming a structural relationship the real type does not
+ * have.
+ */
+interface ToolExec {
+  agent?: { session?: unknown }
+}
 
 /**
- * Read the workspace path, or explain why not.
- * @param workspaces - the registry.
- * @param args - the tool arguments.
- * @returns the project path, or an error message.
+ * The project this call acts on: the calling session's own directory.
+ *
+ * Deliberately NOT a parameter. An earlier version asked the model for a
+ * `workspaceId`, which it had no way to discover — there is no tool that
+ * lists them and the ids are opaque registry keys, so every call failed.
+ * Deriving it from the session is also the tighter boundary: the tool acts on
+ * the directory the user is working in, and a caller cannot point it
+ * somewhere else.
+ * @param exec - the tool execution context.
+ * @returns the session's working directory.
  */
-function projectOf(workspaces: WorkspaceLookup, args: Record<string, unknown>): { path: string } | { error: string } {
-  const id = args['workspaceId']
-  if (typeof id !== 'string') return { error: 'missing workspaceId' }
-  const workspace = workspaces.get(id)
-  if (workspace === undefined) return { error: `unknown workspace "${id}"` }
-  return { path: workspace.path }
+function sessionProject(exec: ToolExec): string {
+  const session = exec.agent?.session as { meta?: { cwd?: string }; cwd?: string } | undefined
+  const metaCwd = session?.meta?.cwd
+  if (typeof metaCwd === 'string' && metaCwd.length > 0) return metaCwd
+  const cwd = session?.cwd
+  if (typeof cwd === 'string' && cwd.length > 0) return cwd
+  return process.cwd()
 }
 
 /**
@@ -43,24 +58,17 @@ function requiredArg(args: Record<string, unknown>, key: string): string | undef
 }
 
 /**
- * Run a tool body against a resolved project, turning throws into messages.
+ * Run a tool body against the session's project, turning throws into messages.
  *
  * A tool that rejects gives the model a stack trace; a tool that returns
  * `{ error }` gives it something to act on.
- * @param workspaces - the registry.
- * @param args - the tool arguments.
+ * @param exec - the tool execution context.
  * @param body - the work.
  * @returns the body's value, or an error object.
  */
-async function withProject<T>(
-  workspaces: WorkspaceLookup,
-  args: Record<string, unknown>,
-  body: (project: string) => T,
-): Promise<T | { error: string }> {
-  const resolved = projectOf(workspaces, args)
-  if ('error' in resolved) return resolved
+async function withProject<T>(exec: ToolExec, body: (project: string) => T): Promise<T | { error: string }> {
   try {
-    return await body(resolved.path)
+    return await body(sessionProject(exec))
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) }
   }
@@ -201,18 +209,22 @@ function iconEntrySchema() {
  * overwrite deliberate human placement. `arch_screenshot` is how the agent
  * CHECKS a layout — it looks and reports, rather than rearranging.
  *
- * `workspaceId`, `id`, `title` and `ops` are deliberately NOT declared
- * `required: true` in their parameter schema, even though every tool needs
- * them: the real registry validates arguments against that schema before
- * `execute` ever runs, and a violation there is a thrown `ToolArgsError`, not
- * a value this plugin composes. Leaving them schema-optional and checking
- * them in the body (`projectOf`, `requiredArg`) keeps the actionable
- * `{ error: "missing id" }` message a prior review round asked for, instead
- * of a generic framework-level rejection the model cannot act on as directly.
- * @param workspaces - the workspace registry, narrowed.
+ * `id`, `title` and `ops` are deliberately NOT declared `required: true` in
+ * their parameter schema, even though every tool that has them needs them:
+ * the real registry validates arguments against that schema before `execute`
+ * ever runs, and a violation there is a thrown `ToolArgsError`, not a value
+ * this plugin composes. Leaving them schema-optional and checking them in the
+ * body (`requiredArg`) keeps the actionable `{ error: "missing id" }` message
+ * a prior review round asked for, instead of a generic framework-level
+ * rejection the model cannot act on as directly.
+ *
+ * No tool takes a `workspaceId` either, and that absence is not an oversight:
+ * an earlier version asked the model for one, and there was no way for it to
+ * supply a valid value (see `sessionProject`). `withProject` derives the
+ * project from `exec` instead.
  * @returns the tool definitions, ready to register.
  */
-export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
+export function archTools(): ToolDefinition[] {
   return [
     defineTool({
       name: 'arch_list',
@@ -220,7 +232,7 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
         'Every architecture diagram in the project, each with an index of its nodes (id, name, type). ' +
         'Call this FIRST: it shows which diagram a thing belongs on and whether an id is already taken, ' +
         'so you neither read every file nor create a duplicate box under a new id.',
-      parameters: { ...WORKSPACE_PARAM },
+      parameters: {},
       output: {
         schema: { oneOf: [{ type: 'array', items: diagramSummarySchema() }, errorSchema()] },
         render: (_args, value) => {
@@ -234,12 +246,12 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
           return [{ type: 'text', text: lines.join('\n') }]
         },
       },
-      execute: async (args) => withProject(workspaces, args, (project) => listDiagrams(project)),
+      execute: async (_args, exec) => withProject(exec, (project) => listDiagrams(project)),
     }),
     defineTool({
       name: 'arch_read',
       description: 'One diagram in full, including its edges and each node’s current geometry.',
-      parameters: { ...WORKSPACE_PARAM, id: { type: 'string', description: 'The diagram id.' } },
+      parameters: { id: { type: 'string', description: 'The diagram id.' } },
       output: {
         schema: { oneOf: [diagramSchema(), errorSchema()] },
         render: (_args, value) =>
@@ -247,8 +259,8 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
             ? [{ type: 'text', text: value.error }]
             : [{ type: 'text', text: `"${value.title}" — ${String(value.nodes.length)} nodes, ${String(value.edges.length)} edges` }],
       },
-      execute: async (args) =>
-        withProject(workspaces, args, (project) => {
+      execute: async (args, exec) =>
+        withProject(exec, (project) => {
           const id = requiredArg(args, 'id')
           if (id === undefined) return { error: 'missing id' }
           return readDiagram(project, id)
@@ -258,7 +270,6 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
       name: 'arch_create',
       description: 'Create a new, empty diagram. Fails rather than overwriting one that exists.',
       parameters: {
-        ...WORKSPACE_PARAM,
         id: { type: 'string', description: 'A short slug, used as the file name.' },
         title: { type: 'string', description: 'The display title.' },
       },
@@ -269,8 +280,8 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
             ? [{ type: 'text', text: value.error }]
             : [{ type: 'text', text: `Created diagram "${String(args.id)}": ${value.title}` }],
       },
-      execute: async (args) =>
-        withProject(workspaces, args, (project) => {
+      execute: async (args, exec) =>
+        withProject(exec, (project) => {
           const id = requiredArg(args, 'id')
           if (id === undefined) return { error: 'missing id' }
           const title = requiredArg(args, 'title')
@@ -287,7 +298,6 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
         'it and ends up in a corner. Node ids should be stable, human-meaningful slugs (paypal, not n-7), and the ' +
         'same real-world thing should reuse its id across diagrams.',
       parameters: {
-        ...WORKSPACE_PARAM,
         id: { type: 'string', description: 'The diagram id.' },
         // Deliberately `type: 'json'` (accept-anything) rather than a nested
         // object/array schema: `applyEdit` is the one place that validates
@@ -325,8 +335,8 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
             ? [{ type: 'text', text: value.error }]
             : [{ type: 'text', text: `"${value.title}" — ${String(value.nodes.length)} nodes, ${String(value.edges.length)} edges` }],
       },
-      execute: async (args) =>
-        withProject(workspaces, args, (project) => {
+      execute: async (args, exec) =>
+        withProject(exec, (project) => {
           const id = requiredArg(args, 'id')
           if (id === undefined) return { error: 'missing id' }
           const next = applyEdit(readDiagram(project, id), (args['ops'] ?? {}) as EditOps)
@@ -341,7 +351,6 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
         'and the folders named in .dsh/arch/config.json. Always pass a query: an icon pack can run to a ' +
         'thousand files. You cannot add icons; that is done by hand in the designer.',
       parameters: {
-        ...WORKSPACE_PARAM,
         query: { type: 'string', description: 'Case-insensitive substring of the slug.' },
       },
       output: {
@@ -352,8 +361,8 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
           return [{ type: 'text', text: value.map((icon) => icon.slug).join(', ') }]
         },
       },
-      execute: async (args) =>
-        withProject(workspaces, args, (project) => {
+      execute: async (args, exec) =>
+        withProject(exec, (project) => {
           const query = args['query']
           return listIcons(project, typeof query === 'string' ? query : undefined)
         }),
@@ -365,7 +374,6 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
         'None of that is visible in the JSON. Use it to CHECK a layout and report what you see; you cannot ' +
         'rearrange the diagram yourself.',
       parameters: {
-        ...WORKSPACE_PARAM,
         id: { type: 'string', description: 'The diagram id.' },
         view: {
           type: 'string',
@@ -385,8 +393,8 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
       // Plan 2 replaces this body with a real capture. Until the designer
       // exists there is nothing to photograph, and saying so is the honest
       // answer — returning a blank canvas would be analysed as if it were real.
-      execute: async (args) =>
-        withProject(workspaces, args, (project) => {
+      execute: async (args, exec) =>
+        withProject(exec, (project) => {
           const id = requiredArg(args, 'id')
           if (id === undefined) return { error: 'missing id' }
           readDiagram(project, id)
@@ -399,8 +407,7 @@ export function archTools(workspaces: WorkspaceLookup): ToolDefinition[] {
 /**
  * Register every tool, disposing with the calling fiber.
  * @param ctx - a context carrying the tool registry.
- * @param workspaces - the workspace registry, narrowed.
  */
-export function registerArchTools(ctx: { tools: ToolHost }, workspaces: WorkspaceLookup): void {
-  for (const tool of archTools(workspaces)) ctx.tools.register(tool)
+export function registerArchTools(ctx: { tools: ToolHost }): void {
+  for (const tool of archTools()) ctx.tools.register(tool)
 }

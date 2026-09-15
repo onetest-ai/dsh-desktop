@@ -4,32 +4,29 @@ import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { archTools } from './tools.ts'
-import type { WorkspaceLookup } from './rpc.ts'
 
 let project: string
 let tools: Map<string, ToolDefinition>
-
-// None of this plugin's tools reads `exec` (no nested dispatch, no deferred
-// context, no turn-concluding), so an empty stub satisfies every call site
-// that matters here without impersonating the real registry's execution
-// bookkeeping.
-const FAKE_EXEC = {} as ToolRunContext
+let exec: ToolRunContext
 
 /**
  * @param name - the tool name.
- * @param args - its arguments, with workspaceId filled in.
+ * @param args - its arguments.
  * @returns whatever the tool returns.
  */
 async function call(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
   const tool = tools.get(name)
   if (tool === undefined) throw new Error(`no tool ${name}`)
-  return tool.execute({ workspaceId: 'ws1', ...args }, FAKE_EXEC)
+  return tool.execute(args, exec)
 }
 
 beforeEach(() => {
   project = mkdtempSync(join(tmpdir(), 'tools-'))
-  const workspaces: WorkspaceLookup = { get: (id) => (id === 'ws1' ? { path: project } : undefined) }
-  tools = new Map(archTools(workspaces).map((tool) => [tool.name, tool]))
+  tools = new Map(archTools().map((tool) => [tool.name, tool]))
+  // A fake session, exactly as loosely-shaped as the real one this plugin
+  // reads at runtime: `exec.agent.session.meta.cwd`. No `workspaceId` appears
+  // anywhere — the project comes from here, not from an argument.
+  exec = { agent: { session: { meta: { cwd: project } } } } as unknown as ToolRunContext
 })
 
 describe('the tool set', () => {
@@ -66,6 +63,24 @@ describe('the tool set', () => {
       expect(typeof tool.output.render).toBe('function')
       expect(typeof tool.output.schema).toBe('object')
     }
+  })
+
+  it('takes no workspaceId parameter anywhere', () => {
+    // The regression this fix exists to prevent: the model has no way to
+    // discover a workspace id (no tool lists them, they are opaque registry
+    // keys), so every call failed until the project came from the session
+    // instead of an argument.
+    for (const tool of tools.values()) {
+      expect(tool.parameters).not.toHaveProperty('workspaceId')
+    }
+  })
+})
+
+describe('a tool call with no workspaceId argument at all', () => {
+  it('still resolves the project, from the session', async () => {
+    // Exactly the shape a real call arrives in: no workspaceId, ever.
+    const result = (await call('arch_create', { id: 'auth', title: 'Auth' })) as { title?: string }
+    expect(result.title).toBe('Auth')
   })
 })
 
