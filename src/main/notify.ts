@@ -101,64 +101,11 @@ function readEventBody(request: IncomingMessage): Promise<{ state?: string; text
 }
 
 /**
- * Read a bounded, best-effort JSON body off `request` and resolve the string
- * `path` it carries, or undefined when the body is oversized, unparseable, or
- * carries no string `path`. Never rejects — the same forgiving contract as
- * {@link readEventBody}, since this too is a loopback POST from a plugin this
- * app itself shipped.
- */
-function readOpenPath(request: IncomingMessage): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = []
-    let bytes = 0
-    let overflowed = false
-    const done = (result: string | undefined): void => {
-      request.removeAllListeners('data')
-      request.removeAllListeners('end')
-      request.removeAllListeners('error')
-      resolve(result)
-    }
-    request.on('data', (chunk: Buffer) => {
-      if (overflowed) return
-      bytes += chunk.length
-      if (bytes > MAX_EVENT_BODY_BYTES) {
-        overflowed = true
-        chunks.length = 0
-        return
-      }
-      chunks.push(chunk)
-    })
-    request.on('end', () => {
-      if (overflowed) {
-        done(undefined)
-        return
-      }
-      try {
-        const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        const path = typeof parsed === 'object' && parsed !== null && 'path' in parsed ? (parsed as { path: unknown }).path : undefined
-        done(typeof path === 'string' && path.length > 0 ? path : undefined)
-      } catch {
-        done(undefined)
-      }
-    })
-    request.on('error', () => done(undefined))
-  })
-}
-
-/**
  * Listen on loopback for hook pings from the harness: `/turn-end` (the Stop
  * hook), `/hook/prompt` (a submitted prompt), `/hook/tool` (a tool call),
  * `/hook/notify` (a harness notification), and `/pet/event` (the pet hook
  * script's own POST, carrying `{state, text}` — the animation state and the
  * already-templated bubble line to show).
- *
- * It also answers `/open`: the desktop-pane plugin POSTs `{path}` here to hand
- * a file the harness would otherwise open natively (`open <path>`, which sends
- * an `.html` to the system browser) to this app instead. `onOpen` decides —
- * it returns whether a pane took the file — and the reply is `200` when it did
- * and `204` when it did not, which is the plugin's signal to fall back to the
- * native opener. Unlike the fire-and-forget hook pings, this one awaits its
- * handler because the plugin waits on the answer.
  *
  * The port is the configured one rather than OS-assigned because the harness
  * reads its hook config once at load: the `curl` in each hook command is
@@ -166,31 +113,11 @@ function readOpenPath(request: IncomingMessage): Promise<string | undefined> {
  * one chosen after the fact.
  * @param port - the configured port; 0 is used by tests for an ephemeral port.
  * @param onHook - invoked once per POST to a matched route, with the event it matched.
- * @param onOpen - invoked for a `/open` POST carrying a path; resolves whether a
- *   pane took the file. Omitted (or a body carrying no path) answers `204`.
  * @returns the listening server.
  */
-export function startNotifyListener(
-  port: number,
-  onHook: (event: HookEvent) => void,
-  onOpen?: (path: string) => Promise<boolean>,
-): Promise<NotifyServer> {
+export function startNotifyListener(port: number, onHook: (event: HookEvent) => void): Promise<NotifyServer> {
   return new Promise<NotifyServer>((resolve, reject) => {
     const server: Server = createServer((request, response) => {
-      if (request.method === 'POST' && request.url === '/open') {
-        readOpenPath(request)
-          .then((path) => {
-            if (onOpen === undefined || path === undefined) {
-              response.writeHead(204).end()
-              return
-            }
-            onOpen(path)
-              .then((handled) => response.writeHead(handled ? 200 : 204).end())
-              .catch(() => response.writeHead(204).end())
-          })
-          .catch(() => response.writeHead(204).end())
-        return
-      }
       if (request.method === 'POST' && request.url === '/pet/event') {
         readEventBody(request)
           .then(({ state, text }) => {

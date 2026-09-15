@@ -77,52 +77,6 @@ describe('startNotifyListener', () => {
     expect(seen).toEqual([{ kind: 'event' }])
   })
 
-  it('answers 200 on /open when onOpen handles the path', async () => {
-    const seen: string[] = []
-    server = await startNotifyListener(0, () => {}, async (path) => {
-      seen.push(path)
-      return true
-    })
-    const response = await fetch(`http://127.0.0.1:${server.port}/open`, {
-      method: 'POST',
-      body: JSON.stringify({ path: '/proj/report.html' }),
-    })
-    expect(response.status).toBe(200)
-    expect(seen).toEqual(['/proj/report.html'])
-  })
-
-  it('answers 204 on /open when onOpen declines the path', async () => {
-    server = await startNotifyListener(0, () => {}, async () => false)
-    const response = await fetch(`http://127.0.0.1:${server.port}/open`, {
-      method: 'POST',
-      body: JSON.stringify({ path: '/outside/thing.txt' }),
-    })
-    expect(response.status).toBe(204)
-  })
-
-  it('answers 204 on /open when no open handler is wired', async () => {
-    server = await startNotifyListener(0, () => {})
-    const response = await fetch(`http://127.0.0.1:${server.port}/open`, {
-      method: 'POST',
-      body: JSON.stringify({ path: '/proj/x' }),
-    })
-    expect(response.status).toBe(204)
-  })
-
-  it('answers 204 on /open without calling onOpen for a body carrying no path', async () => {
-    let called = false
-    server = await startNotifyListener(0, () => {}, async () => {
-      called = true
-      return true
-    })
-    const response = await fetch(`http://127.0.0.1:${server.port}/open`, {
-      method: 'POST',
-      body: JSON.stringify({ nope: 1 }),
-    })
-    expect(response.status).toBe(204)
-    expect(called).toBe(false)
-  })
-
   it('rejects when the port is already taken', async () => {
     server = await startNotifyListener(0, () => {})
     await expect(startNotifyListener(server.port, () => {})).rejects.toThrow(/in use/)

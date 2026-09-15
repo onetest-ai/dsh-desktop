@@ -69,6 +69,13 @@ export interface DesktopBridge {
    * Optional, for the same reason as {@link onCompose}.
    */
   reportComposerOptions?(opts: ComposerOptions): void
+  /**
+   * Open an absolute file path in that app's own editor/web pane, resolving
+   * whether a pane took it (false when it is outside any open project, so the
+   * caller falls back to the harness's own open). Optional: a desktop older
+   * than this feature never exposes it, so the plugin feature-detects first.
+   */
+  openPath?(path: string): Promise<boolean>
 }
 
 /**
