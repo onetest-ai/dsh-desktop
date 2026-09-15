@@ -2,11 +2,18 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { archTools, type ArchToolDefinition } from './tools.ts'
+import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
+import { archTools } from './tools.ts'
 import type { WorkspaceLookup } from './rpc.ts'
 
 let project: string
-let tools: Map<string, ArchToolDefinition>
+let tools: Map<string, ToolDefinition>
+
+// None of this plugin's tools reads `exec` (no nested dispatch, no deferred
+// context, no turn-concluding), so an empty stub satisfies every call site
+// that matters here without impersonating the real registry's execution
+// bookkeeping.
+const FAKE_EXEC = {} as ToolRunContext
 
 /**
  * @param name - the tool name.
@@ -16,7 +23,7 @@ let tools: Map<string, ArchToolDefinition>
 async function call(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
   const tool = tools.get(name)
   if (tool === undefined) throw new Error(`no tool ${name}`)
-  return tool.execute({ workspaceId: 'ws1', ...args })
+  return tool.execute({ workspaceId: 'ws1', ...args }, FAKE_EXEC)
 }
 
 beforeEach(() => {
@@ -47,6 +54,17 @@ describe('the tool set', () => {
   it('accepts no coordinate parameter anywhere', () => {
     for (const tool of tools.values()) {
       expect(JSON.stringify(tool.parameters)).not.toMatch(/"(x|y)"/)
+    }
+  })
+
+  it('declares the mandatory output contract the real registry enforces', () => {
+    // dsh-tools/lib/index.js refuses `register` for any definition whose
+    // `output` is not `{ schema, render }` — this is the failure that reached
+    // the user when this plugin was built against a hand-written stand-in for
+    // the real contract instead of `defineTool`.
+    for (const tool of tools.values()) {
+      expect(typeof tool.output.render).toBe('function')
+      expect(typeof tool.output.schema).toBe('object')
     }
   })
 })

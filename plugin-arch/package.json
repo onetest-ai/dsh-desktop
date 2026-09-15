@@ -23,9 +23,11 @@
     "test": "vitest run",
     "prepack": "npm run build"
   },
-  "peerDependencies": { "@deepseek-ai/cordis": "*" },
+  "peerDependencies": { "@deepseek-ai/cordis": "*", "@deepseek-ai/dsh-tools": "*" },
   "devDependencies": {
     "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-attachment": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
     "@types/node": "^22.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
