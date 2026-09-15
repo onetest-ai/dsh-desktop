@@ -80,7 +80,9 @@ export class DiagramParseError extends Error {
  */
 function requireString(record: Record<string, unknown>, key: string, where: string): string {
   const value = record[key]
-  if (typeof value !== 'string' || value === '') throw new DiagramParseError(`${where}: missing "${key}"`)
+  if (value === undefined || value === null) throw new DiagramParseError(`${where}: missing "${key}"`)
+  if (typeof value !== 'string') throw new DiagramParseError(`${where}: "${key}" must be a string`)
+  if (value === '') throw new DiagramParseError(`${where}: "${key}" must not be empty`)
   return value
 }
 
@@ -107,8 +109,81 @@ function optionalString(record: Record<string, unknown>, key: string, where: str
  */
 function requireNumber(record: Record<string, unknown>, key: string, where: string): number {
   const value = record[key]
-  if (typeof value !== 'number' || !Number.isFinite(value)) throw new DiagramParseError(`${where}: missing "${key}"`)
+  if (value === undefined || value === null) throw new DiagramParseError(`${where}: missing "${key}"`)
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new DiagramParseError(`${where}: "${key}" must be a finite number`)
   return value
+}
+
+/**
+ * Read an optional boolean, refusing a wrong type rather than coercing it.
+ *
+ * Absent means false — a hand-written node that never mentions `pinned` is
+ * simply not pinned. But a present-and-wrong value throws, because
+ * `"pinned": "true"` is a typo that would otherwise silently UNPIN a node the
+ * user placed, leaving the placement module free to move a box they believe is
+ * locked. The pin invariant is the one promise this tool makes; it must not be
+ * lost to a coercion.
+ * @param record - the object being read.
+ * @param key - the field name.
+ * @param where - a human description of the containing thing.
+ * @returns the boolean value; false when absent.
+ */
+function optionalBoolean(record: Record<string, unknown>, key: string, where: string): boolean {
+  const value = record[key]
+  if (value === undefined || value === null) return false
+  if (typeof value !== 'boolean') throw new DiagramParseError(`${where}: "${key}" must be true or false`)
+  return value
+}
+
+/**
+ * Read an optional number, refusing a wrong type rather than dropping it.
+ *
+ * Absent means "not placed yet", which placement fills in. A present but
+ * non-numeric value is a corrupted coordinate, and silently dropping it reads
+ * downstream as "not placed" — handing a node the user positioned to the
+ * placement module to move. Fail instead, naming the field.
+ * @param record - the object being read.
+ * @param key - the field name.
+ * @param where - a human description of the containing thing.
+ * @returns the numeric value, or undefined when absent.
+ */
+function optionalNumber(record: Record<string, unknown>, key: string, where: string): number | undefined {
+  const value = record[key]
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new DiagramParseError(`${where}: "${key}" must be a finite number`)
+  }
+  return value
+}
+
+/**
+ * Read optional edge waypoints, validating every element.
+ *
+ * `Array.isArray` alone admits `["a", 1, {}]` and hands it downstream typed as
+ * coordinate pairs, where it fails far from the file that caused it and with
+ * nothing to point at. The element check is what keeps the error next to the
+ * mistake.
+ * @param record - the object being read.
+ * @param where - a human description of the containing edge.
+ * @returns the waypoints, or undefined when absent.
+ */
+function optionalWaypoints(record: Record<string, unknown>, where: string): Array<[number, number]> | undefined {
+  const value = record['waypoints']
+  if (value === undefined || value === null) return undefined
+  if (!Array.isArray(value)) throw new DiagramParseError(`${where}: "waypoints" must be an array`)
+  return value.map((point, index): [number, number] => {
+    if (
+      !Array.isArray(point) ||
+      point.length !== 2 ||
+      typeof point[0] !== 'number' ||
+      typeof point[1] !== 'number' ||
+      !Number.isFinite(point[0]) ||
+      !Number.isFinite(point[1])
+    ) {
+      throw new DiagramParseError(`${where}: waypoint ${String(index)} must be a pair of finite numbers`)
+    }
+    return [point[0], point[1]]
+  })
 }
 
 /**
@@ -123,8 +198,6 @@ function parseNode(raw: unknown, index: number): ArchNode {
   const where = `node ${String(index)}`
   const status = optionalString(record, 'status', where)
   if (status !== undefined && !STATUSES.has(status)) throw new DiagramParseError(`${where}: unknown status "${status}"`)
-  const x = record['x']
-  const y = record['y']
   return {
     id: requireString(record, 'id', where),
     name: requireString(record, 'name', where),
@@ -134,11 +207,11 @@ function parseNode(raw: unknown, index: number): ArchNode {
     description: optionalString(record, 'description', where),
     childDiagram: optionalString(record, 'childDiagram', where),
     parent: optionalString(record, 'parent', where),
-    x: typeof x === 'number' ? x : undefined,
-    y: typeof y === 'number' ? y : undefined,
+    x: optionalNumber(record, 'x', where),
+    y: optionalNumber(record, 'y', where),
     w: requireNumber(record, 'w', where),
     h: requireNumber(record, 'h', where),
-    pinned: record['pinned'] === true,
+    pinned: optionalBoolean(record, 'pinned', where),
   }
 }
 
@@ -154,7 +227,6 @@ function parseEdge(raw: unknown, index: number): ArchEdge {
   const where = `edge ${String(index)}`
   const direction = requireString(record, 'direction', where)
   if (!DIRECTIONS.has(direction)) throw new DiagramParseError(`${where}: unknown direction "${direction}"`)
-  const waypoints = record['waypoints']
   return {
     id: requireString(record, 'id', where),
     from: requireString(record, 'from', where),
@@ -164,7 +236,7 @@ function parseEdge(raw: unknown, index: number): ArchEdge {
     direction: direction as EdgeDirection,
     sourceHandle: optionalString(record, 'sourceHandle', where),
     targetHandle: optionalString(record, 'targetHandle', where),
-    waypoints: Array.isArray(waypoints) ? (waypoints as Array<[number, number]>) : undefined,
+    waypoints: optionalWaypoints(record, where),
   }
 }
 

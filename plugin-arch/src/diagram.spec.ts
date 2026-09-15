@@ -64,11 +64,33 @@ describe('parseDiagram', () => {
     ['nodes that are not an array', '{"title":"T","nodes":{},"edges":[]}'],
     ['a node with no id', '{"title":"T","nodes":[{"name":"A","type":"S","w":1,"h":1,"pinned":false}],"edges":[]}'],
     ['an unknown edge direction', '{"title":"T","nodes":[],"edges":[{"id":"e","from":"a","to":"b","direction":"sideways"}]}'],
+    ['a string "pinned" on a node', '{"title":"T","nodes":[{"id":"a","name":"A","type":"S","w":1,"h":1,"pinned":"true"}],"edges":[]}'],
+    ['a numeric "pinned" on a node', '{"title":"T","nodes":[{"id":"a","name":"A","type":"S","w":1,"h":1,"pinned":1}],"edges":[]}'],
+    ['a string "x" on a node', '{"title":"T","nodes":[{"id":"a","name":"A","type":"S","w":1,"h":1,"pinned":false,"x":"700"}],"edges":[]}'],
+    ['non-numeric waypoint elements', '{"title":"T","nodes":[],"edges":[{"id":"e","from":"a","to":"b","direction":"none","waypoints":["a",1]}]}'],
+    ['a short waypoint tuple', '{"title":"T","nodes":[],"edges":[{"id":"e","from":"a","to":"b","direction":"none","waypoints":[[1,2],[3]]}]}'],
+    ['a waypoint with a non-numeric coordinate', '{"title":"T","nodes":[],"edges":[{"id":"e","from":"a","to":"b","direction":"none","waypoints":[[1,"2"]]}]}'],
   ])('rejects %s', (_case, text) => {
     expect(() => parseDiagram(text)).toThrow(DiagramParseError)
   })
 
   it('names the problem in the message', () => {
     expect(() => parseDiagram('{"nodes":[],"edges":[]}')).toThrow(/title/)
+  })
+
+  it('reports a present-but-empty id distinctly from an absent one', () => {
+    expect(() => parseDiagram('{"title":"T","nodes":[{"id":"","name":"A","type":"S","w":1,"h":1,"pinned":false}],"edges":[]}')).toThrow(/must not be empty/)
+    expect(() => parseDiagram('{"title":"T","nodes":[{"name":"A","type":"S","w":1,"h":1,"pinned":false}],"edges":[]}')).toThrow(/missing/)
+  })
+
+  it('defaults a node with no pinned key to pinned: false', () => {
+    const parsed = parseDiagram('{"title":"T","nodes":[{"id":"a","name":"A","type":"System","w":200,"h":100}],"edges":[]}')
+    expect(parsed.nodes[0]?.pinned).toBe(false)
+  })
+
+  it('still accepts a node with no coordinates', () => {
+    const pending = parseDiagram('{"title":"T","nodes":[{"id":"a","name":"A","type":"System","w":200,"h":100,"pinned":false}],"edges":[]}')
+    expect(pending.nodes[0]?.x).toBeUndefined()
+    expect(pending.nodes[0]?.y).toBeUndefined()
   })
 })
