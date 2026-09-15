@@ -1,4 +1,4 @@
-import type { ArchEdge, ArchNode, Diagram, EdgeDirection, NodeStatus } from './diagram.ts'
+import { EDGE_DIRECTIONS, NODE_STATUSES, type ArchEdge, type ArchNode, type Diagram, type EdgeDirection, type NodeStatus } from './diagram.ts'
 import { placeNewNodes } from './placement.ts'
 
 /** Default box size for a node nobody has resized. */
@@ -57,6 +57,181 @@ export class EditError extends Error {
 }
 
 /**
+ * Read one element of an ops array as an object, or throw naming its position.
+ *
+ * Elements arrive from a cast like everything else in `ops`, and an array of
+ * the right name full of the wrong things used to pass straight through.
+ * @param raw - the element.
+ * @param where - `ops.addNodes[0]` and the like, for the message.
+ * @returns the element as a record.
+ * @throws EditError when it is not an object.
+ */
+function opRecord(raw: unknown, where: string): Record<string, unknown> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new EditError(`${where} must be an object`)
+  }
+  return raw as Record<string, unknown>
+}
+
+/**
+ * A required, non-empty string field of an op.
+ * @param record - the op.
+ * @param key - the field name.
+ * @param where - the op's position, for the message.
+ * @returns the value.
+ * @throws EditError naming the op and the field.
+ */
+function opString(record: Record<string, unknown>, key: string, where: string): string {
+  const value = record[key]
+  if (value === undefined || value === null) throw new EditError(`${where}: missing "${key}"`)
+  if (typeof value !== 'string') throw new EditError(`${where}: "${key}" must be a string`)
+  if (value === '') throw new EditError(`${where}: "${key}" must not be empty`)
+  return value
+}
+
+/**
+ * An optional string field of an op, refused rather than coerced when present
+ * and wrong — `name: 42` used to be written as a number and read back as a
+ * type error in a file the caller was told had been saved.
+ * @param record - the op.
+ * @param key - the field name.
+ * @param where - the op's position, for the message.
+ * @returns the value, or undefined when absent.
+ * @throws EditError naming the op and the field.
+ */
+function opOptionalString(record: Record<string, unknown>, key: string, where: string): string | undefined {
+  const value = record[key]
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string') throw new EditError(`${where}: "${key}" must be a string`)
+  if (value === '') throw new EditError(`${where}: "${key}" must not be empty`)
+  return value
+}
+
+/**
+ * An optional finite number field of an op.
+ * @param record - the op.
+ * @param key - the field name.
+ * @param where - the op's position, for the message.
+ * @returns the value, or undefined when absent.
+ * @throws EditError naming the op and the field.
+ */
+function opOptionalNumber(record: Record<string, unknown>, key: string, where: string): number | undefined {
+  const value = record[key]
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new EditError(`${where}: "${key}" must be a finite number`)
+  }
+  return value
+}
+
+/**
+ * An optional field whose value must come from a closed set.
+ *
+ * The tool schema already declares `status` and `direction` as enums, but a
+ * schema is a hint to a model, not a gate: `status: "bogus"` reached the store
+ * and the parser then refused the file. Nothing is written that the next read
+ * would refuse, so the set is checked here too.
+ * @param record - the op.
+ * @param key - the field name.
+ * @param allowed - the permitted values.
+ * @param where - the op's position, for the message.
+ * @returns the value, or undefined when absent.
+ * @throws EditError naming the op, the field and the offending value.
+ */
+function opOptionalEnum(
+  record: Record<string, unknown>,
+  key: string,
+  allowed: ReadonlySet<string>,
+  where: string,
+): string | undefined {
+  const value = record[key]
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string' || !allowed.has(value)) {
+    throw new EditError(`${where}: unknown ${key} "${String(value)}" — expected one of ${[...allowed].join(', ')}`)
+  }
+  return value
+}
+
+/**
+ * Validate one node addition.
+ * @param raw - the element, straight from the payload.
+ * @param index - its position in `addNodes`.
+ * @returns the node addition, with every field typed as claimed.
+ * @throws EditError naming the op and the field.
+ */
+function asNewNode(raw: unknown, index: number): NewNode {
+  const where = `ops.addNodes[${String(index)}]`
+  const record = opRecord(raw, where)
+  return {
+    id: opString(record, 'id', where),
+    name: opString(record, 'name', where),
+    type: opString(record, 'type', where),
+    icon: opOptionalString(record, 'icon', where),
+    status: opOptionalEnum(record, 'status', NODE_STATUSES, where) as NodeStatus | undefined,
+    description: opOptionalString(record, 'description', where),
+    childDiagram: opOptionalString(record, 'childDiagram', where),
+    parent: opOptionalString(record, 'parent', where),
+    w: opOptionalNumber(record, 'w', where),
+    h: opOptionalNumber(record, 'h', where),
+  }
+}
+
+/**
+ * Validate one node update. Geometry stays absent by design.
+ * @param raw - the element, straight from the payload.
+ * @param index - its position in `updateNodes`.
+ * @returns the update, with every field typed as claimed.
+ * @throws EditError naming the op and the field.
+ */
+function asNodeUpdate(raw: unknown, index: number): NodeUpdate {
+  const where = `ops.updateNodes[${String(index)}]`
+  const record = opRecord(raw, where)
+  return {
+    id: opString(record, 'id', where),
+    name: opOptionalString(record, 'name', where),
+    type: opOptionalString(record, 'type', where),
+    icon: opOptionalString(record, 'icon', where),
+    status: opOptionalEnum(record, 'status', NODE_STATUSES, where) as NodeStatus | undefined,
+    description: opOptionalString(record, 'description', where),
+    childDiagram: opOptionalString(record, 'childDiagram', where),
+  }
+}
+
+/**
+ * Validate one edge addition. Its id is assigned here, never sent.
+ * @param raw - the element, straight from the payload.
+ * @param index - its position in `addEdges`.
+ * @returns the edge addition, with every field typed as claimed.
+ * @throws EditError naming the op and the field.
+ */
+function asNewEdge(raw: unknown, index: number): NewEdge {
+  const where = `ops.addEdges[${String(index)}]`
+  const record = opRecord(raw, where)
+  return {
+    from: opString(record, 'from', where),
+    to: opString(record, 'to', where),
+    label: opOptionalString(record, 'label', where),
+    sublabel: opOptionalString(record, 'sublabel', where),
+    direction: opOptionalEnum(record, 'direction', EDGE_DIRECTIONS, where) as EdgeDirection | undefined,
+  }
+}
+
+/**
+ * Validate one id in `removeNodes` / `removeEdges`.
+ * @param raw - the element.
+ * @param index - its position.
+ * @param key - which array it came from, for the message.
+ * @returns the id.
+ * @throws EditError naming the op.
+ */
+function asRemovalId(raw: unknown, index: number, key: string): string {
+  if (typeof raw !== 'string' || raw === '') {
+    throw new EditError(`ops.${key}[${String(index)}] must be a non-empty string id`)
+  }
+  return raw
+}
+
+/**
  * The next free edge id.
  *
  * Sequential rather than random so a diagram file read twice looks the same,
@@ -84,7 +259,9 @@ function nextEdgeId(edges: readonly ArchEdge[]): string {
  *
  * Order within the batch: removals, then additions, then updates, then
  * placement once over the finished graph. Removals first so one call can
- * replace a node with a new one under the same id.
+ * replace a node with a new one under the same id — and when that happens the
+ * replacement inherits the removed node's position, pin and size, because a
+ * replacement is still not a permission to move a box the user placed.
  * @param diagram - the diagram to change.
  * @param ops - the changes.
  * @returns a new diagram; the input is untouched.
@@ -107,13 +284,31 @@ export function applyEdit(diagram: Diagram, ops: EditOps): Diagram {
     }
   }
 
-  const removedNodes = new Set(ops.removeNodes ?? [])
+  // Element validation, before anything is applied. The top-level shape check
+  // above was not enough: `{ addNodes: [{ nonsense: 1 }] }` passed it, built a
+  // node with no id, name or type, was serialized to disk and reported ok —
+  // and every later read of that file failed. Naming the op and the field turns
+  // that silent corruption into an actionable `bad-request`.
+  const addNodes = (ops.addNodes ?? []).map((raw, index) => asNewNode(raw, index))
+  const updateNodes = (ops.updateNodes ?? []).map((raw, index) => asNodeUpdate(raw, index))
+  const addEdges = (ops.addEdges ?? []).map((raw, index) => asNewEdge(raw, index))
+  const removeNodeIds = (ops.removeNodes ?? []).map((raw, index) => asRemovalId(raw, index, 'removeNodes'))
+  const removeEdgeIds = (ops.removeEdges ?? []).map((raw, index) => asRemovalId(raw, index, 'removeEdges'))
+
+  const removedNodes = new Set(removeNodeIds)
   for (const id of removedNodes) {
     if (!diagram.nodes.some((node) => node.id === id)) throw new EditError(`cannot remove unknown node "${id}"`)
   }
-  const removedEdges = new Set(ops.removeEdges ?? [])
+  const removedEdges = new Set(removeEdgeIds)
   for (const id of removedEdges) {
     if (!diagram.edges.some((edge) => edge.id === id)) throw new EditError(`cannot remove unknown edge "${id}"`)
+  }
+
+  // What each removed id was sitting at, kept for the replace-in-one-call case
+  // below. Captured before the filter, because after it the node is gone.
+  const removedGeometry = new Map<string, ArchNode>()
+  for (const node of diagram.nodes) {
+    if (removedNodes.has(node.id)) removedGeometry.set(node.id, node)
   }
 
   let nodes = diagram.nodes.filter((node) => !removedNodes.has(node.id))
@@ -123,8 +318,16 @@ export function applyEdit(diagram: Diagram, ops: EditOps): Diagram {
     (edge) => !removedEdges.has(edge.id) && !removedNodes.has(edge.from) && !removedNodes.has(edge.to),
   )
 
-  for (const fresh of ops.addNodes ?? []) {
+  for (const fresh of addNodes) {
     if (nodes.some((node) => node.id === fresh.id)) throw new EditError(`node "${fresh.id}" already exists`)
+    // Replacing a node in one call must not move it. Remove-then-add under the
+    // same id is how an agent rewrites a box's semantics, and it used to return
+    // the node at (0,0), unpinned and back to the default size — silently
+    // undoing a placement the user had made by hand, which is the one thing
+    // this tool promises never to do. Geometry and the pin therefore carry
+    // forward from what was removed; everything the addition states about
+    // MEANING still comes from the addition.
+    const replaced = removedGeometry.get(fresh.id)
     const node: ArchNode = {
       id: fresh.id,
       name: fresh.name,
@@ -134,16 +337,16 @@ export function applyEdit(diagram: Diagram, ops: EditOps): Diagram {
       description: fresh.description,
       childDiagram: fresh.childDiagram,
       parent: fresh.parent,
-      x: undefined,
-      y: undefined,
-      w: fresh.w ?? DEFAULT_SIZE.w,
-      h: fresh.h ?? DEFAULT_SIZE.h,
-      pinned: false,
+      x: replaced?.x,
+      y: replaced?.y,
+      w: fresh.w ?? replaced?.w ?? DEFAULT_SIZE.w,
+      h: fresh.h ?? replaced?.h ?? DEFAULT_SIZE.h,
+      pinned: replaced?.pinned ?? false,
     }
     nodes = [...nodes, node]
   }
 
-  for (const update of ops.updateNodes ?? []) {
+  for (const update of updateNodes) {
     const index = nodes.findIndex((node) => node.id === update.id)
     if (index === -1) throw new EditError(`cannot update unknown node "${update.id}"`)
     const existing = nodes[index]
@@ -166,7 +369,7 @@ export function applyEdit(diagram: Diagram, ops: EditOps): Diagram {
   }
 
   const known = new Set(nodes.map((node) => node.id))
-  for (const fresh of ops.addEdges ?? []) {
+  for (const fresh of addEdges) {
     if (!known.has(fresh.from)) throw new EditError(`edge from unknown node "${fresh.from}"`)
     if (!known.has(fresh.to)) throw new EditError(`edge to unknown node "${fresh.to}"`)
     edges = [

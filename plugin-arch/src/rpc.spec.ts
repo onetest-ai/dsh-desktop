@@ -1,7 +1,8 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { archRoot } from './paths.ts'
 import { createArchHandler, type WorkspaceLookup } from './rpc.ts'
 
 let project: string
@@ -49,8 +50,17 @@ describe('endpoints', () => {
   })
 
   it('lists icons', async () => {
-    const result = await handle('icon/list', { workspaceId: 'ws1', query: 'nothing' })
-    expect(result).toEqual({ ok: true, value: [] })
+    // An empty project answering `[]` proves nothing: an endpoint wired to
+    // nothing at all returns the same. A real file on disk and a query that
+    // matches it is what shows `icon/list` reaches `listIcons`.
+    mkdirSync(join(archRoot(project), 'icons'), { recursive: true })
+    writeFileSync(join(archRoot(project), 'icons', 'okta.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+
+    const hit = await handle('icon/list', { workspaceId: 'ws1', query: 'okt' })
+    expect(hit).toEqual({ ok: true, value: [{ slug: 'okta', mediaType: 'image/svg+xml' }] })
+
+    const miss = await handle('icon/list', { workspaceId: 'ws1', query: 'nothing' })
+    expect(miss).toEqual({ ok: true, value: [] })
   })
 
   it('reports an unknown endpoint rather than throwing', async () => {
@@ -171,6 +181,31 @@ describe('error classification', () => {
     })
     expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
     expect((result as { error: { message: string } }).error.message).toMatch(/ops\.addNodes/)
+  })
+
+  it.each([
+    ['a node with no id, name or type', { addNodes: [{ nonsense: 1 }] }],
+    ['a status outside the enum the schema declares', { addNodes: [{ id: 'a', name: 'A', type: 'T', status: 'bogus' }] }],
+    ['a non-string name on an update', { updateNodes: [{ id: 'frontend', name: 42 }] }],
+    ['a removal id that is not a string', { removeNodes: [7] }],
+  ])('refuses %s and leaves the file readable', async (_case, ops) => {
+    // The whole defect in one shape: these all reported ok, were written to
+    // disk, and made the diagram unreadable from then on. The read afterwards
+    // is the assertion that matters — a regression that still writes the
+    // corrupt file would pass an error-code check alone.
+    await handle('diagram/create', { workspaceId: 'ws1', id: 'auth', title: 'Auth' })
+    await handle('diagram/edit', {
+      workspaceId: 'ws1',
+      id: 'auth',
+      ops: { addNodes: [{ id: 'frontend', name: 'Frontend', type: 'App' }] },
+    })
+
+    const result = await handle('diagram/edit', { workspaceId: 'ws1', id: 'auth', ops })
+    expect(result).toMatchObject({ ok: false, error: { code: 'bad-request' } })
+
+    const read = await handle('diagram/read', { workspaceId: 'ws1', id: 'auth' })
+    expect(read).toMatchObject({ ok: true, value: { title: 'Auth' } })
+    expect((read as { value: { nodes: unknown[] } }).value.nodes).toHaveLength(1)
   })
 
   it('accepts an empty ops object as a genuine no-op', async () => {

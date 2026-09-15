@@ -82,4 +82,63 @@ describe('applyEdit', () => {
     })
     expect(out.nodes.find((n) => n.id === 'frontend')?.name).toBe('Rebuilt')
   })
+
+  it('keeps a replaced node exactly where it was', () => {
+    // Replace-in-one-call used to return the node at (0,0), unpinned, at the
+    // default size — undoing a placement the user made by hand, which the
+    // README promises can never happen. Semantics change; geometry does not.
+    const placed: Diagram = {
+      title: 'Auth',
+      nodes: [{ id: 'frontend', name: 'Frontend', type: 'App', x: 900, y: 900, w: 200, h: 100, pinned: true }],
+      edges: [],
+    }
+    const out = applyEdit(placed, {
+      removeNodes: ['frontend'],
+      addNodes: [{ id: 'frontend', name: 'Rebuilt', type: 'Service' }],
+    })
+    expect(out.nodes[0]).toEqual({
+      id: 'frontend',
+      name: 'Rebuilt',
+      type: 'Service',
+      icon: undefined,
+      status: undefined,
+      description: undefined,
+      childDiagram: undefined,
+      parent: undefined,
+      x: 900,
+      y: 900,
+      w: 200,
+      h: 100,
+      pinned: true,
+    })
+  })
+
+  it('lets a replacement state a new size explicitly', () => {
+    // The carry-forward is a default, not a lock: `w`/`h` sent with the
+    // addition still win, or a legitimate resize would be impossible.
+    const out = applyEdit(BASE, {
+      removeNodes: ['frontend'],
+      addNodes: [{ id: 'frontend', name: 'Rebuilt', type: 'App', w: 400, h: 300 }],
+    })
+    const front = out.nodes.find((n) => n.id === 'frontend')
+    expect([front?.w, front?.h]).toEqual([400, 300])
+    expect([front?.x, front?.y]).toEqual([0, 0])
+  })
+
+  it.each([
+    ['a node with no id, name or type', { addNodes: [{ nonsense: 1 }] }, /ops\.addNodes\[0\]/],
+    ['a node id that is not a string', { addNodes: [{ id: 7, name: 'A', type: 'T' }] }, /"id" must be a string/],
+    ['an empty node name', { addNodes: [{ id: 'a', name: '', type: 'T' }] }, /"name" must not be empty/],
+    ['a status outside its set', { addNodes: [{ id: 'a', name: 'A', type: 'T', status: 'bogus' }] }, /unknown status/],
+    ['a non-finite w', { addNodes: [{ id: 'a', name: 'A', type: 'T', w: Number.NaN }] }, /"w" must be a finite number/],
+    ['a non-string name on an update', { updateNodes: [{ id: 'frontend', name: 42 }] }, /"name" must be a string/],
+    ['a direction outside its set', { addEdges: [{ from: 'frontend', to: 'user-store', direction: 'sideways' }] }, /unknown direction/],
+    ['an addNodes element that is not an object', { addNodes: ['frontend'] }, /must be an object/],
+    ['a removal id that is not a string', { removeNodes: [7] }, /ops\.removeNodes\[0\]/],
+  ])('refuses %s, naming the op', (_case, ops, message) => {
+    // These all used to pass the top-level shape check, reach the store, and
+    // write a file the parser then refused — reported to the caller as success.
+    expect(() => applyEdit(BASE, ops as never)).toThrow(EditError)
+    expect(() => applyEdit(BASE, ops as never)).toThrow(message)
+  })
 })

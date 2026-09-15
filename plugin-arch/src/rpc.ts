@@ -62,6 +62,12 @@ function workspaceIdOf(payload: unknown): string | undefined {
 
 /**
  * Read a named string field.
+ *
+ * An empty string counts as absent, matching `requiredArg` on the tool side.
+ * It is the more useful reading at every call site: `""` as an id names no
+ * file, and `""` as a title now fails validation on the way to disk — reported
+ * as "missing id or title" here, the caller learns what to send instead of
+ * reading a message about a diagram file.
  * @param payload - the decoded RPC payload.
  * @param key - the field name.
  * @returns the value, or undefined.
@@ -69,7 +75,7 @@ function workspaceIdOf(payload: unknown): string | undefined {
 function stringField(payload: unknown, key: string): string | undefined {
   if (typeof payload !== 'object' || payload === null) return undefined
   const value = (payload as Record<string, unknown>)[key]
-  return typeof value === 'string' ? value : undefined
+  return typeof value === 'string' && value !== '' ? value : undefined
 }
 
 /**
