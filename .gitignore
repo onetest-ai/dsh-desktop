@@ -12,6 +12,9 @@ plugin/lib
 docs/notes/
 docs/superpowers/
 
+# npm auth token for publishing @onetest/* — never commit
+.npmrc
+
 # Local, uncommitted Claude notes (may reference credential locations)
 CLAUDE.local.md
 .mcp.json

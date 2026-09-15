@@ -1,5 +1,39 @@
-import { describe, expect, it } from 'vitest'
-import { petComposePanelSize, petWindowSize } from './pet-window'
+import { describe, expect, it, vi } from 'vitest'
+
+/** One fake pet BrowserWindow, recording the order of the calls we care about. */
+const { order, dockShow, fakeWindow } = vi.hoisted(() => {
+  const order: string[] = []
+  const dockShow = vi.fn(() => order.push('dock:show'))
+  const fakeWindow = {
+    setAlwaysOnTop: vi.fn(),
+    setVisibleOnAllWorkspaces: vi.fn(() => order.push('viz')),
+    once: vi.fn(),
+    showInactive: vi.fn(),
+    loadURL: vi.fn(),
+  }
+  return { order, dockShow, fakeWindow }
+})
+vi.mock('electron', () => ({
+  BrowserWindow: vi.fn(() => fakeWindow),
+  screen: { getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }) },
+  app: { dock: { show: dockShow } },
+}))
+
+import { createPetWindow, petComposePanelSize, petWindowSize } from './pet-window'
+
+describe('createPetWindow', () => {
+  it('restores the app dock icon after making the pet visible on all workspaces', () => {
+    // `setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })` flips the
+    // whole app to an accessory (no Dock icon); the pet must not cost the app
+    // its Dock tile, so the dock is shown again right after — and only after,
+    // since showing it before the flip would be undone by the flip.
+    order.length = 0
+    dockShow.mockClear()
+    createPetWindow({ scale: 1, deps: { preloadPath: '/pre.js', paneOrigin: 'app://pane' } })
+    expect(dockShow).toHaveBeenCalledTimes(1)
+    expect(order).toEqual(['viz', 'dock:show'])
+  })
+})
 
 describe('petWindowSize', () => {
   it('scales the 192x208 frame plus the bubble band above it, and adds the fixed controls-row height', () => {
