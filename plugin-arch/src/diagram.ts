@@ -7,8 +7,16 @@ export type NodeStatus = 'live' | 'future' | 'deprecated' | 'removed'
  */
 export type EdgeDirection = 'outgoing' | 'bidirectional' | 'none'
 
-const STATUSES: ReadonlySet<string> = new Set<NodeStatus>(['live', 'future', 'deprecated', 'removed'])
-const DIRECTIONS: ReadonlySet<string> = new Set<EdgeDirection>(['outgoing', 'bidirectional', 'none'])
+/**
+ * The status set, exported because `edit.ts` must refuse the same values this
+ * module refuses. Re-declaring it there would let the two drift, and a status
+ * accepted by the editor but rejected by the parser is precisely the
+ * write-then-cannot-read defect this wave closes.
+ */
+export const NODE_STATUSES: ReadonlySet<string> = new Set<NodeStatus>(['live', 'future', 'deprecated', 'removed'])
+
+/** The direction set, exported for the same reason as `NODE_STATUSES`. */
+export const EDGE_DIRECTIONS: ReadonlySet<string> = new Set<EdgeDirection>(['outgoing', 'bidirectional', 'none'])
 
 /** One box on a diagram. */
 export interface ArchNode {
@@ -197,7 +205,7 @@ function parseNode(raw: unknown, index: number): ArchNode {
   const record = raw as Record<string, unknown>
   const where = `node ${String(index)}`
   const status = optionalString(record, 'status', where)
-  if (status !== undefined && !STATUSES.has(status)) throw new DiagramParseError(`${where}: unknown status "${status}"`)
+  if (status !== undefined && !NODE_STATUSES.has(status)) throw new DiagramParseError(`${where}: unknown status "${status}"`)
   const x = optionalNumber(record, 'x', where)
   const y = optionalNumber(record, 'y', where)
   // Both or neither. A node carries a position or it does not; one coordinate
@@ -234,7 +242,7 @@ function parseEdge(raw: unknown, index: number): ArchEdge {
   const record = raw as Record<string, unknown>
   const where = `edge ${String(index)}`
   const direction = requireString(record, 'direction', where)
-  if (!DIRECTIONS.has(direction)) throw new DiagramParseError(`${where}: unknown direction "${direction}"`)
+  if (!EDGE_DIRECTIONS.has(direction)) throw new DiagramParseError(`${where}: unknown direction "${direction}"`)
   return {
     id: requireString(record, 'id', where),
     from: requireString(record, 'from', where),
@@ -249,6 +257,33 @@ function parseEdge(raw: unknown, index: number): ArchEdge {
 }
 
 /**
+ * Refuse a repeated id, naming it.
+ *
+ * Uniqueness is not decoration. `placeNewNodes` keys its results by id and maps
+ * them back over every node, so one freshly-placed node replaced EVERY node
+ * sharing its id — a file with two `a` nodes, one of them pinned at (900,900),
+ * came back from a no-op edit with both at (0,0) and unpinned. `applyEdit`'s
+ * update and remove semantics and `nextEdgeId` are ambiguous under the same
+ * duplication.
+ *
+ * A hand-made file with duplicate ids therefore becomes unreadable, by name.
+ * That is the same treatment a missing `title` or an unknown `direction`
+ * already gets: duplicates ARE malformed content. The separate allowance for
+ * non-conforming *filenames* (see `store.ts`) is about never stranding a file
+ * you can see — it was never a promise to read arbitrary contents.
+ * @param items - the parsed nodes or edges.
+ * @param kind - `node` or `edge`, for the message.
+ * @throws DiagramParseError naming the first id that repeats.
+ */
+function assertUniqueIds(items: ReadonlyArray<{ id: string }>, kind: string): void {
+  const seen = new Set<string>()
+  for (const item of items) {
+    if (seen.has(item.id)) throw new DiagramParseError(`duplicate ${kind} id "${item.id}"`)
+    seen.add(item.id)
+  }
+}
+
+/**
  * Validate an already-decoded value as a diagram.
  *
  * Split out from `parseDiagram` because a diagram reaches this module by two
@@ -257,6 +292,10 @@ function parseEdge(raw: unknown, index: number): ArchEdge {
  * and `edges` unguarded, so an object missing `title` used to serialize
  * cleanly and write a file that the next read refuses. One validator, both
  * doors.
+ *
+ * It is now also the choke point every write passes: `writeDiagram` calls it
+ * before serializing, so the invariant "nothing is written that the next read
+ * would refuse" is enforced in one place rather than argued caller by caller.
  * @param raw - the decoded value.
  * @returns the diagram.
  * @throws DiagramParseError naming the first field that is wrong.
@@ -269,11 +308,14 @@ export function assertDiagram(raw: unknown): Diagram {
   const edges = record['edges']
   if (!Array.isArray(nodes)) throw new DiagramParseError('diagram: "nodes" must be an array')
   if (!Array.isArray(edges)) throw new DiagramParseError('diagram: "edges" must be an array')
-  return {
+  const parsed: Diagram = {
     title,
     nodes: nodes.map((node, index) => parseNode(node, index)),
     edges: edges.map((edge, index) => parseEdge(edge, index)),
   }
+  assertUniqueIds(parsed.nodes, 'node')
+  assertUniqueIds(parsed.edges, 'edge')
+  return parsed
 }
 
 /**

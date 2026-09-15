@@ -100,6 +100,27 @@ describe('parseDiagram', () => {
     expect(parsed.nodes[0]?.pinned).toBe(false)
   })
 
+  it('refuses duplicate node ids, naming the id', () => {
+    // placeNewNodes keys its results by id and maps them back over every node,
+    // so a second node under a taken id let one freshly-placed box overwrite a
+    // pinned one — a no-op edit moved a node the user had placed. Duplicates
+    // are malformed content, refused like any other malformed content.
+    const text =
+      '{"title":"T","nodes":[' +
+      '{"id":"a","name":"A","type":"S","x":900,"y":900,"w":200,"h":100,"pinned":true},' +
+      '{"id":"a","name":"A2","type":"S","w":200,"h":100}],"edges":[]}'
+    expect(() => parseDiagram(text)).toThrow(/duplicate node id "a"/)
+  })
+
+  it('refuses duplicate edge ids, naming the id', () => {
+    // nextEdgeId and removeEdges are both ambiguous under a repeated edge id.
+    const text =
+      '{"title":"T","nodes":[],"edges":[' +
+      '{"id":"e-1","from":"a","to":"b","direction":"none"},' +
+      '{"id":"e-1","from":"b","to":"a","direction":"none"}]}'
+    expect(() => parseDiagram(text)).toThrow(/duplicate edge id "e-1"/)
+  })
+
   it('still accepts a node with no coordinates', () => {
     const pending = parseDiagram('{"title":"T","nodes":[{"id":"a","name":"A","type":"System","w":200,"h":100,"pinned":false}],"edges":[]}')
     expect(pending.nodes[0]?.x).toBeUndefined()

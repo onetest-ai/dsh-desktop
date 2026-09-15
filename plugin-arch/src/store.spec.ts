@@ -118,4 +118,31 @@ describe('writeDiagram', () => {
     const diagram = { title: 'X', nodes: [], edges: [] }
     expect(() => writeDiagram(project, 'a/b', diagram)).toThrow(StoreError)
   })
+
+  it('overwrites a file whose name it could not have created', () => {
+    // A `.hidden.json` on disk was listable, readable and deletable but not
+    // writable, so the canvas could never save a drag on it — the stem rule
+    // applies to MAKING a name, and an overwrite makes none.
+    mkdirSync(archRoot(project), { recursive: true })
+    writeFileSync(join(archRoot(project), '.hidden.json'), JSON.stringify({ title: 'Hidden', nodes: [], edges: [] }))
+    writeDiagram(project, '.hidden', { title: 'Hidden, moved', nodes: [], edges: [] })
+    expect(readDiagram(project, '.hidden').title).toBe('Hidden, moved')
+  })
+
+  it('still refuses to CREATE a non-conforming name', () => {
+    expect(() => writeDiagram(project, '.hidden', { title: 'X', nodes: [], edges: [] })).toThrow(StoreError)
+  })
+
+  it('refuses a diagram the next read would refuse, and leaves the old file intact', () => {
+    // The choke point. `applyEdit` used to hand this module a node with no id
+    // and it was written, reported ok, and unreadable ever after.
+    createDiagram(project, 'auth', 'Auth')
+    const corrupt = {
+      title: 'Auth',
+      nodes: [{ x: 0, y: 0, w: 220, h: 110, pinned: false }],
+      edges: [],
+    } as unknown as Parameters<typeof writeDiagram>[2]
+    expect(() => writeDiagram(project, 'auth', corrupt)).toThrow(/missing "id"/)
+    expect(readDiagram(project, 'auth')).toEqual({ title: 'Auth', nodes: [], edges: [] })
+  })
 })

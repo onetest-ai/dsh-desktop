@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { writeFileAtomic } from './atomic-write.ts'
-import { parseDiagram, serializeDiagram, type Diagram } from './diagram.ts'
+import { assertDiagram, parseDiagram, serializeDiagram, type Diagram } from './diagram.ts'
 import { archRoot, resolveInArch } from './paths.ts'
 
 /** A store operation that cannot proceed. Distinct from a parse failure. */
@@ -142,12 +142,35 @@ export function readDiagram(project: string, id: string): Diagram {
 
 /**
  * Write one diagram, whole.
+ *
+ * Two decisions, both reversals of earlier ones, both paid for by a demonstrated
+ * corruption:
+ *
+ * **It validates.** Validation used to live at the callers on the grounds that
+ * this is the canvas hot path and its other callers pass typed values. But
+ * `ops` reaches `applyEdit` from a cast, so `{ addNodes: [{ nonsense: 1 }] }`
+ * produced a node with no `id`, `name` or `type`, serialized it, reported
+ * success, and left a file every later read refuses. The cost is microseconds
+ * on a few-hundred-node diagram; the benefit is that this class of bug is
+ * unrepeatable rather than fixed per door. Nothing is written that the next
+ * read would refuse.
+ *
+ * **The stem rule applies only to creation.** Using `fileForNew`
+ * unconditionally made an existing `_legacy.json` listable, readable and
+ * deletable but not writable — the allowance that says "you must never be
+ * stranded with a file you can see" applied to three of the four verbs. An
+ * overwrite creates no new name, so it cannot create an unlistable one; only a
+ * write to a path that does not yet exist has to pass the stem rule.
  * @param project - the workspace root.
  * @param id - the diagram id.
  * @param diagram - what to write.
+ * @throws StoreError when the id is refused; DiagramParseError, naming the
+ *   field, when the diagram would not survive a read.
  */
 export function writeDiagram(project: string, id: string, diagram: Diagram): void {
-  writeFileAtomic(fileForNew(project, id), serializeDiagram(diagram))
+  const existing = fileForExisting(project, id)
+  const file = existsSync(existing) ? existing : fileForNew(project, id)
+  writeFileAtomic(file, serializeDiagram(assertDiagram(diagram)))
 }
 
 /**
@@ -165,7 +188,9 @@ export function createDiagram(project: string, id: string, title: string): Diagr
   const file = fileForNew(project, id)
   if (existsSync(file)) throw new StoreError(`diagram "${id}" already exists`)
   const diagram: Diagram = { title, nodes: [], edges: [] }
-  writeFileAtomic(file, serializeDiagram(diagram))
+  // Through the same gate as every other write: an empty title serializes
+  // cleanly and reads back as a missing field.
+  writeFileAtomic(file, serializeDiagram(assertDiagram(diagram)))
   return diagram
 }
 
