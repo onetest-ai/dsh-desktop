@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -49,6 +49,12 @@ describe('readDiagram', () => {
     writeFileSync(join(archRoot(project), 'broken.json'), '{ not json')
     expect(() => readDiagram(project, 'broken')).toThrow(/broken\.json/)
   })
+
+  it('reads a file with a non-conforming name that could not have been created through this module', () => {
+    mkdirSync(archRoot(project), { recursive: true })
+    writeFileSync(join(archRoot(project), '.hidden.json'), JSON.stringify({ title: 'Hidden', nodes: [], edges: [] }))
+    expect(readDiagram(project, '.hidden').title).toBe('Hidden')
+  })
 })
 
 describe('listDiagrams', () => {
@@ -58,7 +64,7 @@ describe('listDiagrams', () => {
 
   it('never creates the arch directory just by looking', () => {
     listDiagrams(project)
-    expect(() => readFileSync(archRoot(project))).toThrow()
+    expect(existsSync(archRoot(project))).toBe(false)
   })
 
   it('carries a node index so callers need not read every file', () => {
@@ -97,5 +103,19 @@ describe('deleteDiagram', () => {
 
   it('refuses an unknown diagram', () => {
     expect(() => deleteDiagram(project, 'ghost')).toThrow(StoreError)
+  })
+
+  it('removes a file with a non-conforming name that could not have been created through this module', () => {
+    mkdirSync(archRoot(project), { recursive: true })
+    writeFileSync(join(archRoot(project), '.hidden.json'), JSON.stringify({ title: 'Hidden', nodes: [], edges: [] }))
+    deleteDiagram(project, '.hidden')
+    expect(listDiagrams(project)).toEqual([])
+  })
+})
+
+describe('writeDiagram', () => {
+  it('refuses a malformed id, since it can create a file as well as overwrite one', () => {
+    const diagram = { title: 'X', nodes: [], edges: [] }
+    expect(() => writeDiagram(project, 'a/b', diagram)).toThrow(StoreError)
   })
 })

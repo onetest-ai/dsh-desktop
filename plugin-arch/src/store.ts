@@ -41,22 +41,48 @@ export interface DiagramSummary {
 const DIAGRAM_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 /**
- * The file backing one diagram id, or a refusal.
+ * Resolve a diagram file that is expected to exist.
+ *
+ * Fence only, deliberately no stem rule. `listDiagrams` re-derives paths from
+ * names it read off disk, and `readDiagram`/`deleteDiagram` address files a
+ * user may have hand-made — applying the creation-time rule here would make
+ * any non-conforming file permanently unreadable AND undeletable, with an
+ * error that names the id rather than the recoverable state. You must always
+ * be able to clean up what is already there.
  * @param project - the workspace root.
  * @param id - the diagram id.
  * @returns the absolute path.
- * @throws StoreError when the id is not a well-formed stem, or escapes the
- *   arch directory.
+ * @throws StoreError when the id escapes the arch directory.
  */
-function fileFor(project: string, id: string): string {
+function fileForExisting(project: string, id: string): string {
+  const resolved = resolveInArch(project, `${id}.json`)
+  if (resolved === undefined) throw new StoreError(`refused diagram id "${id}"`)
+  return resolved
+}
+
+/**
+ * Resolve a diagram file this call is about to create or overwrite.
+ *
+ * The stem rule belongs here and only here: it stops a caller MAKING a name
+ * that cannot be listed. `"a/b"` would write `.dsh/arch/a/b.json`, readable by
+ * id but invisible to `listDiagrams`' non-recursive read — a diagram that
+ * exists and reports that it does not.
+ *
+ * The fence still runs after it. The regex rejects the traversal shapes a
+ * caller can spell, but only the fence catches a symlink escape on an
+ * otherwise well-formed id, so it remains the security boundary.
+ * @param project - the workspace root.
+ * @param id - the diagram id.
+ * @returns the absolute path.
+ * @throws StoreError when the id is malformed or escapes the arch directory.
+ */
+function fileForNew(project: string, id: string): string {
   if (!DIAGRAM_ID.test(id)) {
     throw new StoreError(
       `refused diagram id "${id}": use letters, digits, dots, dashes or underscores, starting with a letter or digit`,
     )
   }
-  const resolved = resolveInArch(project, `${id}.json`)
-  if (resolved === undefined) throw new StoreError(`refused diagram id "${id}"`)
-  return resolved
+  return fileForExisting(project, id)
 }
 
 /**
@@ -81,7 +107,7 @@ export function listDiagrams(project: string): DiagramSummary[] {
     if (!name.endsWith('.json')) continue
     const id = name.slice(0, -'.json'.length)
     try {
-      const diagram = parseDiagram(readFileSync(fileFor(project, id), 'utf8'))
+      const diagram = parseDiagram(readFileSync(fileForExisting(project, id), 'utf8'))
       summaries.push({
         id,
         title: diagram.title,
@@ -105,7 +131,7 @@ export function listDiagrams(project: string): DiagramSummary[] {
  *   error, with the file named, when it cannot be read.
  */
 export function readDiagram(project: string, id: string): Diagram {
-  const file = fileFor(project, id)
+  const file = fileForExisting(project, id)
   if (!existsSync(file)) throw new StoreError(`diagram "${id}" not found`)
   try {
     return parseDiagram(readFileSync(file, 'utf8'))
@@ -121,7 +147,7 @@ export function readDiagram(project: string, id: string): Diagram {
  * @param diagram - what to write.
  */
 export function writeDiagram(project: string, id: string, diagram: Diagram): void {
-  writeFileAtomic(fileFor(project, id), serializeDiagram(diagram))
+  writeFileAtomic(fileForNew(project, id), serializeDiagram(diagram))
 }
 
 /**
@@ -136,7 +162,7 @@ export function writeDiagram(project: string, id: string, diagram: Diagram): voi
  * @throws StoreError when the id is refused or already taken.
  */
 export function createDiagram(project: string, id: string, title: string): Diagram {
-  const file = fileFor(project, id)
+  const file = fileForNew(project, id)
   if (existsSync(file)) throw new StoreError(`diagram "${id}" already exists`)
   const diagram: Diagram = { title, nodes: [], edges: [] }
   writeFileAtomic(file, serializeDiagram(diagram))
@@ -150,7 +176,7 @@ export function createDiagram(project: string, id: string, title: string): Diagr
  * @throws StoreError when it does not exist.
  */
 export function deleteDiagram(project: string, id: string): void {
-  const file = fileFor(project, id)
+  const file = fileForExisting(project, id)
   if (!existsSync(file)) throw new StoreError(`diagram "${id}" not found`)
   rmSync(file)
 }
